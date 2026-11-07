@@ -225,7 +225,7 @@ def test_hardcoded_model_url_and_zero_approval_dispatch():
     from urbansoc.config import HARDCODED_MODEL_URL
     import server as server_module
 
-    assert HARDCODED_MODEL_URL == "http://127.0.0.1:9000/api/v1/incidents" or "9000" in HARDCODED_MODEL_URL
+    assert HARDCODED_MODEL_URL == "https://urbanstrike.tech/api/incidents" or "urbanstrike.tech" in HARDCODED_MODEL_URL
 
     # Verify server default argument routing
     test_args = server_module.parse_args([])

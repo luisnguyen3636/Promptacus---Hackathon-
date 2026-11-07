@@ -7,13 +7,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 # ==============================================================================
-# HARDCODED DESTINATION URL FOR DOWNSTREAM AI MODEL (E.G. DEEPSEEK V4 FLASH)
+# HARDCODED DESTINATION URL FOR DOWNSTREAM AI MODEL (E.G. DEEPSEEK V4 FLASH / URBANSTRIKE)
 # Mọi sự cố phát hiện (High/Critical) sẽ được tự động gửi thẳng tới URL này
 # mà KHÔNG CẦN BƯỚC DUYỆT (NO OPERATOR APPROVAL REQUIRED).
 # ==============================================================================
 HARDCODED_MODEL_URL = os.environ.get(
     "INCIDENT_MODEL_URL",
-    "http://127.0.0.1:9000/api/v1/incidents"
+    "https://urbanstrike.tech/api/incidents"
 )
 
 
