@@ -441,3 +441,122 @@ def test_webhook_dispatcher_offline_unreachable_server():
     assert dispatcher.last_error_message is not None
 
     dispatcher.shutdown()
+
+
+def test_webhook_ai_verification_suppresses_false_positive():
+    """Verify that when AI multimodal falsification rejects action as false positive, NO POST is sent."""
+    dispatcher = WebhookDispatcher(server_url="http://127.0.0.1:59999/api/incidents")
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    track = HumanPoseTrack(
+        track_id=1,
+        bbox=BBox(10, 10, 100, 150),
+        detection_conf=0.9,
+        behavior=BehaviorPrediction(
+            primary_behavior=BehaviorType.WEAPON_THREAT,
+            confidence=0.9,
+            threat_level=ThreatLevel.CRITICAL,
+            threat_score=0.95,
+            reasoning="Suspected weapon",
+        ),
+    )
+    analysis = SOCFrameAnalysisResult(
+        frame_index=1,
+        timestamp="2026-11-08 04:00:00.000",
+        human_count=1,
+        humans=[track],
+        highest_threat_level=ThreatLevel.CRITICAL,
+        highest_threat_score=0.95,
+    )
+
+    # AI Multimodal analysis indicates false positive (e.g. umbrella/phone suppressed by Gate 3/5)
+    mock_suppressed_vlm = {
+        "false_positive_suppressed": True,
+        "suppression_explanation": "Đối tượng cầm ô dù che mưa, không phải hung khí nguy hiểm.",
+        "severity": "low",
+        "primary_action": "NORMAL",
+        "threat_score": 0.05,
+        "anti_false_positive_audit": {
+            "false_positive_suppressed": True,
+            "suppression_reason": "Gate 3 rejected weapon morphology; holding umbrella.",
+        },
+    }
+
+    enqueued = dispatcher.dispatch_frame_event(
+        frame=frame,
+        annotated_frame=frame,
+        analysis_result=analysis,
+        vlm_result=mock_suppressed_vlm,
+    )
+    # MUST BE BLOCKED: NO POST REQUEST ENQUEUED OR SENT
+    assert enqueued is False
+    assert dispatcher.queue.empty() is True
+
+    dispatcher.shutdown()
+
+
+def test_webhook_ai_verification_confirms_threat_and_includes_crops():
+    """Verify that when AI confirms the action on the image, POST request is enqueued with subject crops."""
+    dispatcher = WebhookDispatcher(server_url="http://127.0.0.1:59999/api/incidents")
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    track = HumanPoseTrack(
+        track_id=2,
+        bbox=BBox(20, 20, 120, 180),
+        detection_conf=0.95,
+        behavior=BehaviorPrediction(
+            primary_behavior=BehaviorType.WEAPON_THREAT,
+            confidence=0.95,
+            threat_level=ThreatLevel.CRITICAL,
+            threat_score=0.95,
+            reasoning="Tactical 2-handed firearm posture",
+        ),
+    )
+    analysis = SOCFrameAnalysisResult(
+        frame_index=2,
+        timestamp="2026-11-08 04:00:01.000",
+        human_count=1,
+        humans=[track],
+        highest_threat_level=ThreatLevel.CRITICAL,
+        highest_threat_score=0.95,
+    )
+
+    # AI Multimodal analysis verifies action is genuine threat
+    mock_verified_vlm = {
+        "false_positive_suppressed": False,
+        "severity": "critical",
+        "action_type": "WEAPON_THREAT",
+        "primary_action": "WEAPON_THREAT",
+        "threat_score": 0.95,
+        "confidence": 0.96,
+        "reasoning": "Detected action: WEAPON_THREAT. Subject aiming posture with 2-handed forward grip. Falsification passed.",
+        "anti_false_positive_audit": {
+            "false_positive_suppressed": False,
+            "gate_5_adversarial_benign_hypothesis": {
+                "benign_hypothesis_probability": 0.08,
+                "escalation_permitted": True,
+            },
+        },
+    }
+
+    enqueued = dispatcher.dispatch_frame_event(
+        frame=frame,
+        annotated_frame=frame,
+        analysis_result=analysis,
+        vlm_result=mock_verified_vlm,
+    )
+    assert enqueued is True
+    assert dispatcher.queue.empty() is False
+
+    payload = dispatcher.queue.get_nowait()
+    assert payload["action_confirmed"] is True
+    assert payload["ai_verified"] is True
+    assert payload["primary_action"] == "WEAPON_THREAT"
+    assert payload["threat_level"] == "CRITICAL"
+    assert "subject_crop_base64" in payload
+    assert "image_base64" in payload
+    assert "hand_crop_base64" in payload
+    assert "forensic_hash" in payload
+    assert payload["reasoning"] == mock_verified_vlm["reasoning"]
+    assert payload["detection"]["action_confirmed"] is True
+    assert payload["audit"]["verification_status"] == "AUTO_DISPATCHED_TO_AI_MODEL"
+
+    dispatcher.shutdown()

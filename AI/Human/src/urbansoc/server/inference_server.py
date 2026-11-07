@@ -23,7 +23,7 @@ from urbansoc.evidence.keeper import EvidenceKeeper
 from urbansoc.server.camera_context import CameraContext, CameraContextManager
 from urbansoc.server.dashboard_html import DASHBOARD_HTML
 from urbansoc.telemetry.soc_logger import SOCLogger
-from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher, compute_forensic_sha256
+from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher, compute_forensic_sha256, is_ai_action_confirmed
 
 logger = logging.getLogger("urbansoc.server.inference_server")
 
@@ -737,15 +737,6 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 timestamp=timestamp_sec,
             )
 
-        # Dispatch webhook if incident occurs and webhook dispatcher is configured
-        if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
-            self.soc.webhook_dispatcher.dispatch_frame_event(
-                frame=frame_bgr,
-                annotated_frame=display_frame,
-                analysis_result=analysis,
-                camera_config=ctx.config,
-            )
-
         primary_action = (
             analysis.humans[0].behavior.primary_behavior.value
             if analysis.humans
@@ -781,11 +772,13 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         }
 
         # NVIDIA NIM VLM Multimodal Analysis on frame (Always-on mode or on-demand/incident)
+        vlm_res: Optional[Dict[str, Any]] = None
         vlm_hdr = self.headers.get("X-Analyze-VLM", "").lower()
         should_run_vlm = (
             getattr(self.soc, "always_vlm", False)
             or vlm_hdr in ("true", "1", "yes")
-            or analysis.highest_threat_score >= 0.75
+            or analysis.highest_threat_score >= 0.35
+            or (self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled and analysis.highest_threat_level.value != "LOW")
         )
 
         if self.soc.nvidia_vlm is not None and should_run_vlm:
@@ -878,9 +871,33 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             response_data["is_urgent"] = vlm_res.get("is_urgent", False)
             response_data["timestamp"] = vlm_res.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-            # Forward JSON metadata directly to Webhook Dispatcher / Test Receiver if enabled
-            if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
-                self.soc.webhook_dispatcher.dispatch_raw_payload(response_data)
+        # Strict AI Action Verification Gate for Webhook Push (AGENTS.md / Operational HITL):
+        # The AI MUST evaluate the image and verify whether the action is TRUE.
+        # If the action is FALSE (false positive, benign action, or suppressed), DO NOT SEND POST!
+        if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
+            is_confirmed, verif_reason, verif_details = is_ai_action_confirmed(
+                vlm_result=vlm_res,
+                primary_action=primary_action,
+                threat_level=analysis.highest_threat_level,
+            )
+            if is_confirmed:
+                self.soc.webhook_dispatcher.dispatch_frame_event(
+                    frame=frame_bgr,
+                    annotated_frame=display_frame,
+                    analysis_result=analysis,
+                    camera_config=ctx.config,
+                    vlm_result=vlm_res,
+                )
+            else:
+                logger.info(
+                    "[AI_VERIFICATION_REJECTED] Action '%s' not confirmed by AI on image (%s). Suppressing POST request.",
+                    primary_action,
+                    verif_reason,
+                )
+
+        # Forward raw metadata if explicit always_vlm mode is enabled
+        if getattr(self.soc, "always_vlm", False) and self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
+            self.soc.webhook_dispatcher.dispatch_raw_payload(response_data)
 
         # Record into Forensic Evidence Ledger (SHA-256 / HMAC / Merkle Hash Chain)
         try:
@@ -1119,10 +1136,14 @@ class InferenceServer:
                     dashboard_payload["is_urgent"] = vlm_res.get("is_urgent", False)
                     dashboard_payload["timestamp"] = vlm_res.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-                    # Dispatch to dashboard and webhook
+                    # Dispatch to dashboard and webhook (only if confirmed valid)
                     self.record_dashboard_event(dashboard_payload)
                     if self.webhook_dispatcher is not None and self.webhook_dispatcher.is_enabled:
-                        self.webhook_dispatcher.dispatch_raw_payload(dashboard_payload)
+                        is_conf, _, _ = is_ai_action_confirmed(vlm_res, dashboard_payload.get("primary_action", "NORMAL"))
+                        if is_conf:
+                            self.webhook_dispatcher.dispatch_raw_payload(dashboard_payload)
+                        else:
+                            logger.info("[ASYNC_VLM] Cloud VLM suppressed action as false positive/benign. Suppressing webhook push.")
             except Exception as e:
                 logger.warning("Asynchronous VLM worker error: %s", e)
             finally:

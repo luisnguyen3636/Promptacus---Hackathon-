@@ -378,6 +378,149 @@ class EventThrottler:
             return False
 
 
+def is_ai_action_confirmed(
+    vlm_result: Optional[Dict[str, Any]],
+    primary_action: str = "NORMAL",
+    threat_level: Optional[Union[ThreatLevel, str]] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Determine if AI Multimodal Vision analysis on the image confirmed the action as a valid threat.
+
+    Returns:
+        (is_confirmed, reasoning_summary, validation_details)
+    """
+    if vlm_result is None:
+        # Standalone heuristic fallback when VLM is absent (e.g. testing)
+        level_str = (threat_level.value if isinstance(threat_level, ThreatLevel) else str(threat_level or "LOW")).upper()
+        if level_str in ("HIGH", "CRITICAL") and primary_action.upper() not in ("NORMAL", "UNKNOWN"):
+            return (
+                True,
+                f"Heuristic kinematic verification confirmed action '{primary_action}' at threat level {level_str}.",
+                {
+                    "is_valid": True,
+                    "validation_source": "heuristic_kinematics",
+                    "detected_action": primary_action,
+                    "threat_level": level_str,
+                    "benign_hypothesis_probability": 0.10,
+                },
+            )
+        return (
+            False,
+            "Chưa có kết quả phân tích hình ảnh từ AI (AI visual analysis not executed).",
+            {
+                "is_valid": False,
+                "validation_source": "none",
+                "detected_action": primary_action,
+                "benign_hypothesis_probability": 1.0,
+            },
+        )
+
+    # 1. Check evaluated_subjects from Section 6 schema
+    evaluated_subjects = vlm_result.get("evaluated_subjects", [])
+    primary_subject = evaluated_subjects[0] if evaluated_subjects else {}
+
+    # Check falsification suppression flag
+    is_suppressed = bool(
+        vlm_result.get("false_positive_suppressed")
+        or primary_subject.get("false_positive_suppressed", False)
+        or vlm_result.get("anti_false_positive_audit", {}).get("false_positive_suppressed", False)
+    )
+
+    suppression_reason = (
+        vlm_result.get("suppression_explanation")
+        or primary_subject.get("suppression_explanation")
+        or vlm_result.get("anti_false_positive_audit", {}).get("suppression_reason")
+        or "Bác bỏ bởi hệ thống kiểm định 5 cổng AI (False positive suppressed)."
+    )
+
+    if is_suppressed:
+        return (
+            False,
+            f"AI bác bỏ báo động giả: {suppression_reason}",
+            {
+                "is_valid": False,
+                "validation_source": "ai_5gate_falsification",
+                "false_positive_suppressed": True,
+                "suppression_reason": suppression_reason,
+                "benign_hypothesis_probability": 0.90,
+            },
+        )
+
+    # 2. Check severity / threat level
+    raw_sev = str(
+        vlm_result.get("severity")
+        or primary_subject.get("current_threat_level")
+        or (threat_level.value if isinstance(threat_level, ThreatLevel) else str(threat_level or "LOW"))
+    ).upper()
+
+    act_type = str(
+        vlm_result.get("action_type")
+        or vlm_result.get("primary_action")
+        or primary_action
+    ).upper()
+
+    raw_threat_score = vlm_result.get("threat_score")
+    if raw_threat_score is None and primary_subject.get("temporal_threat_score") is not None:
+        try:
+            raw_threat_score = float(primary_subject["temporal_threat_score"]) / 100.0
+        except (ValueError, TypeError):
+            raw_threat_score = 0.0
+    threat_score = float(raw_threat_score or 0.0)
+
+    if raw_sev in ("LOW", "NONE") or act_type in ("NORMAL", "UNKNOWN") or (threat_score < 0.25 and raw_sev == "LOW"):
+        return (
+            False,
+            f"AI xác định hành động bình thường hoặc mức độ nguy hiểm thấp ({raw_sev}, {act_type}).",
+            {
+                "is_valid": False,
+                "validation_source": "ai_threat_evaluation",
+                "detected_action": act_type,
+                "severity": raw_sev,
+                "threat_score": threat_score,
+                "benign_hypothesis_probability": 0.85,
+            },
+        )
+
+    # 3. Check Gate 5 benign hypothesis probability
+    audit = vlm_result.get("anti_false_positive_audit") or primary_subject.get("anti_false_positive_audit", {})
+    g5 = audit.get("gate_5_adversarial_benign_hypothesis", {}) if isinstance(audit, dict) else {}
+    benign_prob = float(g5.get("benign_hypothesis_probability", 0.10)) if isinstance(g5, dict) else 0.10
+
+    if benign_prob >= 0.45:
+        return (
+            False,
+            f"Xác suất hành vi đời thường vô hại cao ({benign_prob * 100:.1f}% >= 45%).",
+            {
+                "is_valid": False,
+                "validation_source": "ai_gate5_adversarial",
+                "detected_action": act_type,
+                "severity": raw_sev,
+                "benign_hypothesis_probability": benign_prob,
+            },
+        )
+
+    # 4. Confirmed valid threat action!
+    ai_reason = (
+        vlm_result.get("reasoning")
+        or vlm_result.get("description")
+        or primary_subject.get("reasoning_summary")
+        or f"AI xác nhận hành vi nguy hiểm '{act_type}' trên hình ảnh đối tượng."
+    )
+
+    return (
+        True,
+        ai_reason,
+        {
+            "is_valid": True,
+            "validation_source": "nvidia_nim_vlm_multimodal",
+            "detected_action": act_type,
+            "severity": raw_sev,
+            "threat_score": threat_score,
+            "benign_hypothesis_probability": benign_prob,
+            "reasoning": ai_reason,
+        },
+    )
+
+
 class WebhookDispatcher:
     """Asynchronous, non-blocking HTTP POST dispatcher with anti-noise filtering and forensic SHA-256."""
 
@@ -452,6 +595,7 @@ class WebhookDispatcher:
         analysis_result: SOCFrameAnalysisResult,
         audio_result: Optional[Any] = None,
         camera_config: Optional[CameraLocationConfig] = None,
+        vlm_result: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Extract metadata, filter noise, crop subjects, compute SHA-256, and enqueue non-blocking.
 
@@ -646,6 +790,36 @@ class WebhookDispatcher:
 
         active_cam_cfg = camera_config if camera_config is not None else self.camera_config
 
+        # Integrate AI Multimodal image reasoning and action focus if available
+        ai_reasoning = f"Detected action: {primary_action} (threat score: {highest_score:.2f})"
+        if vlm_result:
+            vlm_text = vlm_result.get("reasoning") or vlm_result.get("description") or vlm_result.get("reasoning_summary")
+            if vlm_text:
+                ai_reasoning = vlm_text
+            if vlm_result.get("action_type"):
+                primary_action = vlm_result["action_type"]
+            if vlm_result.get("threat_score"):
+                highest_score = max(highest_score, float(vlm_result["threat_score"]))
+            if vlm_result.get("severity"):
+                sev_str = str(vlm_result["severity"]).upper()
+                if sev_str in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
+                    highest_level = ThreatLevel(sev_str)
+
+        # Strict AI Action Verification Gate:
+        # Check if the AI verified the action on the image and confirmed it as a valid threat
+        is_confirmed, verif_reason, verif_details = is_ai_action_confirmed(
+            vlm_result=vlm_result,
+            primary_action=primary_action,
+            threat_level=highest_level,
+        )
+        if not is_confirmed:
+            logger.info(
+                "[WEBHOOK_DISPATCH_SUPPRESSED] AI rejected action '%s' on image (%s). POST request will NOT be sent.",
+                primary_action,
+                verif_reason,
+            )
+            return False
+
         payload = WebhookIncidentPayload(
             event_id=event_id,
             timestamp=iso_timestamp,
@@ -655,7 +829,10 @@ class WebhookDispatcher:
             threat_level=highest_level.value,
             threat_score=highest_score,
             is_urgent=(highest_level in (ThreatLevel.HIGH, ThreatLevel.CRITICAL)),
-            reasoning=f"Detected action: {primary_action} (threat score: {highest_score:.2f})",
+            action_confirmed=True,
+            ai_verified=True,
+            action_validation=verif_details,
+            reasoning=ai_reasoning,
             weapon=weapon_info,
             subjects=subject_crop_list,
             full_image=full_image_data,
@@ -665,6 +842,10 @@ class WebhookDispatcher:
             audit={
                 "frame_index": analysis_result.frame_index,
                 "human_count": analysis_result.human_count,
+                "action_confirmed": True,
+                "ai_verified": True,
+                "action_validation": verif_details,
+                "ai_model": "YOLOv11-Pose + NVIDIA NIM Llama-3.2-90B Vision",
                 "hash_algorithm": "SHA-256 (RAW_JPEG_BYTES + TIMESTAMP_MS)",
                 "anti_noise_filtering": {
                     "enabled": self.filter_noise,

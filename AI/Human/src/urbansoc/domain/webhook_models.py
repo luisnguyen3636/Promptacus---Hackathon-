@@ -95,12 +95,18 @@ class WebhookIncidentPayload:
     hand_crop_image_sha256: str = ""
     audio: Dict[str, Any] = field(default_factory=dict)
     audit: Dict[str, Any] = field(default_factory=dict)
+    action_confirmed: bool = True
+    ai_verified: bool = True
+    action_validation: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         full_b64 = self.full_image.get("image_base64", "")
         hand_b64 = self.hand_crop_image_base64
-        first_subject = self.subjects[0] if self.subjects else None
-        subject_b64 = first_subject.crop_image_base64 if first_subject else ""
+        # Prioritize primary suspect or highest-threat subject crop for direct visual evidence
+        suspect_subject = next((s for s in self.subjects if s.role in ("suspect", "attacker")), None)
+        if suspect_subject is None:
+            suspect_subject = max(self.subjects, key=lambda s: s.threat_score) if self.subjects else None
+        subject_b64 = suspect_subject.crop_image_base64 if suspect_subject else ""
 
         # Multi-person interaction summary
         multi_person_summary = ""
@@ -151,6 +157,9 @@ class WebhookIncidentPayload:
             "threat_level": self.threat_level,
             "threat_score": round(self.threat_score, 4),
             "is_urgent": self.is_urgent,
+            "action_confirmed": self.action_confirmed,
+            "ai_verified": self.ai_verified,
+            "action_validation": self.action_validation,
             "reasoning": self.reasoning,
             "weapon_info": self.weapon,
 
@@ -171,6 +180,9 @@ class WebhookIncidentPayload:
             # Backward-compatible nested structure
             "camera": self.camera.to_dict(),
             "detection": {
+                "action_confirmed": self.action_confirmed,
+                "ai_verified": self.ai_verified,
+                "action_validation": self.action_validation,
                 "primary_action": self.primary_action,
                 "threat_level": self.threat_level,
                 "threat_score": round(self.threat_score, 4),
