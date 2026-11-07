@@ -14,6 +14,7 @@ import type {
 } from "./types.ts";
 
 let incidents: IIncidentItem[] = [];
+let kvWriteCooldownUntil = 0;
 
 export function getRecentIncidents(): IIncidentItem[] {
   return incidents;
@@ -28,11 +29,12 @@ export function getIncidentById(id: string): IIncidentItem | undefined {
 }
 
 export function addIncident(item: IIncidentItem): void {
-  incidents = [item, ...incidents.filter((i) => i.id !== item.id)].slice(0, 100);
+  incidents = [item, ...incidents.filter((i) => i.id !== item.id)].slice(0, 60);
 }
 
 /**
- * Loads stored incidents from Cloudflare KV ("kv_recent_incidents").
+ * Loads stored incidents from Cloudflare KV ("kv_recent_incidents") and merges with in-memory state
+ * so newer in-memory incidents are never overwritten if KV writes are rate-limited (429 / quota).
  */
 export async function loadIncidentsFromKv(env?: Env): Promise<IIncidentItem[]> {
   if (env?.INCIDENT_CACHE) {
@@ -41,29 +43,60 @@ export async function loadIncidentsFromKv(env?: Env): Promise<IIncidentItem[]> {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          incidents = parsed;
+          if (incidents.length === 0) {
+            incidents = parsed;
+          } else {
+            // Merge: keep in-memory items first (freshest state / status updates), append missing KV items
+            const seenIds = new Set(incidents.map((i) => i.id));
+            for (const kvItem of parsed) {
+              if (kvItem && kvItem.id && !seenIds.has(kvItem.id)) {
+                incidents.push(kvItem);
+                seenIds.add(kvItem.id);
+              }
+            }
+            incidents = incidents.slice(0, 60);
+          }
         }
       }
-    } catch (err) {
-      console.warn("[IncidentManager] Failed to read kv_recent_incidents:", err);
+    } catch {
+      // Silently keep in-memory incidents if KV read fails
     }
   }
   return incidents;
 }
 
 /**
- * Saves current incident list to Cloudflare KV ("kv_recent_incidents").
+ * Compacts incidents before writing to Cloudflare KV to prevent 25MB limit / oversized payload errors
+ * and 6x Base64 duplication. Keeps Base64 snapshots on the 3 most recent incidents in KV.
  */
-export async function saveIncidentsToKv(env?: Env, singleIncident?: IIncidentItem): Promise<void> {
-  if (env?.INCIDENT_CACHE) {
-    try {
-      await env.INCIDENT_CACHE.put("kv_recent_incidents", JSON.stringify(incidents));
-      if (singleIncident) {
-        await env.INCIDENT_CACHE.put(`incident:${singleIncident.id}`, JSON.stringify(singleIncident));
-      }
-    } catch (err) {
-      console.warn("[IncidentManager] Failed to write kv_recent_incidents:", err);
-    }
+function buildCompactKvIncidents(list: IIncidentItem[]): IIncidentItem[] {
+  return list.slice(0, 25).map((item, idx) => {
+    const keepHeavyImages = idx < 3;
+    return {
+      ...item,
+      fullImageBase64: keepHeavyImages ? item.fullImageBase64 : undefined,
+      subjectCropBase64: keepHeavyImages ? item.subjectCropBase64 : undefined,
+      handCropBase64: keepHeavyImages ? item.handCropBase64 : undefined,
+      playbackUrl: keepHeavyImages ? item.playbackUrl : null,
+      cameraSnapshots: keepHeavyImages ? item.cameraSnapshots : null
+    };
+  });
+}
+
+/**
+ * Saves current incident list to Cloudflare KV ("kv_recent_incidents") with rate-limit cooldown protection.
+ */
+export async function saveIncidentsToKv(env?: Env, _singleIncident?: IIncidentItem): Promise<void> {
+  if (!env?.INCIDENT_CACHE) return;
+  if (Date.now() < kvWriteCooldownUntil) return;
+
+  try {
+    const compactList = buildCompactKvIncidents(incidents);
+    await env.INCIDENT_CACHE.put("kv_recent_incidents", JSON.stringify(compactList));
+  } catch {
+    // Cloudflare KV enforces 1 write/sec per key and daily write limits on Free Tier.
+    // Activate a 30s cooldown so continuous server ingestion stays fast in-memory + WebSocket + D1 without error spam.
+    kvWriteCooldownUntil = Date.now() + 30_000;
   }
 }
 
@@ -323,6 +356,22 @@ export async function ingestServerPayloadToKv(
   const peakSnapshot = fullImageBase64;
   const preSnapshot = subjectCropBase64 || handCropBase64 || peakSnapshot;
 
+  // Strip duplicate large Base64 blobs from rawDetection so KV values stay compact
+  const {
+    image: _img,
+    image_base64: _imgB64,
+    subject_crop_base64: _subB64,
+    hand_crop_base64: _handB64,
+    snapshot_url: _snapUrl,
+    evidence_url: _evUrl,
+    ...lightPayload
+  } = payload;
+
+  const lightSubjects = subjects.map((s) => {
+    const { crop_image_base64: _cropB64, ...restSubject } = s;
+    return restSubject;
+  });
+
   const incident: IIncidentItem = {
     id: incidentId,
     eventId: incidentId,
@@ -366,9 +415,9 @@ export async function ingestServerPayloadToKv(
     playbackUrl: peakSnapshot || null,
     status: "PENDING_VERIFICATION", // Mandatory Operational HITL gate [CD-04]
     vlmAnalysis,
-    rawDetection: payload,
+    rawDetection: lightPayload,
     forensicSha256,
-    subjects,
+    subjects: lightSubjects,
     fullImageBase64,
     subjectCropBase64,
     handCropBase64,

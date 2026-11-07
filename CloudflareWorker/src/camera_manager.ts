@@ -7,6 +7,7 @@
 import type { ICameraDevice, IAIBoundingBox, IAISubjectData, IServerIngestPayload, Env } from "./types.ts";
 
 const cameraRegistry = new Map<string, ICameraDevice>();
+let kvCameraWriteCooldownUntil = 0;
 
 export function getCameras(): ICameraDevice[] {
   return Array.from(cameraRegistry.values());
@@ -17,7 +18,8 @@ export function getCameraById(id: string): ICameraDevice | undefined {
 }
 
 /**
- * Loads persisted real cameras from Cloudflare KV (INCIDENT_CACHE -> "kv_cameras").
+ * Loads persisted real cameras from Cloudflare KV (INCIDENT_CACHE -> "kv_cameras")
+ * without overwriting newer in-memory camera state when KV writes are rate-limited.
  */
 export async function loadCamerasFromKv(env?: Env): Promise<ICameraDevice[]> {
   if (env?.INCIDENT_CACHE) {
@@ -33,29 +35,32 @@ export async function loadCamerasFromKv(env?: Env): Promise<ICameraDevice[]> {
               if (cam.lastSnapshotBase64 && cam.lastSnapshotBase64.includes("...")) {
                 cam.lastSnapshotBase64 = undefined;
               }
-              cameraRegistry.set(cam.id, cam);
+              if (!cameraRegistry.has(cam.id)) {
+                cameraRegistry.set(cam.id, cam);
+              }
             }
           }
         }
       }
-    } catch (err) {
-      console.warn("[CameraManager] Failed to read kv_cameras:", err);
+    } catch {
+      // Silently keep in-memory camera registry if KV read fails
     }
   }
   return Array.from(cameraRegistry.values());
 }
 
 /**
- * Saves current camera registry to Cloudflare KV ("kv_cameras").
+ * Saves current camera registry to Cloudflare KV ("kv_cameras") with rate-limit cooldown protection.
  */
 export async function saveCamerasToKv(env?: Env): Promise<void> {
-  if (env?.INCIDENT_CACHE) {
-    try {
-      const list = Array.from(cameraRegistry.values());
-      await env.INCIDENT_CACHE.put("kv_cameras", JSON.stringify(list));
-    } catch (err) {
-      console.warn("[CameraManager] Failed to write kv_cameras:", err);
-    }
+  if (!env?.INCIDENT_CACHE) return;
+  if (Date.now() < kvCameraWriteCooldownUntil) return;
+
+  try {
+    const list = Array.from(cameraRegistry.values());
+    await env.INCIDENT_CACHE.put("kv_cameras", JSON.stringify(list));
+  } catch {
+    kvCameraWriteCooldownUntil = Date.now() + 30_000;
   }
 }
 
