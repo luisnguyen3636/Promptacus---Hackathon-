@@ -109,6 +109,12 @@ def create_synthetic_pose(
         add_kp(LEFT_WRIST, cx - 20, by1 + 75)
         add_kp(RIGHT_ELBOW, cx + 35, by1 + 35)
         add_kp(RIGHT_WRIST, cx + 70, by1 + 35)
+    elif wrists_mode == "knife_threat":
+        # Right arm cocked tight at waist/flank (elbow bent 75°), left arm guard projected forward
+        add_kp(LEFT_ELBOW, cx - 25, by1 + 45)
+        add_kp(LEFT_WRIST, cx - 30, by1 + 45)   # Guard arm raised forward
+        add_kp(RIGHT_ELBOW, cx + 18, by1 + 55)
+        add_kp(RIGHT_WRIST, cx + 32, by1 + 58)  # Weapon hand cocked at waist height
     elif wrists_mode == "phone_call":
         # Right wrist near ear/nose, elbow bent sharply (< 65 degrees)
         add_kp(LEFT_ELBOW, cx - 20, by1 + 55)

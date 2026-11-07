@@ -57,6 +57,11 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 self._handle_get_camera_snapshot(camera_id)
                 return
 
+        # 2b. API: Get incident full frame or hand crop image for external AI / DeepSeek
+        if clean_path.startswith("/api/v1/incidents/") and (clean_path.endswith(".jpg") or clean_path.endswith(".jpeg")):
+            self._handle_get_incident_image(clean_path)
+            return
+
         # 3. Web Dashboard UI
         if clean_path in ("", "/", "/dashboard"):
             self._handle_get_dashboard()
@@ -83,6 +88,35 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             return
 
         self._send_json_response(404, {"status": "error", "message": f"Endpoint '{clean_path}' not found."})
+
+    def _handle_get_incident_image(self, clean_path: str) -> None:
+        """Serve incident full frame or hand crop JPEG image for DeepSeek VLM consumption."""
+        parts = clean_path.split("/")
+        if len(parts) >= 6:
+            event_id = parts[4]
+            filename = parts[5]
+            save_dir = os.path.abspath(os.path.join(self.soc.output_dir, "received_webhooks"))
+            target_file = None
+            if "hand" in filename:
+                target_file = os.path.join(save_dir, f"{event_id}_hand_crop.jpg")
+            else:
+                target_file = os.path.join(save_dir, f"{event_id}_full_frame.jpg")
+
+            if target_file and os.path.exists(target_file):
+                try:
+                    with open(target_file, "rb") as f:
+                        img_bytes = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(img_bytes)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(img_bytes)
+                    return
+                except Exception:
+                    pass
+
+        self._send_json_response(404, {"status": "error", "message": f"Incident image not found: {clean_path}"})
 
     def _handle_get_cameras(self) -> None:
         """Return JSON status of all registered cameras."""
@@ -229,6 +263,8 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             step_idx = ctx.frame_count
             if action_name == "WEAPON_THREAT":
                 sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="two_handed_aim", step=step_idx)
+            elif action_name in ("KNIFE_THREAT", "SHARP_OBJECT", "KNIFE", "BLADE"):
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="knife_threat", step=step_idx)
             elif action_name == "FALLEN":
                 sim_pose = create_synthetic_pose(track_id=1, spine_mode="fallen", step=step_idx)
             elif action_name == "HANDS_UP":
@@ -328,6 +364,13 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             if full_bytes:
                 with open(os.path.join(save_dir, f"{event_id}_full_frame.jpg"), "wb") as f:
                     f.write(full_bytes)
+
+            # Save zoomed hand crop if present for AI/VLM inspection
+            hand_b64 = payload.get("hand_crop_base64") or payload.get("detection", {}).get("hand_crop_image_base64", "")
+            if hand_b64 and "," in hand_b64:
+                raw_hand = base64.b64decode(hand_b64.split(",", 1)[1])
+                with open(os.path.join(save_dir, f"{event_id}_hand_crop.jpg"), "wb") as f:
+                    f.write(raw_hand)
 
             with open(os.path.join(save_dir, f"{event_id}.json"), "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)

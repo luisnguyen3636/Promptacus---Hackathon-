@@ -89,14 +89,66 @@ class WebhookIncidentPayload:
     weapon: Dict[str, Any]          # {"is_weapon_detected": bool, "weapon_types": list, ...}
     subjects: List[SubjectCropData]
     full_image: Dict[str, Any]      # {"format": "jpeg", "width": int, "height": int, "image_base64": str, "sha256_hash": str, "image_size_bytes": int}
+    hand_crop_image_base64: str = ""
+    hand_crop_image_sha256: str = ""
     audio: Dict[str, Any] = field(default_factory=dict)
     audit: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        full_b64 = self.full_image.get("image_base64", "")
+        hand_b64 = self.hand_crop_image_base64
+        first_subject = self.subjects[0] if self.subjects else None
+        subject_b64 = first_subject.crop_image_base64 if first_subject else ""
+
+        # Construct DeepSeek VLM prompt and OpenAI-compatible message structure
+        ai_prompt = (
+            f"URBAN SAFETY AI-SOC SURVEILLANCE EVENT [{self.event_id} | CAMERA: {self.camera.camera_id}]:\n"
+            f"Detected action: {self.primary_action} (Threat: {self.threat_level}, Score: {self.threat_score:.2f}).\n"
+            f"Reasoning: {self.reasoning}.\n"
+            f"Task for DeepSeek VLM: Please inspect the attached surveillance frame and zoomed hand/object crop:\n"
+            f"1. Is the subject wielding or holding a weapon, sharp object, knife, firearm, or harmless object?\n"
+            f"2. Confirm specific weapon classification (knife, blade, box cutter, firearm, tool, phone).\n"
+            f"3. Provide situational assessment and emergency dispatch advisory."
+        )
+
+        deepseek_content = [
+            {"type": "text", "text": ai_prompt},
+        ]
+        if full_b64:
+            deepseek_content.append({"type": "image_url", "image_url": {"url": full_b64}})
+        if hand_b64:
+            deepseek_content.append({"type": "image_url", "image_url": {"url": hand_b64}})
+        elif subject_b64:
+            deepseek_content.append({"type": "image_url", "image_url": {"url": subject_b64}})
+
         return {
             "event_id": self.event_id,
             "timestamp": self.timestamp,
             "timestamp_ms": self.timestamp_ms,
+            "camera_id": self.camera.camera_id,
+            "camera_name": self.camera.name,
+            "primary_action": self.primary_action,
+            "threat_level": self.threat_level,
+            "threat_score": round(self.threat_score, 4),
+            "is_urgent": self.is_urgent,
+            "reasoning": self.reasoning,
+            "weapon_info": self.weapon,
+
+            # Direct top-level image fields for DeepSeek & VLM consumers
+            "image": full_b64,
+            "image_base64": full_b64,
+            "hand_crop_base64": hand_b64,
+            "subject_crop_base64": subject_b64,
+            "image_url": f"/api/v1/incidents/{self.event_id}/image.jpg",
+            "hand_crop_url": f"/api/v1/incidents/{self.event_id}/hand_crop.jpg" if hand_b64 else None,
+            "ai_prompt": ai_prompt,
+            "deepseek_message": {
+                "role": "user",
+                "content": deepseek_content,
+            },
+            "forensic_hash": self.full_image.get("sha256_hash", ""),
+
+            # Backward-compatible nested structure
             "camera": self.camera.to_dict(),
             "detection": {
                 "primary_action": self.primary_action,
@@ -107,6 +159,7 @@ class WebhookIncidentPayload:
                 "weapon": self.weapon,
                 "subjects": [s.to_dict() for s in self.subjects],
                 "full_image": self.full_image,
+                "hand_crop_image_base64": hand_b64,
                 "audio": self.audio,
             },
             "audit": self.audit,

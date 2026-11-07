@@ -94,6 +94,59 @@ def crop_subject_image(
     return crop if crop.size > 0 else None
 
 
+def crop_hand_region(
+    frame: np.ndarray,
+    track: HumanPoseTrack,
+    crop_size: int = 120,
+) -> Optional[np.ndarray]:
+    """Extract a high-resolution square crop of the suspect's hand holding a weapon or sharp object."""
+    if frame is None or frame.size == 0:
+        return None
+
+    kp_map = {kp.id: kp for kp in track.keypoints if kp.confidence >= 0.25}
+
+    # Identify candidate wrists (checking dominant/active arms)
+    target_wrist = None
+    target_elbow = None
+
+    for w_id, e_id in [(RIGHT_WRIST, RIGHT_ELBOW), (LEFT_WRIST, LEFT_ELBOW)]:
+        if w_id in kp_map:
+            target_wrist = kp_map[w_id]
+            target_elbow = kp_map.get(e_id)
+            break
+
+    if target_wrist is None:
+        return None
+
+    h_img, w_img = frame.shape[:2]
+    wx, wy = float(target_wrist.x), float(target_wrist.y)
+
+    # Project slightly outward along forearm vector if elbow is known
+    if target_elbow is not None:
+        dx = wx - float(target_elbow.x)
+        dy = wy - float(target_elbow.y)
+        L = math.hypot(dx, dy)
+        if L > 1.0:
+            cx = wx + (dx / L) * min(35.0, L * 0.35)
+            cy = wy + (dy / L) * min(35.0, L * 0.35)
+        else:
+            cx, cy = wx, wy
+    else:
+        cx, cy = wx, wy
+
+    half = crop_size // 2
+    x1 = max(0, int(cx - half))
+    y1 = max(0, int(cy - half))
+    x2 = min(w_img, int(cx + half))
+    y2 = min(h_img, int(cy + half))
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    crop = frame[y1:y2, x1:x2].copy()
+    return crop if crop.size > 0 else None
+
+
 def encode_image_and_hash(
     image: np.ndarray,
     timestamp_ms: int,
@@ -502,6 +555,10 @@ class WebhookDispatcher:
                 is_weapon_detected = True
                 detected_weapon_types.append("TACTICAL_WEAPON_POSTURE")
                 weapon_confidence = max(weapon_confidence, track.behavior.confidence)
+            elif b_enum == BehaviorType.KNIFE_THREAT:
+                is_weapon_detected = True
+                detected_weapon_types.append("SHARP_OBJECT_KNIFE")
+                weapon_confidence = max(weapon_confidence, track.behavior.confidence)
 
             # Extract detailed kinematics and 17 COCO keypoints
             kinematics_data = extract_subject_kinematics(track)
@@ -567,6 +624,19 @@ class WebhookDispatcher:
 
         event_id = f"EVT_{now_dt.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
+        # Extract focused hand crop for DeepSeek VLM sharp object & weapon verification
+        hand_crop_b64 = ""
+        hand_crop_sha256 = ""
+        if dispatched_candidates:
+            primary_track = dispatched_candidates[0]
+            hand_img = crop_hand_region(frame, primary_track, crop_size=120)
+            if hand_img is not None and hand_img.size > 0:
+                hand_crop_b64, hand_crop_sha256, _ = encode_image_and_hash(
+                    hand_img,
+                    timestamp_ms=timestamp_ms,
+                    quality=self.image_quality,
+                )
+
         active_cam_cfg = camera_config if camera_config is not None else self.camera_config
 
         payload = WebhookIncidentPayload(
@@ -582,6 +652,8 @@ class WebhookDispatcher:
             weapon=weapon_info,
             subjects=subject_crop_list,
             full_image=full_image_data,
+            hand_crop_image_base64=hand_crop_b64,
+            hand_crop_image_sha256=hand_crop_sha256,
             audio=audio_info,
             audit={
                 "frame_index": analysis_result.frame_index,
@@ -635,6 +707,7 @@ class WebhookDispatcher:
         """Infer presumptive role based on kinematic behavior."""
         if behavior in (
             BehaviorType.WEAPON_THREAT,
+            BehaviorType.KNIFE_THREAT,
             BehaviorType.FIGHTING,
             BehaviorType.SNATCHING,
             BehaviorType.PURSUIT,

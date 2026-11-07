@@ -52,6 +52,10 @@ def check_weapon_threat(
 
     Includes strict biometric gating to reject false positives (phone calls, clapping, casual pointing).
     """
+    # If whole-body movement is high-speed sprinting, reject stabbing false positive
+    if norm_speed >= 1.5:
+        return None
+
     kp_map = {kp.id: kp for kp in pose.keypoints if kp.confidence >= conf_thresh}
     bh = float(pose.bbox.height)
     bw = float(pose.bbox.width)
@@ -143,6 +147,78 @@ def check_weapon_threat(
                     threat_level=ThreatLevel.CRITICAL,
                     threat_score=0.94,
                     reasoning="High-energy overhead weapon strike preparation / downward slash motion",
+                )
+
+    return None
+
+
+def check_knife_threat(
+    pose: HumanPoseTrack,
+    current_state: TrackHistoryState,
+    history: Sequence[TrackHistoryState],
+    norm_speed: float,
+    conf_thresh: float = KEYPOINT_CONFIDENCE_THRESHOLD,
+) -> Optional[BehaviorPrediction]:
+    """Detect sharp object / knife threat posture (stabbing preparation, forward thrust, or edged weapon guard).
+
+    Kinematic indicators:
+    1. Forward Stabbing Thrust: Rapid wrist acceleration forward (wrist_velocity >= 650 px/s) at chest/abdominal height.
+    2. Stabbing Ready Stance: One arm cocked tight near waist/flank (elbow 45°-110°, wrist near abdomen/hip)
+       combined with opposite guard arm or tactical advancement.
+    """
+    # If whole-body movement is high-speed sprinting, reject stabbing false positive
+    if norm_speed >= 1.5:
+        return None
+
+    kp_map = {kp.id: kp for kp in pose.keypoints if kp.confidence >= conf_thresh}
+    bh = float(pose.bbox.height)
+    bw = float(pose.bbox.width)
+    cx, cy = pose.bbox.centroid
+
+    # Analyze left and right arms
+    for side, shoulder_id, elbow_id, wrist_id, elbow_angle, arm_ext, other_w_id, other_s_id in [
+        ("right", RIGHT_SHOULDER, RIGHT_ELBOW, RIGHT_WRIST, current_state.right_elbow_angle, current_state.right_arm_extension, LEFT_WRIST, LEFT_SHOULDER),
+        ("left", LEFT_SHOULDER, LEFT_ELBOW, LEFT_WRIST, current_state.left_elbow_angle, current_state.left_arm_extension, RIGHT_WRIST, RIGHT_SHOULDER),
+    ]:
+        if shoulder_id in kp_map and elbow_id in kp_map and wrist_id in kp_map:
+            s_pt = kp_map[shoulder_id]
+            e_pt = kp_map[elbow_id]
+            w_pt = kp_map[wrist_id]
+
+            # In stabbing posture, the weapon is held in the abdominal/mid-torso plane
+            is_stabbing_height = (s_pt.y - 10.0) <= w_pt.y <= (cy + bh * 0.28)
+
+            # 1. Forward Stabbing Thrust Action: High wrist velocity outward at striking height
+            is_high_speed_thrust = current_state.wrist_velocity >= 650.0
+            is_projected = abs(w_pt.x - cx) >= (bw * 0.20)
+            is_stabbing_angle = 55.0 <= elbow_angle <= 175.0
+
+            if is_stabbing_height and is_high_speed_thrust and is_projected and is_stabbing_angle:
+                return BehaviorPrediction(
+                    primary_behavior=BehaviorType.KNIFE_THREAT,
+                    confidence=0.95,
+                    threat_level=ThreatLevel.CRITICAL,
+                    threat_score=0.96,
+                    reasoning=f"Rapid forward stabbing thrust motion with {side} hand (velocity: {current_state.wrist_velocity:.0f} px/s)",
+                )
+
+            # 2. Tactical Knife / Stabbing Ready Stance (Cocked arm + guard hand)
+            is_cocked_knife = 45.0 <= elbow_angle <= 105.0 and (0.08 <= arm_ext <= 0.32)
+            has_guard_arm = False
+            if other_w_id in kp_map and other_s_id in kp_map:
+                o_w_pt = kp_map[other_w_id]
+                o_s_pt = kp_map[other_s_id]
+                # Guard arm raised or projected outward
+                if o_w_pt.y < (cy + bh * 0.10) and abs(o_w_pt.x - cx) >= (bw * 0.20):
+                    has_guard_arm = True
+
+            if is_stabbing_height and is_cocked_knife and has_guard_arm and norm_speed < 1.2:
+                return BehaviorPrediction(
+                    primary_behavior=BehaviorType.KNIFE_THREAT,
+                    confidence=0.93,
+                    threat_level=ThreatLevel.CRITICAL,
+                    threat_score=0.95,
+                    reasoning=f"Tactical knife/sharp object ready stance ({side} arm cocked with opposing guard arm)",
                 )
 
     return None
@@ -267,10 +343,15 @@ def evaluate_single_track_behavior(
         )
         return pred, norm_speed, aspect_ratio
 
-    # Rule 2: WEAPON_THREAT
+    # Rule 2: WEAPON_THREAT (Firearm aim or overhead strike)
     weapon_pred = check_weapon_threat(pose, current_state, history, norm_speed, conf_thresh)
     if weapon_pred is not None:
         return weapon_pred, norm_speed, aspect_ratio
+
+    # Rule 2b: KNIFE_THREAT (Sharp object / stabbing thrust / edged weapon guard)
+    knife_pred = check_knife_threat(pose, current_state, history, norm_speed, conf_thresh)
+    if knife_pred is not None:
+        return knife_pred, norm_speed, aspect_ratio
 
     # Rule 3: INTRUSION (Climbing)
     intrusion_pred = check_intrusion(pose, current_state, history, norm_speed, conf_thresh)

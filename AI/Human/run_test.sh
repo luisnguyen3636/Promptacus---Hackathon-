@@ -63,9 +63,14 @@ case "$MODE" in
         "$PYTHON_BIN" run_system.py --test-action FALLEN
         ;;
 
+    test-knife)
+        echo -e "\n🔪 Khởi chạy giả lập hành vi KNIFE_THREAT (Vật nhọn / Dao)..."
+        "$PYTHON_BIN" run_system.py --test-action KNIFE_THREAT
+        ;;
+
     *)
         echo "Lựa chọn không hợp lệ: $MODE"
-        echo "Sử dụng: ./run_test.sh [unit | live | test-weapon | test-fallen]"
+        echo "Sử dụng: ./run_test.sh [unit | live | test-weapon | test-fallen | test-knife]"
         exit 1
         ;;
 esac
