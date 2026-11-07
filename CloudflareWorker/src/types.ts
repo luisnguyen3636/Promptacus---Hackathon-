@@ -13,6 +13,9 @@ export interface Env {
   API_AUTH_TOKEN?: string;
   DEFAULT_AI_MODEL?: string;
   FALLBACK_AI_MODEL?: string;
+  ALLOWED_ORIGINS?: string;     // Comma-separated CORS allowed origins
+  ALLOWED_IPS?: string;         // Comma-separated IP / CIDR whitelist
+  ENFORCE_IP_WHITELIST?: string;// "true" to enforce strict IP blocking
 }
 
 // =============================================================================

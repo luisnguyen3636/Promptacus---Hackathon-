@@ -33,27 +33,7 @@ import {
 } from "./incident_manager";
 import { processHitlVerification, getAuditLogs, recordIncidentAuditLog } from "./hitl_dispatcher";
 import { handleWebSocketUpgrade, broadcastMessage } from "./websocket";
-
-// Standard CORS headers for open edge communication
-function corsHeaders(): HeadersInit {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Correlation-ID",
-    "Content-Type": "application/json"
-  };
-}
-
-function jsonResponse(data: any, status = 200): Response {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: corsHeaders()
-  });
-}
-
-function errorResponse(message: string, status = 400): Response {
-  return jsonResponse({ error: message, success: false }, status);
-}
+import { isIpWhitelisted, isOriginWhitelisted, getCorsHeaders } from "./security";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -61,11 +41,61 @@ export default {
     const path = url.pathname;
     const method = request.method;
 
+    // Dynamic CORS Headers based on request origin and configured whitelist
+    const cors = getCorsHeaders(request, env.ALLOWED_ORIGINS);
+
+    const jsonResponse = (data: any, status = 200): Response => {
+      return new Response(JSON.stringify(data, null, 2), {
+        status,
+        headers: {
+          ...cors,
+          "Content-Type": "application/json"
+        }
+      });
+    };
+
+    const errorResponse = (message: string, status = 400): Response => {
+      return jsonResponse({ error: message, success: false }, status);
+    };
+
     // -------------------------------------------------------------------------
-    // 1. CORS Preflight
+    // 1. CORS Preflight & Origin Whitelist Gate
     // -------------------------------------------------------------------------
     if (method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders() });
+      const origin = request.headers.get("Origin");
+      if (origin && !isOriginWhitelisted(origin, env.ALLOWED_ORIGINS)) {
+        return new Response(
+          JSON.stringify({ error: "CORS_ORIGIN_NOT_ALLOWED", origin, success: false }),
+          { status: 403, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(null, { status: 204, headers: cors });
+    }
+
+    // Extract client IP address from Cloudflare or proxy headers
+    const clientIp =
+      request.headers.get("cf-connecting-ip") ||
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      "127.0.0.1";
+
+    // -------------------------------------------------------------------------
+    // 1.1 Client IP Whitelist Enforcement Gate [CD-05]
+    // -------------------------------------------------------------------------
+    const enforceIpWhitelist = env.ENFORCE_IP_WHITELIST === "true";
+    if (path.startsWith("/api") && enforceIpWhitelist) {
+      if (!isIpWhitelisted(clientIp, env.ALLOWED_IPS)) {
+        // Record immutable audit log entry for security audit trail [CD-05]
+        ctx.waitUntil(
+          recordIncidentAuditLog(
+            "SECURITY_EVENT",
+            clientIp,
+            "SECURITY_IP_BLOCKED",
+            { ip: clientIp, path, method, userAgent: request.headers.get("user-agent") },
+            env
+          )
+        );
+        return errorResponse("ACCESS_DENIED_IP_NOT_WHITELISTED", 403);
+      }
     }
 
     // -------------------------------------------------------------------------

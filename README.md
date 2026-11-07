@@ -178,6 +178,12 @@ Toàn bộ các endpoint đều hỗ trợ CORS và phản hồi theo định d�
   - Sự kiện `TELEMETRY_AND_AI_TICK`: Nhận tọa độ bounding box thời gian thực và cập nhật camera.
   - Sự kiện `NEW_INCIDENT`: Nhận thông báo sự cố mới tức thì không cần tải lại trang.
 
+### 8. Cấu Hình Bảo Mật Whitelist CORS & Client IP
+Hệ thống tích hợp cổng bảo mật kép (`CloudflareWorker/src/security.ts`) cấu hình qua `wrangler.toml`:
+- `ALLOWED_ORIGINS`: Danh sách các domain trình duyệt được phép kết nối (Hỗ trợ wildcard, VD: `https://*.pages.dev,https://*.workers.dev`).
+- `ALLOWED_IPS`: Danh sách IP / Subnet CIDR được phép truy cập (Mặc định cho phép loopback `127.0.0.1`, `::1` và mạng LAN riêng `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
+- `ENFORCE_IP_WHITELIST`: Đặt `"true"` trên production để chặn cứng toàn bộ IP ngoài whitelist với mã lỗi `403 Forbidden` và tự động ghi log `SECURITY_IP_BLOCKED` vào Cloudflare D1.
+
 ---
 
 ## 🏗️ BUILD & DEPLOY LÊN CLOUDFLARE WORKERS

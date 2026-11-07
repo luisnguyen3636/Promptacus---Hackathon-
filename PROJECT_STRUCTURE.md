@@ -28,6 +28,7 @@ Promptacus---Hackathon-/
 │   │   ├── telemetry.ts               # Bộ máy chấm điểm rủi ro động (Dynamic Threat Scoring)
 │   │   ├── websocket.ts               # WebSocket broker native (Cloudflare WebSocketPair)
 │   │   ├── ai_evaluator.ts            # Tích hợp Workers AI (DeepSeek / Llama 3.2 Vision)
+│   │   ├── security.ts                # Bộ điều khiển bảo mật: CORS Origin Whitelist & Client IP CIDR Filter
 │   │   └── db.ts                      # Repository tương tác cơ sở dữ liệu Cloudflare D1 SQL
 │   ├── dist/                          # Thư mục chứa bản build tĩnh của React Frontend SPA
 │   ├── schema.sql                     # Schema SQL D1 (bảng incidents, audit_logs và các index)
@@ -37,6 +38,7 @@ Promptacus---Hackathon-/
 │   ├── worker-configuration.d.ts      # Khai báo kiểu môi trường (Cloudflare Env bindings)
 │   ├── test_e2e.mjs                   # Script kiểm thử tự động toàn diện AI Ingestion & HITL
 │   ├── test_post_incidents.mjs        # Script kiểm thử tự động endpoint POST /api/incidents
+│   ├── test_cors_ip_whitelist.mjs     # Script kiểm thử tự động CORS Origin & IP Whitelist Gate
 │   ├── SPEC_AI_INTEGRATION.md         # Đặc tả kỹ thuật tích hợp payload AI thực tế
 │   ├── PLAN_AI_INTEGRATION.md         # Kế hoạch triển khai tích hợp payload AI thực tế
 │   ├── SPEC_UNIFIED_SOC.md            # Đặc tả kỹ thuật hợp nhất backend lên Cloudflare Worker
