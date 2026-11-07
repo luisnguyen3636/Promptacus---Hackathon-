@@ -4,6 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CYBERGUARD AI · SOC v2.1</title>
+    <script>
+      // Ngăn chặn script Cloudflare Web Analytics (beacon.min.js) tự động chèn gây lỗi ERR_BLOCKED_BY_CLIENT trên trình duyệt có AdBlock
+      (function () {
+        var obs = new MutationObserver(function (mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            var nodes = mutations[i].addedNodes;
+            for (var j = 0; j < nodes.length; j++) {
+              var n = nodes[j];
+              if (
+                n &&
+                n.tagName === 'SCRIPT' &&
+                n.src &&
+                n.src.indexOf('cloudflareinsights.com') !== -1
+              ) {
+                n.removeAttribute('src');
+                if (n.parentNode) n.parentNode.removeChild(n);
+              }
+            }
+          }
+        });
+        obs.observe(document.documentElement, { childList: true, subtree: true });
+      })();
+    </script>
     <!-- Phông chữ Google Fonts chuẩn Kỹ thuật: JetBrains Mono & Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

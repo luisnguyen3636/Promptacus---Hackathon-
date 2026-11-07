@@ -758,7 +758,17 @@ export default {
     // 14. Static Assets Fallback (Cloudflare Workers Static Assets)
     // -------------------------------------------------------------------------
     if (env.ASSETS) {
-      return await env.ASSETS.fetch(request);
+      const assetRes = await env.ASSETS.fetch(request);
+      const contentType = assetRes.headers.get("Content-Type") || "";
+      if (contentType.includes("text/html")) {
+        const headers = new Headers(assetRes.headers);
+        headers.set("Cache-Control", "no-cache, no-transform");
+        return new Response(assetRes.body, {
+          status: assetRes.status,
+          headers
+        });
+      }
+      return assetRes;
     }
 
     return errorResponse(`Route '${method} ${path}' not found on Urban Safety SOC Edge Worker.`, 404);
