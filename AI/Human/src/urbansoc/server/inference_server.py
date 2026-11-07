@@ -10,6 +10,7 @@ import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import unquote
 
 import cv2
 import numpy as np
@@ -183,7 +184,8 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
 
         raw_bytes = self.rfile.read(length)
         camera_id = self.headers.get("X-Camera-ID", "LAPTOP_01").strip()
-        camera_name = self.headers.get("X-Camera-Name", f"Camera {camera_id}")
+        raw_name = self.headers.get("X-Camera-Name")
+        camera_name = unquote(raw_name) if raw_name else None
         timestamp_ms_hdr = self.headers.get("X-Timestamp-Ms")
         timestamp_ms = int(timestamp_ms_hdr) if timestamp_ms_hdr and timestamp_ms_hdr.isdigit() else int(time.time() * 1000)
 

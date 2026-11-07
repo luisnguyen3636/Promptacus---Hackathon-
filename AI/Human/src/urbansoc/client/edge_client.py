@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from typing import Any, Dict, Optional, Tuple, Union
+from urllib.parse import quote
 
 import cv2
 import numpy as np
@@ -165,7 +166,7 @@ class EdgeCameraClient:
         headers = {
             "Content-Type": "image/jpeg",
             "X-Camera-ID": self.camera_id,
-            "X-Camera-Name": self.camera_name,
+            "X-Camera-Name": quote(str(self.camera_name)),
             "X-Timestamp-Ms": str(timestamp_ms),
             "Content-Length": str(len(raw_bytes)),
         }
