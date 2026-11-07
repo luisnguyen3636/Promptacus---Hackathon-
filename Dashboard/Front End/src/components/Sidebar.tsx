@@ -23,7 +23,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const operations = [
     { name: 'SOC Dashboard', icon: LayoutDashboard },
     { name: 'Live Video Wall', icon: Video },
-    { name: 'Network Topology', icon: Network },
     { name: 'Threat Intelligence', icon: AlertTriangle, badge: '5' },
     { name: 'Incident Feed', icon: Activity },
     { name: 'AI Analyzer', icon: Cpu },

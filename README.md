@@ -20,15 +20,15 @@ Hệ thống được thiết kế chuyên biệt nhằm giải quyết bài to�
 - **🎯 Nhận diện Động học Cơ thể Sâu (YOLO11-Pose Kinematics):** Phân tích 17 điểm khớp xương người, tính toán góc xoay cột sống, độ duỗi khuỷu tay, khoảng cách cổ tay và gia tốc chuyển động để phân biệt chính xác tư thế người bình thường và tư thế đe dọa vũ khí.
 - **🛡️ Chốt chặn Vận hành viên Bắt buộc (Strict Operational HITL):** Bảo đảm không bao giờ phát tín hiệu báo động giả ra cơ quan chức năng. Cung cấp 3 quyền quyết định: `Xác nhận & Điều phối (CONFIRM_AND_DISPATCH)`, `Hạ mức theo dõi (DOWNGRADE_MONITOR)`, hoặc `Hủy cảnh báo giả (DISMISS_FALSE_POSITIVE)`.
 - **📦 Đóng gói Bằng chứng Tư pháp Tự động (Automated Forensic Packaging):** Khi được xác nhận, hệ thống tự động xuất gói hồ sơ sự cố đầy đủ gồm tọa độ GPS, mã camera, tóm tắt phân tích hành vi AI, ảnh snapshot có khung nhận diện, ảnh crop đối tượng, mã băm SHA-256 chống giả mạo và định danh kiểm toán của Operator.
-- **🖥️ 8 Giao diện Tác chiến SOC Độc lập:** 
-  1. *Dashboard View:* Bảng điều khiển tác chiến tổng quan thời gian thực.
+- **🤖 Phân tích Tình báo DeepSeek Batching 2 Phút (DeepSeek 2-Min Pipeline):** Toàn bộ request POST gửi về hệ thống được tự động đưa vào bộ đệm trượt 2 phút (`window_seconds = 120`). Mô hình DeepSeek mặc định (`@cf/deepseek-ai/deepseek-v4.1-flash-1017`) phân tích log và ảnh Base64, đánh giá mức độ nghiêm trọng (`severity`), mô tả động học đối tượng (`object_description`) và dòng thời gian bằng chứng (`timeline`), lưu vào D1 và cung cấp qua endpoint `GET /api/get-incident`.
+- **🖥️ Giao diện Tác chiến SOC & Cụm Chỉ số AI Thời gian thực:**
+  1. *SOC Dashboard:* Bảng điều khiển tác chiến trung tâm, tích hợp cụm 8 thẻ chỉ số hiệu năng AI (Inference Time, GPU Cluster Load, Accuracy, Active Tracks) và phân bố lớp nhận diện (Class Person, Vehicle, Loitering, Intrusion/Breach).
   2. *Live Video Wall:* Ma trận camera trực tiếp với khả năng điều khiển xoay/zoom PTZ.
-  3. *Network Topology:* Giám sát topo mạng, độ trễ và tải PoE camera.
-  4. *Threat Intelligence:* Phân tích tình báo đe dọa và lịch sử phân loại hành vi.
-  5. *Incident Feed:* Nhật ký sự cố chi tiết kèm bộ lọc đa tiêu chí.
-  6. *AI Analyzer:* Theo dõi độ tin cậy mô hình, vệt di chuyển (active tracks) và khung xương.
-  7. *Device Manager:* Quản lý danh mục camera và trạng thái kết nối.
-  8. *Settings:* Tùy chỉnh ngưỡng đe dọa, cấu hình còi báo động và phân quyền vận hành.
+  3. *Threat Intelligence:* Phân tích tình báo đe dọa và lịch sử phân loại hành vi.
+  4. *Incident Feed:* Nhật ký sự cố chi tiết kèm bộ lọc đa tiêu chí và modal bằng chứng tư pháp.
+  5. *AI Analyzer:* Theo dõi độ tin cậy mô hình, vệt di chuyển (active tracks) và khung xương.
+  6. *Device Manager:* Quản lý danh mục camera và trạng thái kết nối.
+  7. *Settings:* Tùy chỉnh ngưỡng đe dọa, cấu hình còi báo động và phân quyền vận hành.
 
 ---
 
@@ -131,6 +131,13 @@ Lệnh này sẽ khởi động đồng thời:
 ### 5. Kiểm Thử Gửi Dữ Liệu AI Vào Hệ Thống (End-to-End Simulation)
 Chạy script kiểm thử tự động để bơm dữ liệu AI mẫu vào hệ thống và xác thực toàn bộ luồng:
 ```bash
+# Kiểm thử lớp AI tích hợp tự động, DeepSeek API Key & Log chuẩn SOC (26 assertions)
+node --experimental-strip-types CloudflareWorker/test_integrated_ai_layer.mjs
+
+# Kiểm thử DeepSeek 2-phút & endpoint /api/get-incident (20 assertions)
+node --experimental-strip-types CloudflareWorker/test_deepseek_pipeline.mjs
+
+# Kiểm thử end-to-end webhook & incident injection
 node CloudflareWorker/test_e2e.mjs
 node CloudflareWorker/test_post_incidents.mjs
 ```
@@ -157,7 +164,39 @@ Toàn bộ các endpoint đều hỗ trợ CORS và phản hồi theo định d�
 - `GET /api/incidents/recent` (hoặc `GET /api/incidents`): Lấy danh sách các sự cố an ninh mới nhất.
 - `GET /api/incidents/:id/playback`: Trích xuất gói bằng chứng 20 giây (10s trước và 10s sau sự kiện), ảnh chụp đối tượng và vệt nhận diện.
 
-### 5. Chốt chặn Xác thực Vận hành viên (Operational HITL Gate)
+### 5. Lớp AI Phân Tích Tự Động & Endpoint Truy Vấn Sự Cố (Integrated AI & /api/get-incidents)
+Hệ thống tích hợp sẵn lớp phân tích AI trong mã nguồn (in-process automated layer). Không cần người dùng/client gọi thủ công, mọi request POST gửi về đều tự động được AI phân tích ngầm và xuất dữ liệu JSON:
+- `GET /api/get-incidents` & `GET /api/get-incident` (Alias: `/api/v1/get-incidents`, `/api/v1/get-incident`, `/api/incidents/get-incidents`):
+  - Tham số: `?window=120` (khung thời gian trượt theo giây).
+  - Trả về JSON cấu trúc chuẩn sinh ra trực tiếp từ phân tích của AI:
+    - `provider`: Cơ chế AI phân tích (`DEEPSEEK_DIRECT_API` | `CLOUDFLARE_WORKERS_AI` | `LOCAL_KINEMATICS_ENGINE`).
+    - `model`: Tên mô hình (VD: `deepseek-chat` hoặc `@cf/deepseek-ai/deepseek-v4.1-flash-1017`).
+    - `severity`: Cấp độ nghiêm trọng (`LOW` | `MEDIUM` | `HIGH` | `CRITICAL`).
+    - `deepseek_analysis`: `threat_verdict`, `investigation_summary`, `analyzed_at`.
+    - `object_description`: `role` (suspect/victim/bystander), `primary_action`, `weapon_detected`, `weapon_confidence`, `posture_details`, `kinematics_summary` (góc khuỷu tay, vận tốc, độ duỗi).
+    - `timeline`: `event_trigger`, `pre_event_seconds`, `post_event_seconds`, `duration_seconds`.
+    - `soc_audit_log`: Bản ghi kiểm toán chuẩn SOC (`log_id`, `log_level`, `latency_ms`, `source: AI_INTEGRATED_LAYER`).
+    - `snapshot_url`, `crop_image_url`, `sha256_hash`, `operator_status` (`AWAITING_OPERATOR_VERIFICATION` - tuân thủ [CD-04]).
+- `GET /api/soc/logs` (Alias: `/api/v1/soc/logs`, `/api/get-incident-logs`):
+  - Trả về danh sách toàn bộ bản ghi nhật ký kiểm toán chuẩn SOC (`IStandardSocLogEntry`) do lớp AI phân tích sinh ra.
+- `POST /api/v1/deepseek/analyze`: Kích hoạt phân tích tức thời luồng log POST trượt 2 phút qua mô hình DeepSeek (tùy chọn webhook).
+  - Query/Body: `{ "windowSeconds": 120 }`
+
+### 6. Cấu Hình Gắn Trực Tiếp DeepSeek API Key (Pluggable API Key)
+Bạn có thể gắn API Key trực tiếp vào hệ thống để gọi mô hình DeepSeek qua 2 cách:
+1. **Trong `wrangler.toml`:**
+   ```toml
+   [vars]
+   DEEPSEEK_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+   DEEPSEEK_MODEL = "deepseek-chat"
+   ```
+2. **Qua Cloudflare Secrets (Production):**
+   ```bash
+   npx wrangler secret put DEEPSEEK_API_KEY
+   ```
+Khi có API Key, hệ thống tự động ưu tiên gọi trực tiếp `https://api.deepseek.com/chat/completions` (JSON mode); nếu không có key hoặc mất kết nối, hệ thống tự động chuyển tiếp mượt mà qua Workers AI hoặc Động cơ Động học Khớp xương Nội bộ.
+
+### 7. Chốt chặn Xác thực Vận hành viên (Operational HITL Gate)
 - `POST /api/incidents/:id/verify`: API bắt buộc Vận hành viên phê duyệt trước khi phát lệnh điều phối.
   - Body:
     ```json
@@ -169,16 +208,16 @@ Toàn bộ các endpoint đều hỗ trợ CORS và phản hồi theo định d�
     ```
   - Khi `decision === "CONFIRM_AND_DISPATCH"`, hệ thống tự động sinh ra gói `incidentPackage` hoàn chỉnh để chuyển giao lực lượng ứng cứu.
 
-### 6. Nhật ký Kiểm toán Bất biến (SOC Audit Logs)
+### 8. Nhật ký Kiểm toán Bất biến (SOC Audit Logs)
 - `GET /api/soc/audit-logs`: Truy xuất lịch sử kiểm toán bất biến từ Cloudflare D1 SQL.
 
-### 7. Kênh Dữ liệu Thời Gian Thực (WebSocket Live Stream)
+### 9. Kênh Dữ liệu Thời Gian Thực (WebSocket Live Stream)
 - Kết nối tới `ws://127.0.0.1:8787/ws/live-stream`:
   - Sự kiện `CONNECTED`: Nhận heartbeat và thời gian đồng bộ máy chủ.
   - Sự kiện `TELEMETRY_AND_AI_TICK`: Nhận tọa độ bounding box thời gian thực và cập nhật camera.
   - Sự kiện `NEW_INCIDENT`: Nhận thông báo sự cố mới tức thì không cần tải lại trang.
 
-### 8. Cấu Hình Bảo Mật Whitelist CORS & Client IP
+### 10. Cấu Hình Bảo Mật Whitelist CORS & Client IP
 Hệ thống tích hợp cổng bảo mật kép (`CloudflareWorker/src/security.ts`) cấu hình qua `wrangler.toml`:
 - `ALLOWED_ORIGINS`: Danh sách các domain trình duyệt được phép kết nối (Hỗ trợ wildcard, VD: `https://*.pages.dev,https://*.workers.dev`).
 - `ALLOWED_IPS`: Danh sách IP / Subnet CIDR được phép truy cập (Mặc định cho phép loopback `127.0.0.1`, `::1` và mạng LAN riêng `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).

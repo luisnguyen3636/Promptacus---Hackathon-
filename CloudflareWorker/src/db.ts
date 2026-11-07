@@ -3,7 +3,7 @@
  * Manages SQL transactions, incident indexing, filtering, and immutable audit logs.
  */
 
-import { Env, IncidentRecord, OperatorVerifyRequest } from "./types";
+import type { Env, IncidentRecord, OperatorVerifyRequest } from "./types.ts";
 
 export class D1IncidentVault {
   private db: D1Database;

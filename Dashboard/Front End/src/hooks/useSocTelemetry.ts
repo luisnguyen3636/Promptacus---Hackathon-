@@ -33,10 +33,38 @@ export function useSocTelemetry() {
     }
 
     try {
-      const resIncidents = await fetch('/api/incidents/recent', { signal: AbortSignal.timeout(1500) });
+      // Continuous polling for DeepSeek analyzed incidents
+      const resIncidents = await fetch('/api/get-incident', { signal: AbortSignal.timeout(2000) });
       if (resIncidents.ok) {
-        const data = await resIncidents.json();
-        setIncidents(data);
+        const result = await resIncidents.json();
+        if (result && Array.isArray(result.incidents) && result.incidents.length > 0) {
+          const mapped: IIncidentItem[] = result.incidents.map((item: any) => ({
+            id: item.id,
+            title: item.object_description?.primary_action || item.title || 'Sự cố an ninh',
+            subTitle: item.location_name || item.subTitle || 'Khu vực giám sát',
+            sourceIp: item.camera_id || '127.0.0.1',
+            category: 'PHYSICAL_CAMERA',
+            severity: item.severity || 'MEDIUM',
+            timestamp: item.evidence_timeline?.event_trigger || item.timestamp || 'Vừa xong',
+            cameraId: item.camera_id || null,
+            cameraSnapshots: {
+              eventPeakSnapshotUrl: item.visual_evidence?.snapshot_url || null,
+              preEventSnapshotUrl: item.visual_evidence?.crop_url || null,
+            },
+            playbackUrl: item.visual_evidence?.snapshot_url || null,
+            status: item.operator_status || 'PENDING_VERIFICATION',
+            vlmAnalysis: item.deepseek_analysis?.investigation_summary || item.vlmAnalysis,
+            fullImageBase64: item.visual_evidence?.snapshot_url || null
+          }));
+          setIncidents(mapped);
+        } else {
+          // Fallback if no deepseek incidents yet
+          const resFallback = await fetch('/api/incidents/recent', { signal: AbortSignal.timeout(1500) });
+          if (resFallback.ok) {
+            const data = await resFallback.json();
+            setIncidents(data);
+          }
+        }
       }
     } catch {
       // Giữ state hiện tại

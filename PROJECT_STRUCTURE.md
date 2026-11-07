@@ -21,7 +21,8 @@ Promptacus---Hackathon-/
 ├── CloudflareWorker/                  # [CORE BACKEND & EDGE RUNTIME] Nền tảng hợp nhất Edge SOC
 │   ├── src/
 │   │   ├── index.ts                   # Router chính: REST APIs, WebSocket broker, Static Assets fetcher
-│   │   ├── types.ts                   # Data Models & Schemas (AI Ingestion, Incidents, Cameras, HITL)
+│   │   ├── types.ts                   # Data Models & Schemas (AI Ingestion, Incidents, Cameras, HITL, DeepSeek, SOC Log)
+│   │   ├── deepseek_analyzer.ts       # Lớp AI phân tích tự động: DeepSeek Direct API, Workers AI, Kinematics, SOC Audit Logs
 │   │   ├── camera_manager.ts          # Quản lý fleet camera động, chuẩn hóa bounding box tỉ đối
 │   │   ├── incident_manager.ts        # Quản lý sự cố, rolling buffer bằng chứng, tích hợp AI
 │   │   ├── hitl_dispatcher.ts         # Chốt chặn HITL [CD-04], đóng gói gói cứu hộ, ghi log kiểm toán [CD-05]
@@ -32,13 +33,19 @@ Promptacus---Hackathon-/
 │   │   └── db.ts                      # Repository tương tác cơ sở dữ liệu Cloudflare D1 SQL
 │   ├── dist/                          # Thư mục chứa bản build tĩnh của React Frontend SPA
 │   ├── schema.sql                     # Schema SQL D1 (bảng incidents, audit_logs và các index)
-│   ├── wrangler.toml                  # Cấu hình Cloudflare Worker, D1 Database, Workers AI binding
+│   ├── wrangler.toml                  # Cấu hình Cloudflare Worker, D1 Database, Workers AI binding, DeepSeek API Key
 │   ├── package.json                   # Dependencies & scripts của Cloudflare Worker
 │   ├── tsconfig.json                  # Cấu hình TypeScript cho Cloudflare Worker
 │   ├── worker-configuration.d.ts      # Khai báo kiểu môi trường (Cloudflare Env bindings)
 │   ├── test_e2e.mjs                   # Script kiểm thử tự động toàn diện AI Ingestion & HITL
 │   ├── test_post_incidents.mjs        # Script kiểm thử tự động endpoint POST /api/incidents
 │   ├── test_cors_ip_whitelist.mjs     # Script kiểm thử tự động CORS Origin & IP Whitelist Gate
+│   ├── test_deepseek_pipeline.mjs     # Script kiểm thử tự động DeepSeek 2-phút & /api/get-incident (20 assertions)
+│   ├── test_integrated_ai_layer.mjs   # Script kiểm thử tự động Lớp AI Tích Hợp & Log Chuẩn SOC (26 assertions)
+│   ├── SPEC_INTEGRATED_AI_LAYER.md    # Đặc tả kỹ thuật lớp AI tích hợp tự động & DeepSeek API Key
+│   ├── PLAN_INTEGRATED_AI_LAYER.md    # Kế hoạch triển khai lớp AI tích hợp tự động & DeepSeek API Key
+│   ├── SPEC_DEEPSEEK_PIPELINE.md      # Đặc tả kỹ thuật đường ống phân tích DeepSeek 2 phút
+│   ├── PLAN_DEEPSEEK_PIPELINE.md      # Kế hoạch triển khai đường ống phân tích DeepSeek 2 phút
 │   ├── SPEC_AI_INTEGRATION.md         # Đặc tả kỹ thuật tích hợp payload AI thực tế
 │   ├── PLAN_AI_INTEGRATION.md         # Kế hoạch triển khai tích hợp payload AI thực tế
 │   ├── SPEC_UNIFIED_SOC.md            # Đặc tả kỹ thuật hợp nhất backend lên Cloudflare Worker
@@ -59,24 +66,25 @@ Promptacus---Hackathon-/
 │   │   │   ├── data/
 │   │   │   │   └── mockData.ts        # Trạng thái khởi tạo sạch (Zero fake data, sẵn sàng đón nhận AI)
 │   │   │   └── components/
-│   │   │       ├── Sidebar.tsx        # Menu tác chiến chuyển đổi giữa các module
+│   │   │       ├── Sidebar.tsx        # Menu tác chiến chuyển đổi giữa các module (đã gỡ bỏ Network Topology)
 │   │   │       ├── TopHeader.tsx      # Thanh tiêu đề hệ thống, trạng thái mạng, PoE, KPI tổng
 │   │   │       ├── KpiCards.tsx       # Khối hiển thị chỉ số quan trọng (Độ trễ, Camera online, Threat)
+│   │   │       ├── AiMetricsGrid/     # Cụm 8 thẻ chỉ số hiệu năng AI & phân bố đối tượng thời gian thực
+│   │   │       │   └── AiMetricsGrid.tsx # Inference Time, GPU Load, Accuracy, Active Tracks, Class Breakdown
 │   │   │       ├── CameraMatrix/      # Ma trận hiển thị luồng camera 2x2 có hỗ trợ vẽ Bounding Box AI
 │   │   │       ├── Modal/
 │   │   │       │   └── EvidencePlaybackModal.tsx # Hộp thoại phát lại bằng chứng tư pháp & nút duyệt HITL
 │   │   │       ├── RecentThreats/     # Bảng danh sách sự cố thời gian thực
 │   │   │       ├── ThreatScoreGauge/  # Đồng hồ đo mức độ đe dọa đô thị (0 - 100)
-│   │   │       ├── TrafficChart/      # Biểu đồ băng thông và lưu lượng giám sát
-│   │   │       └── views/             # 8 Giao diện Tác chiến Chuyên biệt:
-│   │   │           ├── DashboardView.tsx           # View 1: Trung tâm chỉ huy tổng thể
+│   │   │       ├── TrafficChart/      # Biểu đồ lưu lượng mạng truyền thống (được thay thế bởi AiMetricsGrid trên Dashboard)
+│   │   │       └── views/             # Các Giao diện Tác chiến Chuyên biệt:
+│   │   │           ├── DashboardView.tsx           # View 1: Trung tâm chỉ huy tổng thể (nhúng AiMetricsGrid)
 │   │   │           ├── LiveVideoWallView.tsx       # View 2: Tường video CCTV mở rộng & điều khiển PTZ
-│   │   │           ├── NetworkTopologyView.tsx     # View 3: Sơ đồ mạng hạ tầng camera đô thị
-│   │   │           ├── ThreatIntelligenceView.tsx  # View 4: Phân tích tình báo rủi ro & bằng chứng
-│   │   │           ├── IncidentFeedView.tsx        # View 5: Quản lý chi tiết danh mục sự cố
-│   │   │           ├── AiAnalyzerView.tsx          # View 6: Giám sát hiệu năng mô hình AI & vệt track
-│   │   │           ├── DeviceManagerView.tsx       # View 7: Quản lý danh mục thiết bị phần cứng
-│   │   │           └── SettingsView.tsx            # View 8: Cấu hình ngưỡng cảnh báo & hệ thống
+│   │   │           ├── ThreatIntelligenceView.tsx  # View 3: Phân tích tình báo rủi ro & bằng chứng
+│   │   │           ├── IncidentFeedView.tsx        # View 4: Quản lý chi tiết danh mục sự cố
+│   │   │           ├── AiAnalyzerView.tsx          # View 5: Giám sát hiệu năng mô hình AI & vệt track
+│   │   │           ├── DeviceManagerView.tsx       # View 6: Quản lý danh mục thiết bị phần cứng
+│   │   │           └── SettingsView.tsx            # View 7: Cấu hình ngưỡng cảnh báo & hệ thống
 │   │   ├── index.html                 # Template HTML chính
 │   │   ├── package.json               # Dependencies của React (Vite, Tailwind, Lucide, Chart.js)
 │   │   ├── vite.config.ts             # Cấu hình Vite build ra CloudflareWorker/dist

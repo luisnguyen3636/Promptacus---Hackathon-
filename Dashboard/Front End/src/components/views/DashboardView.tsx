@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { KpiCards } from '../KpiCards.tsx';
 import { CameraMatrix } from '../CameraMatrix/CameraMatrix.tsx';
 import { ThreatScoreModule } from '../ThreatScore/ThreatScoreModule.tsx';
-import { TrafficCharts } from '../TrafficCharts/TrafficCharts.tsx';
+import { AiMetricsGrid } from '../AiMetricsGrid/AiMetricsGrid.tsx';
 import { RecentThreatsTable } from '../RecentThreats/RecentThreatsTable.tsx';
 import { ISocOverview, ICameraDevice, IIncidentItem } from '../../types/soc.ts';
 import { Volume2, VolumeX, FileText, ShieldAlert, ShieldCheck } from 'lucide-react';
@@ -111,12 +111,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </section>
 
-      {/* Hàng 3: 2 Biểu đồ Lưu lượng Video */}
+      {/* Hàng 3: Thống Kê Hiệu Năng AI & Phân Bố Đối Tượng */}
       <div className="min-w-0">
-        <TrafficCharts
-          ingressVal={overview.metrics.downloadMbps}
-          egressVal={overview.metrics.uploadMbps}
-        />
+        <AiMetricsGrid cameras={cameras} />
       </div>
 
       {/* Hàng 4: Bảng Sự cố & Xem lại Camera (RECENT THREATS) */}

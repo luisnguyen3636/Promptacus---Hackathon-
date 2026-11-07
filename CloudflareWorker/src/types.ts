@@ -13,6 +13,11 @@ export interface Env {
   API_AUTH_TOKEN?: string;
   DEFAULT_AI_MODEL?: string;
   FALLBACK_AI_MODEL?: string;
+  DEEPSEEK_API_KEY?: string;      // Direct DeepSeek REST API Key
+  DEEPSEEK_API_URL?: string;      // Direct DeepSeek endpoint (default: https://api.deepseek.com/chat/completions)
+  DEEPSEEK_MODEL?: string;        // Direct DeepSeek model (default: deepseek-chat)
+  OPENAI_API_KEY?: string;        // Fallback OpenAI compatible key
+  AI_API_KEY?: string;            // Generic AI Key fallback
   ALLOWED_ORIGINS?: string;     // Comma-separated CORS allowed origins
   ALLOWED_IPS?: string;         // Comma-separated IP / CIDR whitelist
   ENFORCE_IP_WHITELIST?: string;// "true" to enforce strict IP blocking
@@ -166,6 +171,93 @@ export interface IIncidentPostResponse {
     storage: string;
   };
   incident?: IIncidentItem;
+}
+
+export interface IPostRequestLog {
+  id: string;
+  timestamp: string;
+  timestampMs: number;
+  path: string;
+  method: string;
+  clientIp: string;
+  payloadSummary: string;
+  hasImage: boolean;
+  imageBase64?: string;
+  cropImageBase64?: string;
+  threatScore?: number;
+  cameraId?: string;
+  rawPayload: Record<string, any>;
+}
+
+export interface IIncidentTimeline {
+  event_trigger: string;
+  pre_event_seconds: number;
+  post_event_seconds: number;
+  duration_seconds: number;
+}
+
+export interface IIncidentObjectDescription {
+  primary_action: string;
+  role: string;
+  posture_details: string;
+  weapon_detected?: string | null;
+  weapon_confidence?: number;
+  kinematics_summary?: string;
+  keypoints_count?: number;
+}
+
+export interface IStandardSocLogEntry {
+  log_id: string;
+  timestamp: string;
+  log_level: "INFO" | "WARNING" | "CRITICAL";
+  source: "AI_INTEGRATED_LAYER";
+  event_id: string;
+  camera_id: string;
+  model_provider: "DEEPSEEK_DIRECT_API" | "CLOUDFLARE_WORKERS_AI" | "LOCAL_KINEMATICS_ENGINE";
+  model_name: string;
+  latency_ms: number;
+  threat_score: number;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  object_description: IIncidentObjectDescription;
+  investigation_summary: string;
+  evidence_timeline: IIncidentTimeline;
+  sha256_hash: string | null;
+  operator_status: "AWAITING_OPERATOR_VERIFICATION";
+}
+
+export interface IDeepSeekIncidentItem {
+  id: string;
+  timestamp: string;
+  camera_id: string;
+  location_name: string;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  threat_score: number;
+  evidence_timeline: IIncidentTimeline;
+  timeline?: IIncidentTimeline;
+  object_description: IIncidentObjectDescription;
+  deepseek_analysis: {
+    model: string;
+    threat_verdict: string;
+    investigation_summary: string;
+    analyzed_at: string;
+  };
+  visual_evidence: {
+    snapshot_url?: string | null;
+    crop_url?: string | null;
+    sha256_hash?: string | null;
+  };
+  operator_status: string;
+  soc_audit_log?: IStandardSocLogEntry;
+}
+
+export interface IDeepSeekGetIncidentsResponse {
+  success: boolean;
+  count: number;
+  window_seconds: number;
+  timestamp: string;
+  provider?: string;
+  model?: string;
+  incidents: IDeepSeekIncidentItem[];
 }
 
 // =============================================================================

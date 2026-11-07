@@ -34,6 +34,13 @@ import {
 import { processHitlVerification, getAuditLogs, recordIncidentAuditLog } from "./hitl_dispatcher";
 import { handleWebSocketUpgrade, broadcastMessage } from "./websocket";
 import { isIpWhitelisted, isOriginWhitelisted, getCorsHeaders } from "./security";
+import {
+  recordPostRequestLog,
+  getDeepSeekIncidentsResponse,
+  analyzeWindowWithDeepSeek,
+  analyzeSingleLogWithIntegratedAI,
+  getStandardSocAuditLogs
+} from "./deepseek_analyzer";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -95,6 +102,36 @@ export default {
           )
         );
         return errorResponse("ACCESS_DENIED_IP_NOT_WHITELISTED", 403);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Automatic Request Logging & In-Process AI Analysis Layer (CD-04, CD-05)
+    // -------------------------------------------------------------------------
+    if (method === "POST") {
+      try {
+        const clonedBody: any = await request.clone().json().catch(() => null);
+        if (clonedBody) {
+          const postLog = recordPostRequestLog(path, method, clientIp, clonedBody);
+
+          // Automated In-Process AI Layer: Trigger AI forensic analysis immediately in background
+          if (
+            path.includes("/ai/detection") ||
+            path.includes("/incidents") ||
+            path.includes("/engine/evaluate") ||
+            clonedBody?.detection ||
+            clonedBody?.title ||
+            clonedBody?.engine_behavior
+          ) {
+            ctx.waitUntil(
+              analyzeSingleLogWithIntegratedAI(postLog, env).catch((aiErr) => {
+                console.warn("[Worker] Automated in-process AI analysis error:", aiErr);
+              })
+            );
+          }
+        }
+      } catch {
+        // Safe logging pass
       }
     }
 
@@ -366,6 +403,60 @@ export default {
       method === "GET"
     ) {
       return jsonResponse(getRecentIncidents());
+    }
+
+    // -------------------------------------------------------------------------
+    // 10. REST API: Continuous AI Incidents Stream (/api/get-incident & /api/get-incidents)
+    // Automated in-process AI layer analyzes 2-minute post logs & images, generates JSON
+    // -------------------------------------------------------------------------
+    if (
+      (path === "/api/get-incident" ||
+        path === "/api/get-incidents" ||
+        path === "/api/v1/get-incident" ||
+        path === "/api/v1/get-incidents" ||
+        path === "/api/incidents/get-incident" ||
+        path === "/api/incidents/get-incidents") &&
+      method === "GET"
+    ) {
+      const windowSeconds = Number(url.searchParams.get("window") || 120);
+      const data = await getDeepSeekIncidentsResponse(env, windowSeconds);
+      return jsonResponse(data);
+    }
+
+    // -------------------------------------------------------------------------
+    // 10.1 Standard SOC Structured Audit Logs (/api/soc/logs, /api/get-incident-logs)
+    // -------------------------------------------------------------------------
+    if (
+      (path === "/api/soc/logs" ||
+        path === "/api/v1/soc/logs" ||
+        path === "/api/get-incident-logs" ||
+        path === "/api/incidents/logs") &&
+      method === "GET"
+    ) {
+      const logs = getStandardSocAuditLogs();
+      return jsonResponse({
+        success: true,
+        count: logs.length,
+        timestamp: new Date().toISOString(),
+        logs
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // 10.1 Trigger Manual 2-Min DeepSeek Batch Analysis (/api/v1/deepseek/analyze)
+    // -------------------------------------------------------------------------
+    if (
+      (path === "/api/v1/deepseek/analyze" || path === "/api/deepseek/analyze") &&
+      method === "POST"
+    ) {
+      const windowSeconds = Number(url.searchParams.get("window") || 120);
+      const incidents = await analyzeWindowWithDeepSeek(env, windowSeconds);
+      return jsonResponse({
+        success: true,
+        message: `DeepSeek analysis executed across ${windowSeconds}s window`,
+        count: incidents.length,
+        incidents
+      });
     }
 
     // -------------------------------------------------------------------------

@@ -4,7 +4,7 @@
  * Zero mock data — fully dynamic incident vault with forensic audit support.
  */
 
-import { IIncidentItem, IIncidentPlaybackResponse, IAIRealDetectionPayload } from "./types";
+import type { IIncidentItem, IIncidentPlaybackResponse, IAIRealDetectionPayload } from "./types.ts";
 
 // In-Memory Buffer for Live Active Incidents (Synchronized with D1)
 let incidents: IIncidentItem[] = [];

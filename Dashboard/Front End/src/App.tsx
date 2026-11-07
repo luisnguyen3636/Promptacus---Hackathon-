@@ -8,7 +8,6 @@ import { IIncidentItem } from './types/soc.ts';
 // 8 Giao diện Tác chiến Chuyên biệt
 import { DashboardView } from './components/views/DashboardView.tsx';
 import { LiveVideoWallView } from './components/views/LiveVideoWallView.tsx';
-import { NetworkTopologyView } from './components/views/NetworkTopologyView.tsx';
 import { ThreatIntelligenceView } from './components/views/ThreatIntelligenceView.tsx';
 import { IncidentFeedView } from './components/views/IncidentFeedView.tsx';
 import { AiAnalyzerView } from './components/views/AiAnalyzerView.tsx';
@@ -95,12 +94,6 @@ export const App: React.FC = () => {
           <LiveVideoWallView
             cameras={cameras}
             onPtzCommand={handlePtzCommand}
-          />
-        );
-      case 'Network Topology':
-        return (
-          <NetworkTopologyView
-            metrics={overview.metrics}
           />
         );
       case 'Threat Intelligence':
