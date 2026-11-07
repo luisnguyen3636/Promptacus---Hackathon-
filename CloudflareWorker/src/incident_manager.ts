@@ -1,12 +1,12 @@
 /**
- * CYBERGUARD SOC — REAL INCIDENT & CLOUDFLARE KV STORAGE MANAGER
- * Receives JSON payloads pushed by the external server and stores them directly in Cloudflare KV.
- * Zero AI re-evaluation on Worker, zero mock data, strict Operational HITL [CD-04].
+ * CYBERGUARD SOC — SERVER JSON LOG & CLOUDFLARE KV STORAGE MANAGER
+ * Receives JSON payloads pushed by the external server, strips all frame/image blobs,
+ * stores pure structured logs in Cloudflare KV, and serves logs to the SOC Dashboard.
+ * Zero frame processing, zero AI re-evaluation on Worker, zero mock data, strict Operational HITL [CD-04].
  */
 
 import type {
   IIncidentItem,
-  IIncidentPlaybackResponse,
   IServerIngestPayload,
   IServerActor,
   IServerVisualCues,
@@ -29,12 +29,11 @@ export function getIncidentById(id: string): IIncidentItem | undefined {
 }
 
 export function addIncident(item: IIncidentItem): void {
-  incidents = [item, ...incidents.filter((i) => i.id !== item.id)].slice(0, 60);
+  incidents = [item, ...incidents.filter((i) => i.id !== item.id)].slice(0, 100);
 }
 
 /**
- * Loads stored incidents from Cloudflare KV ("kv_recent_incidents") and merges with in-memory state
- * so newer in-memory incidents are never overwritten if KV writes are rate-limited (429 / quota).
+ * Loads stored incident logs from Cloudflare KV ("kv_recent_incidents") and merges with in-memory logs.
  */
 export async function loadIncidentsFromKv(env?: Env): Promise<IIncidentItem[]> {
   if (env?.INCIDENT_CACHE) {
@@ -46,7 +45,6 @@ export async function loadIncidentsFromKv(env?: Env): Promise<IIncidentItem[]> {
           if (incidents.length === 0) {
             incidents = parsed;
           } else {
-            // Merge: keep in-memory items first (freshest state / status updates), append missing KV items
             const seenIds = new Set(incidents.map((i) => i.id));
             for (const kvItem of parsed) {
               if (kvItem && kvItem.id && !seenIds.has(kvItem.id)) {
@@ -54,48 +52,28 @@ export async function loadIncidentsFromKv(env?: Env): Promise<IIncidentItem[]> {
                 seenIds.add(kvItem.id);
               }
             }
-            incidents = incidents.slice(0, 60);
+            incidents = incidents.slice(0, 100);
           }
         }
       }
     } catch {
-      // Silently keep in-memory incidents if KV read fails
+      // Keep in-memory incidents if KV read fails
     }
   }
   return incidents;
 }
 
 /**
- * Compacts incidents before writing to Cloudflare KV to prevent 25MB limit / oversized payload errors
- * and 6x Base64 duplication. Keeps Base64 snapshots on the 3 most recent incidents in KV.
+ * Saves current incident logs to Cloudflare KV ("kv_recent_incidents") with rate-limit cooldown protection.
  */
-function buildCompactKvIncidents(list: IIncidentItem[]): IIncidentItem[] {
-  return list.slice(0, 25).map((item, idx) => {
-    const keepHeavyImages = idx < 3;
-    return {
-      ...item,
-      fullImageBase64: keepHeavyImages ? item.fullImageBase64 : undefined,
-      subjectCropBase64: keepHeavyImages ? item.subjectCropBase64 : undefined,
-      handCropBase64: keepHeavyImages ? item.handCropBase64 : undefined,
-      playbackUrl: keepHeavyImages ? item.playbackUrl : null,
-      cameraSnapshots: keepHeavyImages ? item.cameraSnapshots : null
-    };
-  });
-}
-
-/**
- * Saves current incident list to Cloudflare KV ("kv_recent_incidents") with rate-limit cooldown protection.
- */
-export async function saveIncidentsToKv(env?: Env, _singleIncident?: IIncidentItem): Promise<void> {
+export async function saveIncidentsToKv(env?: Env): Promise<void> {
   if (!env?.INCIDENT_CACHE) return;
   if (Date.now() < kvWriteCooldownUntil) return;
 
   try {
-    const compactList = buildCompactKvIncidents(incidents);
-    await env.INCIDENT_CACHE.put("kv_recent_incidents", JSON.stringify(compactList));
+    const compactLogs = incidents.slice(0, 50);
+    await env.INCIDENT_CACHE.put("kv_recent_incidents", JSON.stringify(compactLogs));
   } catch {
-    // Cloudflare KV enforces 1 write/sec per key and daily write limits on Free Tier.
-    // Activate a 30s cooldown so continuous server ingestion stays fast in-memory + WebSocket + D1 without error spam.
     kvWriteCooldownUntil = Date.now() + 30_000;
   }
 }
@@ -112,8 +90,8 @@ function normalizeSeverity(raw?: string): "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
 }
 
 /**
- * Unified Server JSON Ingestion -> Cloudflare KV
- * Supports the full WEAPON_THREAT / YOLOv11-Pose + NVIDIA NIM VLM payload as well as actor/visual_cues payloads.
+ * Unified Server JSON Log Ingestion -> Cloudflare KV
+ * Records JSON metadata, telemetry, subjects, kinematics, and reasoning into KV without any frame processing.
  */
 export async function ingestServerPayloadToKv(
   payload: IServerIngestPayload,
@@ -164,8 +142,14 @@ export async function ingestServerPayloadToKv(
   const measuredFps =
     payload.measured_fps !== undefined ? Number(payload.measured_fps) : undefined;
 
-  const subjects = det?.subjects || [];
+  const rawSubjects = det?.subjects || [];
   const rawActors = payload.actors || vlm?.actors || [];
+
+  // Strip any crop_image_base64 from subjects so only pure telemetry/kinematics log is stored
+  const subjects = rawSubjects.map((sub) => {
+    const { crop_image_base64: _cropB64, ...cleanSub } = sub || {};
+    return cleanSub;
+  });
 
   const humanCount =
     audit?.human_count !== undefined
@@ -281,7 +265,6 @@ export async function ingestServerPayloadToKv(
     vlm?.recommended_action ||
     (isUrgent ? "DISPATCH_SECURITY" : "MONITOR");
 
-  // Synthesize actors from detection.subjects if actors is not explicitly provided
   const actors: IServerActor[] =
     rawActors.length > 0
       ? rawActors.map((a, idx) => ({
@@ -324,39 +307,13 @@ export async function ingestServerPayloadToKv(
     payload.id ||
     `EVT_${cameraId}_${frameIndex !== undefined ? frameIndex : Date.now()}_${Date.now().toString().slice(-4)}`;
 
-  const cleanImg = (val?: string | null): string | undefined => {
-    if (!val || typeof val !== "string") return undefined;
-    if (val.includes("...")) return undefined;
-    return val;
-  };
-
-  const fullImageBase64 = cleanImg(
-    payload.image_base64 ||
-      payload.image ||
-      det?.full_image?.image_base64 ||
-      payload.snapshot_url ||
-      payload.evidence_url
-  );
-
-  const subjectCropBase64 = cleanImg(
-    payload.subject_crop_base64 || subjects[0]?.crop_image_base64
-  );
-
-  const handCropBase64 = cleanImg(payload.hand_crop_base64);
-
   const forensicSha256 =
     payload.forensic_hash ||
     det?.full_image?.sha256_hash ||
-    subjects[0]?.crop_image_sha256 ||
+    rawSubjects[0]?.crop_image_sha256 ||
     undefined;
 
-  const imageUrl = payload.image_url || (fullImageBase64 ? `/api/v1/incidents/${incidentId}/image.jpg` : undefined);
-  const handCropUrl = payload.hand_crop_url || (handCropBase64 ? `/api/v1/incidents/${incidentId}/hand_crop.jpg` : undefined);
-
-  const peakSnapshot = fullImageBase64;
-  const preSnapshot = subjectCropBase64 || handCropBase64 || peakSnapshot;
-
-  // Strip duplicate large Base64 blobs from rawDetection so KV values stay compact
+  // Strip all frame/image fields from raw payload before storing log
   const {
     image: _img,
     image_base64: _imgB64,
@@ -364,13 +321,19 @@ export async function ingestServerPayloadToKv(
     hand_crop_base64: _handB64,
     snapshot_url: _snapUrl,
     evidence_url: _evUrl,
+    image_url: _imgUrl,
+    hand_crop_url: _hUrl,
     ...lightPayload
   } = payload;
 
-  const lightSubjects = subjects.map((s) => {
-    const { crop_image_base64: _cropB64, ...restSubject } = s;
-    return restSubject;
-  });
+  if (lightPayload.detection && lightPayload.detection.full_image) {
+    const { image_base64: _fullImgB64, ...restFullImg } = lightPayload.detection.full_image;
+    lightPayload.detection = {
+      ...lightPayload.detection,
+      full_image: restFullImg,
+      subjects
+    };
+  }
 
   const incident: IIncidentItem = {
     id: incidentId,
@@ -404,25 +367,13 @@ export async function ingestServerPayloadToKv(
     actors,
     visualCues,
     nvidiaVlmAnalysis: vlm,
-    cameraSnapshots:
-      peakSnapshot || preSnapshot || handCropBase64
-        ? {
-            preEventSnapshotUrl: preSnapshot,
-            eventPeakSnapshotUrl: peakSnapshot,
-            handCropSnapshotUrl: handCropBase64 || handCropUrl
-          }
-        : null,
-    playbackUrl: peakSnapshot || null,
+    cameraSnapshots: null,
+    playbackUrl: null,
     status: "PENDING_VERIFICATION", // Mandatory Operational HITL gate [CD-04]
     vlmAnalysis,
     rawDetection: lightPayload,
     forensicSha256,
-    subjects: lightSubjects,
-    fullImageBase64,
-    subjectCropBase64,
-    handCropBase64,
-    imageUrl,
-    handCropUrl,
+    subjects,
     cameraMeta: camMeta || {
       camera_id: cameraId,
       name: cameraName,
@@ -434,35 +385,8 @@ export async function ingestServerPayloadToKv(
   };
 
   addIncident(incident);
-  await saveIncidentsToKv(env, incident);
+  await saveIncidentsToKv(env);
   return incident;
-}
-
-export function getIncidentPlayback(id: string): IIncidentPlaybackResponse | null {
-  const inc = incidents.find((i) => i.id === id || i.eventId === id);
-  if (!inc) return null;
-
-  return {
-    incidentId: inc.id,
-    title: inc.title,
-    cameraId: inc.cameraId,
-    timestamp: inc.timestamp,
-    bufferRange: {
-      preEventSeconds: 10,
-      postEventSeconds: 10,
-      totalDurationSeconds: 20
-    },
-    vlmReasoning: inc.vlmAnalysis || inc.reasoning,
-    visualEvidence: {
-      preEventSnapshot: inc.subjectCropBase64 || inc.cameraSnapshots?.preEventSnapshotUrl || null,
-      eventPeakSnapshot: inc.fullImageBase64 || inc.cameraSnapshots?.eventPeakSnapshotUrl || null,
-      streamPlaybackUrl: inc.playbackUrl || null
-    },
-    status: inc.status,
-    forensicSha256: inc.forensicSha256,
-    fullImageBase64: inc.fullImageBase64,
-    subjects: inc.subjects
-  };
 }
 
 export async function updateIncidentStatus(
@@ -474,7 +398,7 @@ export async function updateIncidentStatus(
   const inc = incidents.find((i) => i.id === id || i.eventId === id);
   if (inc) {
     inc.status = newStatus;
-    await saveIncidentsToKv(env, inc);
+    await saveIncidentsToKv(env);
   }
   return inc || null;
 }

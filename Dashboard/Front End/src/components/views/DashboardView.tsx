@@ -114,9 +114,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="w-[80%] min-w-0">
             <CameraMatrix
               cameras={cameras}
+              incidents={incidents}
               onPtzCommand={onPtzCommand}
               zoomedCameraId={zoomedCameraId}
               onToggleZoom={handleToggleZoom}
+              onSelectPlayback={onSelectPlayback}
             />
           </div>
 
@@ -137,9 +139,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="col-span-8 min-w-0">
             <CameraMatrix
               cameras={cameras}
+              incidents={incidents}
               onPtzCommand={onPtzCommand}
               zoomedCameraId={null}
               onToggleZoom={handleToggleZoom}
+              onSelectPlayback={onSelectPlayback}
             />
           </div>
 

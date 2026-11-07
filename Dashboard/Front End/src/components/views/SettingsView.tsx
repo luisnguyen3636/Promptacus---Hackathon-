@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Settings, User, Bell, HardDrive, Send, Video, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { Settings, User, Bell, Send, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { ISocSettings } from '../../types/soc.ts';
 
 interface SettingsViewProps {
@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS: ISocSettings = {
   preBufferSeconds: 10,
   postBufferSeconds: 10,
   dispatchWebhook: 'https://soc-dispatch.police.gov.vn/api/v1/alert',
-  liveStreamUrl: 'https://means-brick-determined-send.trycloudflare.com/api/v1/cameras/LAPTOP_01/stream',
+  liveStreamUrl: '',
   autoSirenOnCritical: true,
 };
 
@@ -39,7 +39,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         const json = await res.json();
         if (json?.data) {
           setSettings(json.data);
-          localStorage.setItem('SOC_LIVE_CAMERA_STREAM_URL', json.data.liveStreamUrl || '');
         }
       }
     } catch {
@@ -73,18 +72,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         if (json?.data) {
           setSettings(json.data);
           localStorage.setItem('SOC_SETTINGS_CACHE', JSON.stringify(json.data));
-          localStorage.setItem('SOC_LIVE_CAMERA_STREAM_URL', json.data.liveStreamUrl || '');
         }
       } else {
         localStorage.setItem('SOC_SETTINGS_CACHE', JSON.stringify(settings));
-        localStorage.setItem('SOC_LIVE_CAMERA_STREAM_URL', settings.liveStreamUrl || '');
       }
       setIsSaved(true);
       onToast?.('[SETTINGS] Đã lưu cấu hình hệ thống vào Cloudflare KV');
       setTimeout(() => setIsSaved(false), 2500);
     } catch {
       localStorage.setItem('SOC_SETTINGS_CACHE', JSON.stringify(settings));
-      localStorage.setItem('SOC_LIVE_CAMERA_STREAM_URL', settings.liveStreamUrl || '');
       setIsSaved(true);
       onToast?.('[SETTINGS] Đã lưu cấu hình cục bộ');
       setTimeout(() => setIsSaved(false), 2500);
@@ -167,27 +163,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* Nhóm 2: Nguồn Stream Camera Dự Phòng (Live Stream URL Backup) */}
-      <div className="bg-[#0E131A] border border-[#1E2631] p-4 space-y-3">
-        <div className="flex items-center gap-2 border-b border-[#1E2631] pb-2">
-          <Video className="w-4 h-4 text-[#38BDF8]" />
-          <span className="font-bold text-xs text-white uppercase">LIVE CAMERA STREAM PROXY &amp; BACKUP URL</span>
-        </div>
-        <div className="font-mono text-xs space-y-2">
-          <label className="text-slate-400 block">UPSTREAM CAMERA STREAM URL (MJPEG / HTTP STREAM):</label>
-          <input
-            type="text"
-            value={settings.liveStreamUrl}
-            onChange={(e) => setSettings({ ...settings, liveStreamUrl: e.target.value })}
-            className="w-full bg-[#161E29] border border-[#1E2631] p-2 text-[#38BDF8] outline-none focus:border-[#38BDF8]"
-          />
-          <div className="text-[10px] text-slate-500">
-            * Đồng bộ trực tiếp với Worker endpoint <code className="text-slate-300">/api/v1/cameras/LAPTOP_01/stream</code> và biến dự phòng <code className="text-slate-300">LIVE_CAMERA_STREAM_URL</code>.
-          </div>
-        </div>
-      </div>
-
-      {/* Nhóm 3: Ngưỡng Rủi ro & Báo động (Alert Thresholds) */}
+      {/* Nhóm 2: Ngưỡng Rủi ro & Báo động (Alert Thresholds) */}
       <div className="bg-[#0E131A] border border-[#1E2631] p-4 space-y-3">
         <div className="flex items-center gap-2 border-b border-[#1E2631] pb-2">
           <Bell className="w-4 h-4 text-[#F59E0B]" />
@@ -215,50 +191,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onChange={(e) => setSettings({ ...settings, autoSirenOnCritical: e.target.checked })}
               className="accent-[#10B981]"
             />
-            <span className="text-slate-300">Kích hoạt tín hiệu cảnh báo khẩn cấp trên giao diện khi nhận sự cố <code className="text-[#EF4444]">is_urgent: true</code></span>
+            <span className="text-slate-300">
+              Kích hoạt tín hiệu cảnh báo khẩn cấp trên giao diện khi nhận sự cố{' '}
+              <code className="text-[#EF4444]">is_urgent: true</code>
+            </span>
           </label>
         </div>
       </div>
 
-      {/* Nhóm 4: Evidence Rolling Buffer Configuration */}
-      <div className="bg-[#0E131A] border border-[#1E2631] p-4 space-y-3">
-        <div className="flex items-center gap-2 border-b border-[#1E2631] pb-2">
-          <HardDrive className="w-4 h-4 text-[#06B6D4]" />
-          <span className="font-bold text-xs text-white uppercase">EVIDENCE ROLLING BUFFER LIMITS</span>
-        </div>
-        <div className="grid grid-cols-2 gap-4 font-mono text-xs">
-          <div>
-            <label className="text-slate-400 block mb-1">PRE-EVENT BUFFER DURATION:</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                max={120}
-                value={settings.preBufferSeconds}
-                onChange={(e) => setSettings({ ...settings, preBufferSeconds: Number(e.target.value) })}
-                className="w-full bg-[#161E29] border border-[#1E2631] p-2 text-white outline-none focus:border-[#06B6D4]"
-              />
-              <span className="text-slate-500">Seconds</span>
-            </div>
-          </div>
-          <div>
-            <label className="text-slate-400 block mb-1">POST-EVENT BUFFER DURATION:</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                max={120}
-                value={settings.postBufferSeconds}
-                onChange={(e) => setSettings({ ...settings, postBufferSeconds: Number(e.target.value) })}
-                className="w-full bg-[#161E29] border border-[#1E2631] p-2 text-white outline-none focus:border-[#06B6D4]"
-              />
-              <span className="text-slate-500">Seconds</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Nhóm 5: Operational Dispatch Endpoint (CD-04) */}
+      {/* Nhóm 3: Operational Dispatch Endpoint (CD-04) */}
       <div className="bg-[#0E131A] border border-[#1E2631] p-4 space-y-3">
         <div className="flex items-center gap-2 border-b border-[#1E2631] pb-2">
           <Send className="w-4 h-4 text-[#10B981]" />

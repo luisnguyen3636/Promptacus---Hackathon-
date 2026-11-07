@@ -3,9 +3,8 @@ import { ISocOverview, ICameraDevice, IIncidentItem, IServerActor } from '../typ
 import { MOCK_OVERVIEW, MOCK_CAMERAS, MOCK_INCIDENTS } from '../data/mockData.ts';
 
 /**
- * Universal Mapper for Server JSON & Cloudflare KV Incident Objects
- * Maps all fields from the server's WEAPON_THREAT / YOLOv11-Pose + NVIDIA NIM VLM JSON format
- * as well as actor/visual_cues formats.
+ * Universal Mapper for Server JSON Logs & Cloudflare KV Incident Objects
+ * Maps structured fields from the server's JSON log without any frame/image processing.
  */
 export function mapKvIncidentItem(item: any): IIncidentItem {
   if (!item) {
@@ -243,55 +242,11 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
     raw.event_id ||
     `EVT_${cameraId}_${frameIndex ?? Date.now()}`;
 
-  const cleanImg = (val?: string | null): string | null => {
-    if (!val || typeof val !== 'string') return null;
-    if (val.includes('...')) return null;
-    return val;
-  };
-
-  const fullImageBase64 = cleanImg(
-    item.fullImageBase64 ||
-      item.image_base64 ||
-      item.image ||
-      raw.image_base64 ||
-      raw.image
-  );
-
-  const subjectCropBase64 = cleanImg(
-    item.subjectCropBase64 ||
-      item.subject_crop_base64 ||
-      raw.subject_crop_base64 ||
-      subjects[0]?.crop_image_base64
-  );
-
-  const handCropBase64 = cleanImg(
-    item.handCropBase64 ||
-      item.hand_crop_base64 ||
-      raw.hand_crop_base64
-  );
-
-  const imageUrl = item.imageUrl || item.image_url || raw.image_url;
-  const handCropUrl = item.handCropUrl || item.hand_crop_url || raw.hand_crop_url;
-
   const forensicSha256 =
     item.forensicSha256 ||
     item.forensic_hash ||
     raw.forensic_hash ||
     subjects[0]?.crop_image_sha256;
-
-  const rawSnapshots = item.cameraSnapshots;
-  const cameraSnapshots =
-    fullImageBase64 || subjectCropBase64 || handCropBase64
-      ? {
-          preEventSnapshotUrl: subjectCropBase64 || handCropBase64 || fullImageBase64 || undefined,
-          eventPeakSnapshotUrl: fullImageBase64 || subjectCropBase64 || undefined,
-          handCropSnapshotUrl: handCropBase64 || undefined,
-        }
-      : rawSnapshots &&
-        !String(rawSnapshots.eventPeakSnapshotUrl || '').includes('...') &&
-        !String(rawSnapshots.eventPeakSnapshotUrl || '').startsWith('/api/v1/incidents/')
-      ? rawSnapshots
-      : null;
 
   const firstKin = subjects[0]?.kinematics;
   const kinematicsSummary = firstKin
@@ -332,18 +287,13 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
     actors,
     visualCues,
     nvidiaVlmAnalysis: vlm,
-    cameraSnapshots,
-    playbackUrl: item.playbackUrl || fullImageBase64 || imageUrl || null,
+    cameraSnapshots: null,
+    playbackUrl: null,
     status: item.status || item.operator_status || 'PENDING_VERIFICATION',
     vlmAnalysis,
     rawResponse: reasoning,
     forensicSha256,
     subjects,
-    fullImageBase64,
-    subjectCropBase64,
-    handCropBase64,
-    imageUrl,
-    handCropUrl,
     cameraMeta: camMeta,
     auditInfo,
     audioInfo,
@@ -386,7 +336,7 @@ export function useSocTelemetry() {
         }
       }
     } catch {
-      // Giữ state hiện tại
+      // Keep current state
     }
 
     try {
@@ -402,7 +352,7 @@ export function useSocTelemetry() {
         }
       }
     } catch {
-      // Giữ state hiện tại
+      // Keep current state
     } finally {
       setIsLoading(false);
     }

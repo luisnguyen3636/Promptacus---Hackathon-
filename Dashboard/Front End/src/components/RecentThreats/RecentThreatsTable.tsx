@@ -32,7 +32,7 @@ export const RecentThreatsTable: React.FC<RecentThreatsTableProps> = ({
           <div>TIME</div>
           <div>ACTION / DESCRIPTION / LOCATION</div>
           <div className="text-center">CAMERA ID</div>
-          <div>SCORE / SNAPSHOT</div>
+          <div className="text-center">SCORE / ACTORS</div>
           <div className="text-center">SEVERITY</div>
           <div className="text-center">ACTION</div>
         </div>

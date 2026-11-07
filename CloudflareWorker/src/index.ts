@@ -1,12 +1,12 @@
 /**
  * Cloudflare Worker Main Entrypoint & Edge Gateway Router.
- * CYBERGUARD SOC — PURE DISPLAY & KV STORAGE GATEWAY
+ * CYBERGUARD SOC — SERVER JSON LOG INGESTION & KV DASHBOARD GATEWAY
  *
  * Unifies:
  * 1. React Frontend SPA via Cloudflare Workers Static Assets (env.ASSETS)
- * 2. Native WebSocket live stream broker (/ws/live-stream)
- * 3. Server JSON Ingestion into Cloudflare KV (/api/incidents, /api/v1/webhook, /api/v1/ai/detection, /api/ingest)
- * 4. Full REST backend APIs reading real data from Cloudflare KV (Overview, Cameras, PTZ, Incidents, Playback)
+ * 2. Native WebSocket live log broker (/ws/live-stream)
+ * 3. Server JSON Log Ingestion into Cloudflare KV (/api/incidents, /api/v1/webhook, /api/v1/ai/detection, /api/ingest)
+ * 4. REST APIs pushing stored logs to the Dashboard (Overview, Cameras, PTZ, Incidents, Audit Logs)
  * 5. Operational HITL Verification Gate (CD-04 & CD-05)
  * 6. Operator Authentication (/api/auth/login, /api/auth/logout, /api/auth/me)
  * 7. Persistent SOC Settings in Cloudflare KV (/api/settings)
@@ -29,9 +29,7 @@ import {
   removeCameraById
 } from "./camera_manager.ts";
 import {
-  getRecentIncidents,
   loadIncidentsFromKv,
-  getIncidentPlayback,
   ingestServerPayloadToKv
 } from "./incident_manager.ts";
 import { processHitlVerification, getAuditLogs, recordIncidentAuditLog } from "./hitl_dispatcher.ts";
@@ -45,7 +43,7 @@ let currentSettings: ISocSettings = {
   operatorId: "OP-VN-SOC-804",
   operatorName: "Trưởng Ca Trực SOC",
   shiftRotation: "Ca 1 · 06:00 - 14:00 UTC",
-  liveStreamUrl: "https://means-brick-determined-send.trycloudflare.com/api/v1/cameras/LAPTOP_01/stream",
+  liveStreamUrl: "",
   criticalThreshold: 75,
   preBufferSeconds: 10,
   postBufferSeconds: 10,
@@ -55,9 +53,6 @@ let currentSettings: ISocSettings = {
 };
 
 async function loadSettingsFromKv(env: Env): Promise<ISocSettings> {
-  if (env.LIVE_CAMERA_STREAM_URL && !currentSettings.liveStreamUrl) {
-    currentSettings.liveStreamUrl = env.LIVE_CAMERA_STREAM_URL;
-  }
   if (env.INCIDENT_CACHE) {
     try {
       const raw = await env.INCIDENT_CACHE.get("kv_settings");
@@ -65,8 +60,8 @@ async function loadSettingsFromKv(env: Env): Promise<ISocSettings> {
         const parsed = JSON.parse(raw) as Partial<ISocSettings>;
         currentSettings = { ...currentSettings, ...parsed };
       }
-    } catch (err) {
-      console.warn("[Worker] Failed to read kv_settings:", err);
+    } catch {
+      // Keep in-memory settings
     }
   }
   return currentSettings;
@@ -81,8 +76,8 @@ async function saveSettingsToKv(settings: Partial<ISocSettings>, env: Env): Prom
   if (env.INCIDENT_CACHE) {
     try {
       await env.INCIDENT_CACHE.put("kv_settings", JSON.stringify(currentSettings));
-    } catch (err) {
-      console.warn("[Worker] Failed to write kv_settings:", err);
+    } catch {
+      // Ignore KV rate limit on settings
     }
   }
   return currentSettings;
@@ -164,7 +159,7 @@ export default {
     if (path === "/api/v1/health" && method === "GET") {
       return jsonResponse({
         status: "ONLINE",
-        service: "Urban Safety SOC Pure Display & KV Gateway",
+        service: "Urban Safety SOC Log & KV Gateway",
         environment: env.ENVIRONMENT || "production",
         kv_ready: Boolean(env.INCIDENT_CACHE),
         d1_database_ready: Boolean(env.DB),
@@ -209,12 +204,15 @@ export default {
 
         sessionStore.set(token, session);
         if (env.INCIDENT_CACHE) {
-          await env.INCIDENT_CACHE.put(`kv_session:${token}`, JSON.stringify(session), {
-            expirationTtl: 86400
-          });
+          try {
+            await env.INCIDENT_CACHE.put(`kv_session:${token}`, JSON.stringify(session), {
+              expirationTtl: 86400
+            });
+          } catch {
+            // Keep in-memory session
+          }
         }
 
-        // Also update default operatorId in settings
         await saveSettingsToKv({ operatorId, operatorName: session.operatorName }, env);
 
         await recordIncidentAuditLog(
@@ -243,10 +241,14 @@ export default {
 
       let session = sessionStore.get(token);
       if (!session && env.INCIDENT_CACHE) {
-        const raw = await env.INCIDENT_CACHE.get(`kv_session:${token}`);
-        if (raw) {
-          session = JSON.parse(raw) as IOperatorSession;
-          sessionStore.set(token, session);
+        try {
+          const raw = await env.INCIDENT_CACHE.get(`kv_session:${token}`);
+          if (raw) {
+            session = JSON.parse(raw) as IOperatorSession;
+            sessionStore.set(token, session);
+          }
+        } catch {
+          // Ignore KV read error
         }
       }
 
@@ -266,7 +268,11 @@ export default {
       if (token) {
         sessionStore.delete(token);
         if (env.INCIDENT_CACHE) {
-          await env.INCIDENT_CACHE.delete(`kv_session:${token}`);
+          try {
+            await env.INCIDENT_CACHE.delete(`kv_session:${token}`);
+          } catch {
+            // Ignore KV delete error
+          }
         }
       }
       return jsonResponse({ success: true, message: "Logged out" });
@@ -308,8 +314,8 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 6. SERVER JSON CONTINUOUS INGESTION -> CLOUDFLARE KV
-    // Supports all ingestion endpoints without running any AI on the Worker
+    // 6. SERVER JSON LOG INGESTION -> CLOUDFLARE KV & PUSH TO DASHBOARD
+    // Records server JSON log, updates camera telemetry log, and broadcasts to Dashboard
     // -------------------------------------------------------------------------
     if (
       (path === "/api/incidents" ||
@@ -336,10 +342,10 @@ export default {
         let lastCamera: any = null;
 
         for (const payload of payloads) {
-          // 1. Upsert camera device in KV ("kv_cameras") with real telemetry & bounding boxes
+          // 1. Upsert camera device telemetry log in KV ("kv_cameras")
           lastCamera = await upsertCameraFromServerPayload(payload, env, clientIp);
 
-          // 2. Store incident in KV ("kv_recent_incidents" & "incident:<id>") with PENDING_VERIFICATION
+          // 2. Store incident log in KV ("kv_recent_incidents") with PENDING_VERIFICATION
           lastIncident = await ingestServerPayloadToKv(payload, env, clientIp);
 
           // 3. Update global threat score from payload's threat_score
@@ -367,7 +373,7 @@ export default {
             env
           );
 
-          // 5. Also persist to D1 if bound
+          // 5. Persist log to D1 if bound
           if (env.DB) {
             try {
               const vault = new D1IncidentVault(env);
@@ -376,8 +382,8 @@ export default {
                 timestamp: lastIncident.timestamp,
                 camera_id: lastIncident.cameraId || "LAPTOP_01",
                 location_name: lastIncident.location || "Khu Vực Giám Sát",
-                latitude: 0,
-                longitude: 0,
+                latitude: lastIncident.cameraMeta?.latitude || 0,
+                longitude: lastIncident.cameraMeta?.longitude || 0,
                 engine_behavior: lastIncident.actionType || lastIncident.title,
                 engine_threat_score: Number(lastIncident.threatScore || 0),
                 ai_severity_score_10: Math.round(Number(lastIncident.threatScore || 0) * 100) / 10,
@@ -393,16 +399,16 @@ export default {
                 }),
                 investigation_summary: lastIncident.description || lastIncident.reasoning || "",
                 evidence_clip_url: null,
-                snapshot_url: lastIncident.fullImageBase64 || null,
+                snapshot_url: null,
                 operator_status: "AWAITING_OPERATOR_VERIFICATION"
               });
-            } catch (dbErr) {
-              console.warn("[Worker] D1 insert warning:", dbErr);
+            } catch {
+              // Ignore D1 insert error
             }
           }
         }
 
-        // 6. Broadcast real-time update to all connected WebSocket clients
+        // 6. Push real-time log update to all connected Dashboard WebSocket clients
         broadcastMessage({
           type: "TELEMETRY_AND_AI_TICK",
           cameras: getCameras(),
@@ -435,7 +441,7 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 7. REST API: Dashboard & Telemetry (/api/soc/overview)
+    // 7. REST API: Dashboard & Telemetry Overview (/api/soc/overview)
     // -------------------------------------------------------------------------
     if ((path === "/api/soc/overview" || path === "/api/v1/soc/overview") && method === "GET") {
       await loadCamerasFromKv(env);
@@ -449,7 +455,7 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 8. REST API: Real Camera Fleet from KV (/api/devices/cameras, /api/cameras)
+    // 8. REST API: Real Camera Fleet Telemetry from KV (/api/devices/cameras, /api/cameras)
     // -------------------------------------------------------------------------
     if ((path === "/api/devices/cameras" || path === "/api/cameras") && method === "GET") {
       const cameras = await loadCamerasFromKv(env);
@@ -459,7 +465,6 @@ export default {
     if (
       (path.startsWith("/api/devices/cameras/") || path.startsWith("/api/cameras/")) &&
       !path.endsWith("/ptz") &&
-      !path.endsWith("/stream") &&
       method === "DELETE"
     ) {
       const cameraId = path
@@ -468,103 +473,6 @@ export default {
         .trim();
       const removed = await removeCameraById(cameraId, env);
       return jsonResponse({ success: removed, cameraId });
-    }
-
-    // -------------------------------------------------------------------------
-    // 8.1. REST API: Live Camera Video Stream Proxy (/api/v1/cameras/:id/stream & /api/cameras/:id/stream)
-    // Automatically serves upstream MJPEG stream if reachable, or falls back to KV snapshot / standby frame (zero 502s)
-    // -------------------------------------------------------------------------
-    if (
-      (path.startsWith("/api/v1/cameras/") || path.startsWith("/api/cameras/")) &&
-      path.endsWith("/stream") &&
-      method === "GET"
-    ) {
-      const cameraId = path
-        .replace("/api/v1/cameras/", "")
-        .replace("/api/cameras/", "")
-        .replace("/stream", "")
-        .trim();
-
-      const settings = await loadSettingsFromKv(env);
-      const candidateUrl = settings.liveStreamUrl || env.LIVE_CAMERA_STREAM_URL || "";
-
-      // Only attempt upstream fetch if it is a valid external URL and not the expired quick-tunnel
-      const isDeadQuickTunnel = candidateUrl.includes("means-brick-determined-send.trycloudflare.com");
-      if (candidateUrl && candidateUrl.startsWith("http") && !isDeadQuickTunnel) {
-        try {
-          const streamResponse = await fetch(candidateUrl, {
-            headers: {
-              "User-Agent": "UrbanSafetySOC-Worker-Proxy/2.1",
-              Accept: "*/*"
-            },
-            signal: AbortSignal.timeout(2500)
-          });
-
-          if (streamResponse.ok && streamResponse.body) {
-            const contentType =
-              streamResponse.headers.get("content-type") || "multipart/x-mixed-replace; boundary=frame";
-            return new Response(streamResponse.body, {
-              status: 200,
-              headers: {
-                ...cors,
-                "Content-Type": contentType,
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                Connection: "keep-alive",
-                "X-Stream-Source": candidateUrl
-              }
-            });
-          }
-        } catch {
-          // Fall through to KV snapshot fallback
-        }
-      }
-
-      // Fallback 1: Serve latest camera snapshot stored in Cloudflare KV
-      const cameras = await loadCamerasFromKv(env);
-      const cam = cameras.find((c) => c.id === cameraId);
-      const incidents = await loadIncidentsFromKv(env);
-      const latestInc = incidents.find((i) => i.cameraId === cameraId && i.fullImageBase64);
-
-      const snapshotB64 = cam?.lastSnapshotBase64 || latestInc?.fullImageBase64;
-      if (snapshotB64 && !snapshotB64.includes("...")) {
-        try {
-          const stripped = snapshotB64.replace(/^data:image\/\w+;base64,/, "");
-          const binaryStr = atob(stripped);
-          const bytes = new Uint8Array(binaryStr.length);
-          for (let i = 0; i < binaryStr.length; i++) {
-            bytes[i] = binaryStr.charCodeAt(i);
-          }
-          return new Response(bytes, {
-            status: 200,
-            headers: {
-              ...cors,
-              "Content-Type": "image/jpeg",
-              "Cache-Control": "no-cache, no-store, must-revalidate",
-              "X-Stream-Mode": "KV-SNAPSHOT"
-            }
-          });
-        } catch {
-          // Fall through to standby frame
-        }
-      }
-
-      // Fallback 2: Valid 1x1 dark JPEG frame so browser <img> never throws 502 Bad Gateway
-      const standbyB64 =
-        "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
-      const bin = atob(standbyB64);
-      const standbyBytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) {
-        standbyBytes[i] = bin.charCodeAt(i);
-      }
-      return new Response(standbyBytes, {
-        status: 200,
-        headers: {
-          ...cors,
-          "Content-Type": "image/jpeg",
-          "Cache-Control": "no-cache, no-store, must-revalidate",
-          "X-Stream-Mode": "STANDBY"
-        }
-      });
     }
 
     // -------------------------------------------------------------------------
@@ -593,7 +501,7 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 10. REST API: Fetch Stored Incidents from KV (/api/get-incident, /api/incidents/recent, /api/incidents)
+    // 10. REST API: Fetch Stored Incident Logs from KV (/api/get-incident, /api/incidents/recent, /api/incidents)
     // -------------------------------------------------------------------------
     if (
       (path === "/api/get-incident" ||
@@ -626,88 +534,7 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 11. REST API: Rolling Buffer Playback (/api/incidents/:id/playback)
-    // -------------------------------------------------------------------------
-    if (
-      (path.startsWith("/api/incidents/") || path.startsWith("/api/v1/incidents/")) &&
-      path.endsWith("/playback") &&
-      method === "GET"
-    ) {
-      await loadIncidentsFromKv(env);
-      const incidentId = path
-        .replace("/api/v1/incidents/", "")
-        .replace("/api/incidents/", "")
-        .replace("/playback", "")
-        .trim();
-      const playback = getIncidentPlayback(incidentId);
-      if (!playback) {
-        return errorResponse(`Incident '${incidentId}' not found in playback buffer`, 404);
-      }
-      return jsonResponse(playback);
-    }
-
-    // -------------------------------------------------------------------------
-    // 11.1. REST API: Serve Forensic Images from KV (/api/v1/incidents/:id/image.jpg, hand_crop.jpg, subject_crop.jpg)
-    // -------------------------------------------------------------------------
-    if (
-      (path.startsWith("/api/v1/incidents/") || path.startsWith("/api/incidents/")) &&
-      (path.endsWith("/image.jpg") || path.endsWith("/hand_crop.jpg") || path.endsWith("/subject_crop.jpg")) &&
-      method === "GET"
-    ) {
-      const incidents = await loadIncidentsFromKv(env);
-      const cleanPath = path.replace("/api/v1/incidents/", "").replace("/api/incidents/", "");
-      const parts = cleanPath.split("/");
-      const incidentId = parts[0];
-      const fileType = parts[1];
-      const inc = incidents.find((i) => i.id === incidentId || i.eventId === incidentId);
-      if (!inc) {
-        return errorResponse(`Incident '${incidentId}' not found in KV`, 404);
-      }
-
-      const standbyB64 =
-        "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
-
-      const rawB64 =
-        fileType === "hand_crop.jpg"
-          ? inc.handCropBase64 || inc.subjectCropBase64 || inc.fullImageBase64
-          : fileType === "subject_crop.jpg"
-          ? inc.subjectCropBase64 || inc.fullImageBase64
-          : inc.fullImageBase64 || inc.subjectCropBase64;
-
-      const validB64 = rawB64 && !rawB64.includes("...") ? rawB64 : standbyB64;
-      const stripped = validB64.replace(/^data:image\/\w+;base64,/, "");
-      try {
-        const binaryStr = atob(stripped);
-        const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        return new Response(bytes, {
-          status: 200,
-          headers: {
-            ...cors,
-            "Content-Type": "image/jpeg",
-            "Cache-Control": "public, max-age=3600"
-          }
-        });
-      } catch {
-        const bin = atob(standbyB64);
-        const fallbackBytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) {
-          fallbackBytes[i] = bin.charCodeAt(i);
-        }
-        return new Response(fallbackBytes, {
-          status: 200,
-          headers: {
-            ...cors,
-            "Content-Type": "image/jpeg"
-          }
-        });
-      }
-    }
-
-    // -------------------------------------------------------------------------
-    // 12. REST API: Operational HITL Verification Gate (/api/incidents/:id/verify)
+    // 11. REST API: Operational HITL Verification Gate (/api/incidents/:id/verify)
     // Mandatory Human Operator Verification [CD-04] & Immutable Traceability [CD-05]
     // -------------------------------------------------------------------------
     if (
@@ -747,7 +574,7 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 13. REST API: SOC Immutable Audit Logs (/api/soc/audit-logs & /api/soc/logs) [CD-05]
+    // 12. REST API: SOC Immutable Audit Logs (/api/soc/audit-logs & /api/soc/logs) [CD-05]
     // -------------------------------------------------------------------------
     if ((path === "/api/soc/audit-logs" || path === "/api/soc/logs") && method === "GET") {
       const logs = await getAuditLogs(env);
@@ -755,7 +582,7 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 14. Static Assets Fallback (Cloudflare Workers Static Assets)
+    // 13. Static Assets Fallback (Cloudflare Workers Static Assets)
     // -------------------------------------------------------------------------
     if (env.ASSETS) {
       const assetRes = await env.ASSETS.fetch(request);

@@ -76,33 +76,12 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
         {incident.cameraId || incident.sourceIp}
       </div>
 
-      {/* 5. Telemetry / Snapshot Info */}
+      {/* 5. Telemetry / Score Info */}
       <div className="min-w-0 shrink-0">
-        {incident.cameraSnapshots?.eventPeakSnapshotUrl || incident.cameraSnapshots?.preEventSnapshotUrl ? (
-          <div className="flex gap-1 items-center">
-            {incident.cameraSnapshots.preEventSnapshotUrl && (
-              <img
-                src={incident.cameraSnapshots.preEventSnapshotUrl}
-                alt="Subject"
-                title="Subject Detection Snapshot"
-                className="w-[52px] h-[30px] object-cover border border-[#1E2631] bg-[#05070A] shrink-0"
-              />
-            )}
-            {incident.cameraSnapshots.eventPeakSnapshotUrl && (
-              <img
-                src={incident.cameraSnapshots.eventPeakSnapshotUrl}
-                alt="Peak"
-                title="Full CCTV Event Snapshot"
-                className="w-[52px] h-[30px] object-cover border border-[#EF4444] bg-[#05070A] shrink-0"
-              />
-            )}
-          </div>
-        ) : (
-          <div className="px-2 py-1 bg-[#121822] border border-[#1E2631] text-slate-300 font-mono text-[10px] shrink-0 text-center">
-            SCORE: <span className="text-[#10B981] font-bold">{scorePct}%</span>
-            {incident.humanCount !== undefined ? ` • ${incident.humanCount}P` : ''}
-          </div>
-        )}
+        <div className="px-2 py-1 bg-[#121822] border border-[#1E2631] text-slate-300 font-mono text-[10px] shrink-0 text-center">
+          SCORE: <span className="text-[#10B981] font-bold">{scorePct}%</span>
+          {incident.humanCount !== undefined ? ` • ${incident.humanCount}P` : ''}
+        </div>
       </div>
 
       {/* 6. Severity Badge */}

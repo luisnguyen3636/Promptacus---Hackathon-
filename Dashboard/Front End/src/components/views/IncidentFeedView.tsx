@@ -327,39 +327,6 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
                     )}
                   </div>
                 )}
-
-                {/* Hình ảnh bằng chứng (Full Frame, Subject Crop, Hand Crop) */}
-                {(inc.fullImageBase64 || inc.subjectCropBase64 || inc.handCropBase64 || inc.cameraSnapshots) && (
-                  <div className="flex items-center gap-3 pt-1 border-t border-[#1E2631]/40 flex-wrap">
-                    <span className="font-mono text-[11px] text-slate-400">Ảnh Bằng Chứng:</span>
-                    <div className="flex gap-2">
-                      {(inc.fullImageBase64 || inc.cameraSnapshots?.eventPeakSnapshotUrl) && (
-                        <img
-                          src={inc.fullImageBase64 || inc.cameraSnapshots?.eventPeakSnapshotUrl}
-                          alt="Full Frame"
-                          title="Full Frame Image"
-                          className="w-[84px] h-[48px] object-cover border border-[#1E2631]"
-                        />
-                      )}
-                      {inc.subjectCropBase64 && (
-                        <img
-                          src={inc.subjectCropBase64}
-                          alt="Subject Crop"
-                          title="Subject Crop Image"
-                          className="w-[64px] h-[48px] object-cover border border-[#38BDF8]"
-                        />
-                      )}
-                      {inc.handCropBase64 && (
-                        <img
-                          src={inc.handCropBase64}
-                          alt="Hand Crop"
-                          title="Hand / Weapon Crop Image"
-                          className="w-[64px] h-[48px] object-cover border border-[#EF4444]"
-                        />
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
             );
           })

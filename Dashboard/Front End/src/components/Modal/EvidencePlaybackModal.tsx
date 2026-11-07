@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  Video,
   CheckCircle2,
   XCircle,
   ArrowDownCircle,
@@ -9,6 +8,7 @@ import {
   ShieldAlert,
   Fingerprint,
   Crosshair,
+  Terminal,
 } from 'lucide-react';
 import { IIncidentItem } from '../../types/soc.ts';
 
@@ -30,40 +30,12 @@ export const EvidencePlaybackModal: React.FC<EvidencePlaybackModalProps> = ({
   onSubmitDecision,
 }) => {
   const [operatorNotes, setOperatorNotes] = useState<string>('');
-  const [selectedImageMode, setSelectedImageMode] = useState<'MAIN' | 'SUBJECT' | 'HAND'>('MAIN');
 
   if (!incident) return null;
 
-  const mainImageSrc =
-    incident.fullImageBase64 ||
-    incident.cameraSnapshots?.eventPeakSnapshotUrl ||
-    incident.imageUrl ||
-    incident.cameraSnapshots?.preEventSnapshotUrl;
-
-  const subjectCropSrc =
-    incident.subjectCropBase64 ||
-    incident.subjects?.[0]?.crop_image_base64 ||
-    incident.cameraSnapshots?.preEventSnapshotUrl;
-
-  const handCropSrc =
-    incident.handCropBase64 ||
-    incident.cameraSnapshots?.handCropSnapshotUrl ||
-    incident.handCropUrl;
-
-  const activeImageSrc =
-    selectedImageMode === 'HAND' && handCropSrc
-      ? handCropSrc
-      : selectedImageMode === 'SUBJECT' && subjectCropSrc
-      ? subjectCropSrc
-      : mainImageSrc;
-
-  const streamPreviewUrl = incident.cameraId
-    ? `/api/v1/cameras/${incident.cameraId}/stream`
-    : undefined;
-
   return (
     <div className="fixed inset-0 bg-[#05070A]/85 backdrop-blur-[2px] z-50 flex items-center justify-center p-4 sm:p-6 select-none overflow-y-auto">
-      <div className="w-[1040px] max-w-full bg-[#0E131A] border border-[#1E2631] flex flex-col max-h-[92vh]">
+      <div className="w-[1000px] max-w-full bg-[#0E131A] border border-[#1E2631] flex flex-col max-h-[92vh]">
         {/* Modal Header */}
         <div className="bg-[#121822] border-b border-[#1E2631] px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2 min-w-0 flex-wrap">
@@ -90,100 +62,55 @@ export const EvidencePlaybackModal: React.FC<EvidencePlaybackModalProps> = ({
           </button>
         </div>
 
-        {/* Modal Body: 2 Cột */}
+        {/* Modal Body: 2 Cột Thông tin Log JSON & Thẩm định HITL */}
         <div className="p-5 grid grid-cols-12 gap-5 overflow-y-auto flex-1">
-          {/* Cột Trái: Hình ảnh Bằng chứng, Crops, Kinematics & Subjects (7 Cột) */}
+          {/* Cột Trái: Chi tiết Log Sự kiện, Subjects & Kinematics (7 Cột) */}
           <div className="col-span-12 lg:col-span-7 flex flex-col space-y-3">
-            <div className="bg-[#05070A] border border-[#1E2631] aspect-video relative flex items-center justify-center overflow-hidden">
-              {activeImageSrc ? (
-                <img
-                  src={activeImageSrc}
-                  alt="Evidence Snapshot"
-                  className="w-full h-full object-contain"
-                />
-              ) : streamPreviewUrl ? (
-                <img
-                  src={streamPreviewUrl}
-                  alt={incident.cameraId || 'Camera Stream'}
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).style.display = 'none';
-                  }}
-                  className="w-full h-full object-cover"
-                />
-              ) : null}
-
-              <div className="text-center p-4 pointer-events-none">
-                <Video className="w-9 h-9 text-[#EF4444] mx-auto mb-1.5 opacity-80" />
-                <div className="font-mono text-xs text-white font-bold">
-                  CAMERA: {incident.cameraName || incident.cameraId || 'LAPTOP_01'} &bull; FRAME #
-                  {incident.frameIndex ?? incident.auditInfo?.frame_index ?? 'N/A'}
+            {/* Tóm tắt Bản ghi Log Sự kiện */}
+            <div className="bg-[#080B10] border border-[#1E2631] p-4 font-mono space-y-2">
+              <div className="flex items-center justify-between border-b border-[#1E2631] pb-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#10B981]">
+                  <Terminal className="w-4 h-4" />
+                  <span>SERVER JSON EVENT LOG</span>
                 </div>
-                <div className="text-[11px] font-mono text-slate-400 mt-0.5">
-                  {incident.location || incident.subTitle}
+                <div className="bg-[#EF4444]/90 text-white font-mono text-[10px] font-bold px-2 py-0.5">
+                  {incident.primaryAction || incident.actionType || 'EVENT'} [{incident.severity}] &bull; SCORE:{' '}
+                  {incident.threatScore !== undefined
+                    ? incident.threatScore <= 1
+                      ? `${Math.round(incident.threatScore * 100)}%`
+                      : incident.threatScore
+                    : 'N/A'}
                 </div>
               </div>
 
-              <div className="absolute top-2 left-2 bg-[#EF4444]/90 text-white font-mono text-[10px] font-bold px-2 py-0.5 border border-[#EF4444] shadow">
-                {incident.primaryAction || incident.actionType || 'EVENT'} [{incident.severity}] &bull; SCORE:{' '}
-                {incident.threatScore !== undefined
-                  ? incident.threatScore <= 1
-                    ? `${Math.round(incident.threatScore * 100)}%`
-                    : incident.threatScore
-                  : 'N/A'}
+              <div className="grid grid-cols-2 gap-2 text-xs text-slate-300 pt-1">
+                <div>
+                  <span className="text-slate-500">Event ID:</span>{' '}
+                  <span className="text-white font-bold">{incident.eventId || incident.id}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Camera:</span>{' '}
+                  <span className="text-[#38BDF8] font-bold">
+                    {incident.cameraName || incident.cameraId || 'LAPTOP_01'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Timestamp:</span>{' '}
+                  <span className="text-white">{incident.timestamp}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Vị trí:</span>{' '}
+                  <span className="text-white">{incident.location || incident.subTitle}</span>
+                </div>
               </div>
+
+              {incident.forensicSha256 && (
+                <div className="pt-2 border-t border-[#1E2631] text-[10px] text-slate-400 flex items-center gap-1.5">
+                  <Fingerprint className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
+                  <span className="truncate">Forensic SHA-256: {incident.forensicSha256}</span>
+                </div>
+              )}
             </div>
-
-            {/* Bộ chuyển đổi 3 ảnh bằng chứng: Full Image / Subject Crop / Hand Crop */}
-            {(mainImageSrc || subjectCropSrc || handCropSrc) && (
-              <div className="bg-[#121822] border border-[#1E2631] p-2.5 flex items-center justify-between gap-3 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setSelectedImageMode('MAIN')}
-                    className={`px-2.5 py-1 font-mono text-[10px] font-bold border cursor-pointer ${
-                      selectedImageMode === 'MAIN'
-                        ? 'bg-[#112224] border-[#10B981] text-[#10B981]'
-                        : 'bg-[#080B10] border-[#1E2631] text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    1. FULL FRAME ({incident.imageUrl ? 'image.jpg' : 'Base64'})
-                  </button>
-                  {subjectCropSrc && (
-                    <button
-                      onClick={() => setSelectedImageMode('SUBJECT')}
-                      className={`px-2.5 py-1 font-mono text-[10px] font-bold border cursor-pointer ${
-                        selectedImageMode === 'SUBJECT'
-                          ? 'bg-[#112224] border-[#10B981] text-[#10B981]'
-                          : 'bg-[#080B10] border-[#1E2631] text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      2. SUBJECT CROP ({incident.subjects?.[0]?.crop_image_size_bytes ? `${incident.subjects[0].crop_image_size_bytes}B` : 'Crop'})
-                    </button>
-                  )}
-                  {handCropSrc && (
-                    <button
-                      onClick={() => setSelectedImageMode('HAND')}
-                      className={`px-2.5 py-1 font-mono text-[10px] font-bold border cursor-pointer ${
-                        selectedImageMode === 'HAND'
-                          ? 'bg-[#7F1D1D] border-[#EF4444] text-white'
-                          : 'bg-[#080B10] border-[#1E2631] text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      3. HAND / WEAPON CROP (hand_crop.jpg)
-                    </button>
-                  )}
-                </div>
-
-                {incident.forensicSha256 && (
-                  <div
-                    className="font-mono text-[10px] text-slate-400 flex items-center gap-1 truncate max-w-[320px]"
-                    title={`SHA-256: ${incident.forensicSha256}`}
-                  >
-                    <Fingerprint className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
-                    <span className="truncate">SHA256: {incident.forensicSha256}</span>
-                  </div>
-                )}
-              </div>
-            )}
 
             {/* Danh sách Đối tượng (Subjects & Kinematics / Keypoints) */}
             <div className="bg-[#121822] p-3 border border-[#1E2631] space-y-2 font-mono text-xs">
@@ -284,7 +211,7 @@ export const EvidencePlaybackModal: React.FC<EvidencePlaybackModalProps> = ({
                 </div>
               ) : (
                 <div className="text-slate-500 text-[11px]">
-                  Chưa có dữ liệu chi tiết từng cá nhân trong khung hình.
+                  Chưa có dữ liệu chi tiết từng cá nhân trong bản ghi log.
                 </div>
               )}
             </div>
@@ -318,9 +245,6 @@ export const EvidencePlaybackModal: React.FC<EvidencePlaybackModalProps> = ({
                       {incident.cameraMeta.longitude}
                     </div>
                   )}
-                  <div>
-                    <strong>Thời điểm:</strong> {incident.timestamp}
-                  </div>
                   {incident.auditInfo?.ai_model && (
                     <div>
                       <strong>AI Pipeline:</strong>{' '}
