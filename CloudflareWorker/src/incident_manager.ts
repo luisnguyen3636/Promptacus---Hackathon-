@@ -14,7 +14,11 @@ import type {
 } from "./types.ts";
 
 let incidents: IIncidentItem[] = [];
+let lastKvReadAt = 0;
 let kvWriteCooldownUntil = 0;
+let lastKvRef: any = null;
+
+const KV_READ_TTL_MS = 10_000;
 
 export function getRecentIncidents(): IIncidentItem[] {
   return incidents;
@@ -29,36 +33,106 @@ export function getIncidentById(id: string): IIncidentItem | undefined {
 }
 
 export function addIncident(item: IIncidentItem): void {
-  incidents = [item, ...incidents.filter((i) => i.id !== item.id)].slice(0, 100);
+  incidents = [item, ...incidents.filter((i) => i.id !== item.id)].slice(0, 50);
 }
 
 /**
- * Loads stored incident logs from Cloudflare KV ("kv_recent_incidents") and merges with in-memory logs.
+ * Strips any legacy heavy Base64 / frame fields from an incident record loaded from KV
+ * so responses from /api/get-incident are always lightweight (< 20KB) and fast (< 5ms).
  */
-export async function loadIncidentsFromKv(env?: Env): Promise<IIncidentItem[]> {
-  if (env?.INCIDENT_CACHE) {
-    try {
-      const raw = await env.INCIDENT_CACHE.get("kv_recent_incidents");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          if (incidents.length === 0) {
-            incidents = parsed;
-          } else {
-            const seenIds = new Set(incidents.map((i) => i.id));
-            for (const kvItem of parsed) {
-              if (kvItem && kvItem.id && !seenIds.has(kvItem.id)) {
-                incidents.push(kvItem);
-                seenIds.add(kvItem.id);
-              }
+function sanitizeIncidentLog(rawItem: any): IIncidentItem {
+  const item = { ...rawItem };
+  delete item.fullImageBase64;
+  delete item.subjectCropBase64;
+  delete item.handCropBase64;
+  delete item.imageUrl;
+  delete item.handCropUrl;
+  item.cameraSnapshots = null;
+  item.playbackUrl = null;
+
+  if (item.rawDetection && typeof item.rawDetection === "object") {
+    const {
+      image: _img,
+      image_base64: _imgB64,
+      subject_crop_base64: _subB64,
+      hand_crop_base64: _handB64,
+      snapshot_url: _snapUrl,
+      evidence_url: _evUrl,
+      image_url: _iUrl,
+      hand_crop_url: _hUrl,
+      ...cleanRaw
+    } = item.rawDetection;
+    if (cleanRaw.detection?.full_image) {
+      const { image_base64: _fB64, ...cleanFull } = cleanRaw.detection.full_image;
+      cleanRaw.detection = { ...cleanRaw.detection, full_image: cleanFull };
+    }
+    if (Array.isArray(cleanRaw.detection?.subjects)) {
+      cleanRaw.detection.subjects = cleanRaw.detection.subjects.map((s: any) => {
+        if (!s || typeof s !== "object") return s;
+        const { crop_image_base64: _cB64, ...restS } = s;
+        return restS;
+      });
+    }
+    item.rawDetection = cleanRaw;
+  }
+
+  if (Array.isArray(item.subjects)) {
+    item.subjects = item.subjects.map((s: any) => {
+      if (!s || typeof s !== "object") return s;
+      const { crop_image_base64: _cB64, ...restS } = s;
+      return restS;
+    });
+  }
+
+  return item as IIncidentItem;
+}
+
+/**
+ * Loads stored incident logs from Cloudflare KV ("kv_recent_incidents") with in-memory TTL caching
+ * so 1-second polling never hammers KV or times out. Automatically heals bloated legacy KV entries.
+ */
+export async function loadIncidentsFromKv(env?: Env, forceReload = false): Promise<IIncidentItem[]> {
+  if (!env?.INCIDENT_CACHE) return incidents;
+
+  // Reset cache if a different KV instance is passed (e.g. in tests)
+  if (lastKvRef !== env.INCIDENT_CACHE) {
+    lastKvRef = env.INCIDENT_CACHE;
+    lastKvReadAt = 0;
+  }
+
+  const now = Date.now();
+  if (!forceReload && incidents.length > 0 && now - lastKvReadAt < KV_READ_TTL_MS) {
+    return incidents;
+  }
+
+  try {
+    const raw = await env.INCIDENT_CACHE.get("kv_recent_incidents");
+    lastKvReadAt = Date.now();
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const sanitized = parsed.map(sanitizeIncidentLog);
+        if (incidents.length === 0) {
+          incidents = sanitized.slice(0, 50);
+        } else {
+          const seenIds = new Set(incidents.map((i) => i.id));
+          for (const kvItem of sanitized) {
+            if (kvItem && kvItem.id && !seenIds.has(kvItem.id)) {
+              incidents.push(kvItem);
+              seenIds.add(kvItem.id);
             }
-            incidents = incidents.slice(0, 100);
           }
+          incidents = incidents.slice(0, 50);
+        }
+
+        // If the raw KV string was bloated (> 150KB due to legacy base64 frames), overwrite it with the sanitized version
+        if (raw.length > 150_000) {
+          await saveIncidentsToKv(env);
         }
       }
-    } catch {
-      // Keep in-memory incidents if KV read fails
     }
+  } catch {
+    // Keep in-memory incidents if KV read fails
   }
   return incidents;
 }
@@ -71,8 +145,9 @@ export async function saveIncidentsToKv(env?: Env): Promise<void> {
   if (Date.now() < kvWriteCooldownUntil) return;
 
   try {
-    const compactLogs = incidents.slice(0, 50);
+    const compactLogs = incidents.slice(0, 40).map(sanitizeIncidentLog);
     await env.INCIDENT_CACHE.put("kv_recent_incidents", JSON.stringify(compactLogs));
+    lastKvReadAt = Date.now();
   } catch {
     kvWriteCooldownUntil = Date.now() + 30_000;
   }

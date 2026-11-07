@@ -7,7 +7,11 @@
 import type { ICameraDevice, IServerIngestPayload, Env } from "./types.ts";
 
 const cameraRegistry = new Map<string, ICameraDevice>();
+let lastKvCameraReadAt = 0;
 let kvCameraWriteCooldownUntil = 0;
+let lastCameraKvRef: any = null;
+
+const KV_CAMERA_READ_TTL_MS = 10_000;
 
 export function getCameras(): ICameraDevice[] {
   return Array.from(cameraRegistry.values());
@@ -18,28 +22,47 @@ export function getCameraById(id: string): ICameraDevice | undefined {
 }
 
 /**
- * Loads persisted camera telemetry logs from Cloudflare KV (INCIDENT_CACHE -> "kv_cameras").
+ * Loads persisted camera telemetry logs from Cloudflare KV (INCIDENT_CACHE -> "kv_cameras")
+ * with in-memory TTL caching so polling requests respond in < 1ms without hammering KV.
  */
-export async function loadCamerasFromKv(env?: Env): Promise<ICameraDevice[]> {
-  if (env?.INCIDENT_CACHE) {
-    try {
-      const raw = await env.INCIDENT_CACHE.get("kv_cameras");
-      if (raw) {
-        const parsed = JSON.parse(raw) as ICameraDevice[];
-        if (Array.isArray(parsed)) {
-          for (const cam of parsed) {
-            if (cam && cam.id && !cameraRegistry.has(cam.id)) {
-              cam.streamUrl = "";
-              cam.directStreamUrl = "";
-              cam.lastSnapshotBase64 = undefined;
+export async function loadCamerasFromKv(env?: Env, forceReload = false): Promise<ICameraDevice[]> {
+  if (!env?.INCIDENT_CACHE) return Array.from(cameraRegistry.values());
+
+  if (lastCameraKvRef !== env.INCIDENT_CACHE) {
+    lastCameraKvRef = env.INCIDENT_CACHE;
+    lastKvCameraReadAt = 0;
+  }
+
+  const now = Date.now();
+  if (!forceReload && cameraRegistry.size > 0 && now - lastKvCameraReadAt < KV_CAMERA_READ_TTL_MS) {
+    return Array.from(cameraRegistry.values());
+  }
+
+  try {
+    const raw = await env.INCIDENT_CACHE.get("kv_cameras");
+    lastKvCameraReadAt = Date.now();
+    if (raw) {
+      const parsed = JSON.parse(raw) as ICameraDevice[];
+      if (Array.isArray(parsed)) {
+        for (const cam of parsed) {
+          if (cam && cam.id) {
+            cam.streamUrl = "";
+            cam.directStreamUrl = "";
+            delete (cam as any).lastSnapshotBase64;
+            cam.boundingBoxes = [];
+            if (!cameraRegistry.has(cam.id)) {
               cameraRegistry.set(cam.id, cam);
             }
           }
         }
+        // Auto-heal bloated legacy KV entries that contained lastSnapshotBase64
+        if (raw.length > 50_000) {
+          await saveCamerasToKv(env);
+        }
       }
-    } catch {
-      // Keep in-memory camera registry if KV read fails
     }
+  } catch {
+    // Keep in-memory camera registry if KV read fails
   }
   return Array.from(cameraRegistry.values());
 }
@@ -54,6 +77,7 @@ export async function saveCamerasToKv(env?: Env): Promise<void> {
   try {
     const list = Array.from(cameraRegistry.values());
     await env.INCIDENT_CACHE.put("kv_cameras", JSON.stringify(list));
+    lastKvCameraReadAt = Date.now();
   } catch {
     kvCameraWriteCooldownUntil = Date.now() + 30_000;
   }

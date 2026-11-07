@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ISocOverview, ICameraDevice, IIncidentItem, IServerActor } from '../types/soc.ts';
 import { MOCK_OVERVIEW, MOCK_CAMERAS, MOCK_INCIDENTS } from '../data/mockData.ts';
 
@@ -314,35 +314,38 @@ export function useSocTelemetry() {
   const [incidents, setIncidents] = useState<IIncidentItem[]>(MOCK_INCIDENTS);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
+  const isFetchingRef = useRef<boolean>(false);
 
   const fetchData = useCallback(async () => {
-    try {
-      const resOverview = await fetch('/api/soc/overview', { signal: AbortSignal.timeout(2000) });
-      if (resOverview.ok) {
-        const data = await resOverview.json();
-        setOverview(data);
-        setIsBackendConnected(true);
-      }
-    } catch {
-      setIsBackendConnected(false);
-    }
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
 
     try {
-      const resCameras = await fetch('/api/devices/cameras', { signal: AbortSignal.timeout(2000) });
-      if (resCameras.ok) {
-        const data = await resCameras.json();
+      const [resOverview, resCameras, resIncidents] = await Promise.all([
+        fetch('/api/soc/overview').catch(() => null),
+        fetch('/api/devices/cameras').catch(() => null),
+        fetch('/api/get-incident').catch(() => null),
+      ]);
+
+      if (resOverview && resOverview.ok) {
+        const data = await resOverview.json().catch(() => null);
+        if (data) {
+          setOverview(data);
+          setIsBackendConnected(true);
+        }
+      } else {
+        setIsBackendConnected(false);
+      }
+
+      if (resCameras && resCameras.ok) {
+        const data = await resCameras.json().catch(() => null);
         if (Array.isArray(data)) {
           setCameras(data);
         }
       }
-    } catch {
-      // Keep current state
-    }
 
-    try {
-      const resIncidents = await fetch('/api/get-incident', { signal: AbortSignal.timeout(2000) });
-      if (resIncidents.ok) {
-        const result = await resIncidents.json();
+      if (resIncidents && resIncidents.ok) {
+        const result = await resIncidents.json().catch(() => null);
         if (result && Array.isArray(result.incidents)) {
           setIncidents(result.incidents.map(mapKvIncidentItem));
         } else if (Array.isArray(result)) {
@@ -351,17 +354,30 @@ export function useSocTelemetry() {
           setIncidents([mapKvIncidentItem(result)]);
         }
       }
-    } catch {
-      // Keep current state
     } finally {
+      isFetchingRef.current = false;
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchData();
-    const cycle = setInterval(fetchData, 1000);
-    return () => clearInterval(cycle);
+    let active = true;
+    let timerId: ReturnType<typeof setTimeout>;
+
+    const pollLoop = async () => {
+      if (!active) return;
+      await fetchData();
+      if (active) {
+        timerId = setTimeout(pollLoop, 3000);
+      }
+    };
+
+    void pollLoop();
+
+    return () => {
+      active = false;
+      clearTimeout(timerId);
+    };
   }, [fetchData]);
 
   useEffect(() => {
