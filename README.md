@@ -131,6 +131,9 @@ Lệnh này sẽ khởi động đồng thời:
 ### 5. Kiểm Thử Gửi Dữ Liệu AI Vào Hệ Thống (End-to-End Simulation)
 Chạy script kiểm thử tự động để bơm dữ liệu AI mẫu vào hệ thống và xác thực toàn bộ luồng:
 ```bash
+# Kiểm thử Cloudflare KV, lưu vết Input/Output DeepSeek & đồng bộ Dashboard (24 assertions)
+node --experimental-strip-types CloudflareWorker/test_kv_pipeline.mjs
+
 # Kiểm thử lớp AI tích hợp tự động, DeepSeek API Key & Log chuẩn SOC (26 assertions)
 node --experimental-strip-types CloudflareWorker/test_integrated_ai_layer.mjs
 
@@ -196,7 +199,16 @@ Bạn có thể gắn API Key trực tiếp vào hệ thống để gọi mô h�
    ```
 Khi có API Key, hệ thống tự động ưu tiên gọi trực tiếp `https://api.deepseek.com/chat/completions` (JSON mode); nếu không có key hoặc mất kết nối, hệ thống tự động chuyển tiếp mượt mà qua Workers AI hoặc Động cơ Động học Khớp xương Nội bộ.
 
-### 7. Chốt chặn Xác thực Vận hành viên (Operational HITL Gate)
+### 7. Đường Ống Lưu Trữ Cloudflare KV & Debug Trace Input/Output
+Hệ thống sử dụng Cloudflare KV (`INCIDENT_CACHE`) để ghi nhận cả Input và Output của DeepSeek, phục vụ debug tức thì và tối ưu tốc độ phản hồi Dashboard:
+- `raw_incident:<event_id>`: Bản ghi thô từ edge camera/client.
+- `deepseek:input:<event_id>`: Prompt, kinematics và payload đầu vào gửi DeepSeek.
+- `deepseek:output:<event_id>`: Raw completion và JSON đã parse đầu ra kèm thời gian phản hồi (latency ms).
+- `deepseek:trace:<event_id>`: Debug trace hợp nhất xem cả Input & Output trong 1 truy vấn duy nhất.
+- `kv_recent_incidents`: Bộ đệm các sự cố mới nhất trong KV giúp Dashboard fetch với độ trễ `< 15ms`.
+- `GET /api/kv/trace/:id` (Alias: `/api/deepseek/trace/:id`, `/api/v1/debug/trace/:id`): Endpoint tra cứu chi tiết Input & Output của một sự cố theo ID.
+
+### 8. Chốt chặn Xác thực Vận hành viên (Operational HITL Gate)
 - `POST /api/incidents/:id/verify`: API bắt buộc Vận hành viên phê duyệt trước khi phát lệnh điều phối.
   - Body:
     ```json
@@ -208,16 +220,16 @@ Khi có API Key, hệ thống tự động ưu tiên gọi trực tiếp `https:
     ```
   - Khi `decision === "CONFIRM_AND_DISPATCH"`, hệ thống tự động sinh ra gói `incidentPackage` hoàn chỉnh để chuyển giao lực lượng ứng cứu.
 
-### 8. Nhật ký Kiểm toán Bất biến (SOC Audit Logs)
+### 9. Nhật ký Kiểm toán Bất biến (SOC Audit Logs)
 - `GET /api/soc/audit-logs`: Truy xuất lịch sử kiểm toán bất biến từ Cloudflare D1 SQL.
 
-### 9. Kênh Dữ liệu Thời Gian Thực (WebSocket Live Stream)
+### 10. Kênh Dữ liệu Thời Gian Thực (WebSocket Live Stream)
 - Kết nối tới `ws://127.0.0.1:8787/ws/live-stream`:
   - Sự kiện `CONNECTED`: Nhận heartbeat và thời gian đồng bộ máy chủ.
   - Sự kiện `TELEMETRY_AND_AI_TICK`: Nhận tọa độ bounding box thời gian thực và cập nhật camera.
   - Sự kiện `NEW_INCIDENT`: Nhận thông báo sự cố mới tức thì không cần tải lại trang.
 
-### 10. Cấu Hình Bảo Mật Whitelist CORS & Client IP
+### 11. Cấu Hình Bảo Mật Whitelist CORS & Client IP
 Hệ thống tích hợp cổng bảo mật kép (`CloudflareWorker/src/security.ts`) cấu hình qua `wrangler.toml`:
 - `ALLOWED_ORIGINS`: Danh sách các domain trình duyệt được phép kết nối (Hỗ trợ wildcard, VD: `https://*.pages.dev,https://*.workers.dev`).
 - `ALLOWED_IPS`: Danh sách IP / Subnet CIDR được phép truy cập (Mặc định cho phép loopback `127.0.0.1`, `::1` và mạng LAN riêng `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).

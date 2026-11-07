@@ -39,7 +39,8 @@ import {
   getDeepSeekIncidentsResponse,
   analyzeWindowWithDeepSeek,
   analyzeSingleLogWithIntegratedAI,
-  getStandardSocAuditLogs
+  getStandardSocAuditLogs,
+  getDeepSeekTrace
 } from "./deepseek_analyzer";
 
 export default {
@@ -439,6 +440,32 @@ export default {
         count: logs.length,
         timestamp: new Date().toISOString(),
         logs
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // 10.2 DeepSeek KV Debug Trace Route (/api/kv/trace/:id, /api/deepseek/trace/:id)
+    // Returns both Input prompt/data and Output completion/JSON for instant debugging
+    // -------------------------------------------------------------------------
+    if (
+      (path.startsWith("/api/kv/trace/") ||
+        path.startsWith("/api/deepseek/trace/") ||
+        path.startsWith("/api/v1/debug/trace/")) &&
+      method === "GET"
+    ) {
+      const eventId = path
+        .replace("/api/kv/trace/", "")
+        .replace("/api/deepseek/trace/", "")
+        .replace("/api/v1/debug/trace/", "")
+        .trim();
+      const trace = await getDeepSeekTrace(env, eventId);
+      if (!trace) {
+        return errorResponse(`Debug trace for event '${eventId}' not found in Cloudflare KV`, 404);
+      }
+      return jsonResponse({
+        success: true,
+        event_id: eventId,
+        trace
       });
     }
 

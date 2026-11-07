@@ -42,6 +42,9 @@ Promptacus---Hackathon-/
 │   ├── test_cors_ip_whitelist.mjs     # Script kiểm thử tự động CORS Origin & IP Whitelist Gate
 │   ├── test_deepseek_pipeline.mjs     # Script kiểm thử tự động DeepSeek 2-phút & /api/get-incident (20 assertions)
 │   ├── test_integrated_ai_layer.mjs   # Script kiểm thử tự động Lớp AI Tích Hợp & Log Chuẩn SOC (26 assertions)
+│   ├── test_kv_pipeline.mjs           # Script kiểm thử tự động Cloudflare KV & Input/Output Trace (24 assertions)
+│   ├── SPEC_KV_INCIDENT_PIPELINE.md   # Đặc tả kỹ thuật lưu trữ KV & DeepSeek Input/Output Trace
+│   ├── PLAN_KV_INCIDENT_PIPELINE.md   # Kế hoạch triển khai lưu trữ KV & DeepSeek Input/Output Trace
 │   ├── SPEC_INTEGRATED_AI_LAYER.md    # Đặc tả kỹ thuật lớp AI tích hợp tự động & DeepSeek API Key
 │   ├── PLAN_INTEGRATED_AI_LAYER.md    # Kế hoạch triển khai lớp AI tích hợp tự động & DeepSeek API Key
 │   ├── SPEC_DEEPSEEK_PIPELINE.md      # Đặc tả kỹ thuật đường ống phân tích DeepSeek 2 phút
@@ -89,6 +92,8 @@ Promptacus---Hackathon-/
 │   │   ├── package.json               # Dependencies của React (Vite, Tailwind, Lucide, Chart.js)
 │   │   ├── vite.config.ts             # Cấu hình Vite build ra CloudflareWorker/dist
 │   │   ├── tsconfig.json              # Cấu hình TypeScript cho Frontend
+│   │   ├── SPEC_REMOVE_DATA_SUMMARY.md # Đặc tả kỹ thuật gỡ bỏ Data Summary Table trong AI Analyzer
+│   │   ├── PLAN_REMOVE_DATA_SUMMARY.md # Kế hoạch triển khai gỡ bỏ Data Summary Table trong AI Analyzer
 │   │   ├── SPEC.md                    # Đặc tả kỹ thuật giao diện Frontend
 │   │   └── PLAN.md                    # Kế hoạch triển khai giao diện Frontend
 │   │

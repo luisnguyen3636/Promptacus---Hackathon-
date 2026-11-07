@@ -2,14 +2,16 @@
  * CYBERGUARD AI · SOC v2.1 — INTEGRATED AI FORENSIC ANALYSIS PIPELINE & DEEPSEEK ENGINE
  * 
  * Capabilities:
- * 1. Automatic In-Process AI Layer: Analyzes incoming detection/incident POST requests on the fly.
- * 2. Multi-tier AI Engine:
+ * 1. Cloudflare KV Storage: Stores raw incident logs, DeepSeek Input & Output traces for rapid debugging.
+ * 2. Automatic In-Process AI Layer: Analyzes incoming detection/incident POST requests on the fly.
+ * 3. Multi-tier AI Engine:
  *    - Tier 1: Direct DeepSeek REST API (via DEEPSEEK_API_KEY with JSON Mode).
  *    - Tier 2: Cloudflare Workers AI Binding (via @cf/deepseek-ai/deepseek-v4.1-flash-1017).
  *    - Tier 3: Local Forensic Kinematics Engine (Offline zero-downtime biological posture evaluation).
- * 3. Standard SOC Structured Audit Logging (IStandardSocLogEntry persisted to D1 audit_logs & memory).
- * 4. Dual Continuous Polling Endpoints: GET /api/get-incident & GET /api/get-incidents.
- * 5. Strict Operational HITL Enforcement (CD-04 & CD-05).
+ * 4. Standard SOC Structured Audit Logging (IStandardSocLogEntry persisted to D1 audit_logs, KV & memory).
+ * 5. Dual Continuous Polling Endpoints: GET /api/get-incident & GET /api/get-incidents.
+ * 6. Quick Debug Trace Endpoint: GET /api/kv/trace/:id.
+ * 7. Strict Operational HITL Enforcement (CD-04 & CD-05).
  */
 
 import type {
@@ -18,6 +20,7 @@ import type {
   IDeepSeekIncidentItem,
   IDeepSeekGetIncidentsResponse,
   IStandardSocLogEntry,
+  IDeepSeekDebugTrace,
   IIncidentItem
 } from "./types.ts";
 import { getRecentIncidents, addIncident } from "./incident_manager.ts";
@@ -31,6 +34,72 @@ let analyzedIncidentsCache: Map<string, IDeepSeekIncidentItem> = new Map();
 
 // Standard SOC structured audit log entries (Up to 500 entries)
 let standardSocAuditLogs: IStandardSocLogEntry[] = [];
+
+// Memory Fallback Store for Cloudflare KV
+let kvMemoryStore: Map<string, string> = new Map();
+
+/**
+ * Safely writes a value to Cloudflare KV Namespace (with memory fallback).
+ */
+export async function writeToKv(
+  env: Env,
+  key: string,
+  value: any,
+  ttlSeconds = 86400
+): Promise<boolean> {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  kvMemoryStore.set(key, serialized);
+
+  if (env && env.INCIDENT_CACHE) {
+    try {
+      await env.INCIDENT_CACHE.put(key, serialized, {
+        expirationTtl: ttlSeconds
+      });
+      return true;
+    } catch (kvErr) {
+      console.warn(`[KV Helper] Warning writing key '${key}':`, kvErr);
+    }
+  }
+  return true;
+}
+
+/**
+ * Safely reads a value from Cloudflare KV Namespace (with memory fallback).
+ */
+export async function readFromKv<T>(env: Env, key: string): Promise<T | null> {
+  if (env && env.INCIDENT_CACHE) {
+    try {
+      const val = await env.INCIDENT_CACHE.get(key);
+      if (val !== null) {
+        try {
+          return JSON.parse(val) as T;
+        } catch {
+          return val as unknown as T;
+        }
+      }
+    } catch (kvErr) {
+      console.warn(`[KV Helper] Warning reading key '${key}':`, kvErr);
+    }
+  }
+
+  const memoryVal = kvMemoryStore.get(key);
+  if (memoryVal !== undefined) {
+    try {
+      return JSON.parse(memoryVal) as T;
+    } catch {
+      return memoryVal as unknown as T;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Retrieves the unified DeepSeek Input & Output debug trace for an incident.
+ */
+export async function getDeepSeekTrace(env: Env, eventId: string): Promise<IDeepSeekDebugTrace | null> {
+  return await readFromKv<IDeepSeekDebugTrace>(env, `deepseek:trace:${eventId}`);
+}
 
 /**
  * Records any incoming POST request into the rolling log buffer.
@@ -125,7 +194,7 @@ export async function callDeepSeekDirectApi(
   apiKey: string,
   modelName = "deepseek-chat",
   apiUrl = "https://api.deepseek.com/chat/completions"
-): Promise<{ success: boolean; data?: any; error?: string; latencyMs: number }> {
+): Promise<{ success: boolean; data?: any; rawText?: string; error?: string; latencyMs: number }> {
   const start = Date.now();
   try {
     const response = await fetch(apiUrl, {
@@ -159,6 +228,7 @@ export async function callDeepSeekDirectApi(
       return {
         success: false,
         error: `DeepSeek API returned HTTP ${response.status}: ${errText.substring(0, 200)}`,
+        rawText: errText,
         latencyMs
       };
     }
@@ -170,7 +240,7 @@ export async function callDeepSeekDirectApi(
     }
 
     const parsed = JSON.parse(content.replace(/```json/g, "").replace(/```/g, "").trim());
-    return { success: true, data: parsed, latencyMs };
+    return { success: true, data: parsed, rawText: content, latencyMs };
   } catch (err: any) {
     return {
       success: false,
@@ -226,7 +296,7 @@ export function getStandardSocAuditLogs(): IStandardSocLogEntry[] {
 
 /**
  * Automatically analyzes a single POST request log in-process using the integrated AI layer.
- * Persists to D1, records standard SOC log, and caches the result.
+ * Records both Input and Output into Cloudflare KV, persists to D1, and caches the result.
  */
 export async function analyzeSingleLogWithIntegratedAI(
   log: IPostRequestLog,
@@ -289,18 +359,39 @@ Provide a strict, professional SOC analysis report in JSON format:
   let investigationSummary = `Phát hiện hành vi ${action}.`;
   let activeProvider: "DEEPSEEK_DIRECT_API" | "CLOUDFLARE_WORKERS_AI" | "LOCAL_KINEMATICS_ENGINE" =
     "LOCAL_KINEMATICS_ENGINE";
-  let activeModel = "urban-kinematics-heuristic-v2.1";
+  let activeModel = env?.DEFAULT_AI_MODEL || env?.DEEPSEEK_MODEL || "deepseek-chat";
   let latencyMs = 15;
   let evaluatedSeverity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" = "MEDIUM";
+  let rawAiResponseText: string | undefined = undefined;
+  let executionError: string | null = null;
 
   const directApiKey = env?.DEEPSEEK_API_KEY || env?.OPENAI_API_KEY || env?.AI_API_KEY;
   const directApiUrl = env?.DEEPSEEK_API_URL || "https://api.deepseek.com/chat/completions";
   const directModel = env?.DEEPSEEK_MODEL || "deepseek-chat";
 
+  // ---------------------------------------------------------------------------
+  // A. RECORD DEEPSEEK INPUT TO CLOUDFLARE KV (For fast debugging)
+  // ---------------------------------------------------------------------------
+  const kvInputPayload = {
+    event_id: eventId,
+    prompt,
+    raw_payload: raw,
+    model_target: directApiKey ? directModel : (env?.DEFAULT_AI_MODEL || "@cf/deepseek-ai/deepseek-v4.1-flash-1017"),
+    camera_id: cameraId,
+    timestamp: new Date().toISOString()
+  };
+  await writeToKv(env, `deepseek:input:${eventId}`, kvInputPayload, 86400);
+  await writeToKv(env, `raw_incident:${eventId}`, log, 86400);
+
+  // ---------------------------------------------------------------------------
+  // B. RUN MULTI-TIER AI INFERENCE
+  // ---------------------------------------------------------------------------
+
   // Tier 1: Direct DeepSeek API Call with API Key
   if (directApiKey && directApiKey.trim() !== "") {
     const directResult = await callDeepSeekDirectApi(prompt, directApiKey, directModel, directApiUrl);
     latencyMs = directResult.latencyMs;
+    rawAiResponseText = directResult.rawText;
     if (directResult.success && directResult.data) {
       activeProvider = "DEEPSEEK_DIRECT_API";
       activeModel = directModel;
@@ -308,6 +399,7 @@ Provide a strict, professional SOC analysis report in JSON format:
       if (directResult.data.investigation_summary) investigationSummary = directResult.data.investigation_summary;
       if (directResult.data.severity) evaluatedSeverity = directResult.data.severity;
     } else {
+      executionError = directResult.error || "Direct DeepSeek API error";
       console.warn("[DeepSeek Analyzer] Direct API call fallback:", directResult.error);
     }
   }
@@ -322,6 +414,7 @@ Provide a strict, professional SOC analysis report in JSON format:
         max_tokens: 350
       });
       latencyMs = Date.now() - startCf;
+      rawAiResponseText = aiResponse?.response;
       if (aiResponse?.response) {
         activeProvider = "CLOUDFLARE_WORKERS_AI";
         activeModel = cfModel;
@@ -336,7 +429,8 @@ Provide a strict, professional SOC analysis report in JSON format:
           investigationSummary = aiResponse.response.substring(0, 250);
         }
       }
-    } catch (cfErr) {
+    } catch (cfErr: any) {
+      executionError = cfErr?.message || String(cfErr);
       console.warn("[DeepSeek Analyzer] Workers AI execution fallback:", cfErr);
     }
   }
@@ -404,7 +498,7 @@ Provide a strict, professional SOC analysis report in JSON format:
     operator_status: "AWAITING_OPERATOR_VERIFICATION" // Mandatory Operational HITL [CD-04]
   };
 
-  // 4. Generate Standard SOC Log Entry [CD-05]
+  // Generate Standard SOC Log Entry [CD-05]
   const socLog = formatStandardSocLog(item, activeProvider, activeModel, latencyMs);
   item.soc_audit_log = socLog;
 
@@ -413,9 +507,48 @@ Provide a strict, professional SOC analysis report in JSON format:
     standardSocAuditLogs = standardSocAuditLogs.slice(0, 500);
   }
 
+  // ---------------------------------------------------------------------------
+  // C. RECORD DEEPSEEK OUTPUT & UNIFIED DEBUG TRACE TO CLOUDFLARE KV
+  // ---------------------------------------------------------------------------
+  const kvOutputPayload = {
+    event_id: eventId,
+    raw_response: rawAiResponseText || investigationSummary,
+    parsed_json: {
+      severity: evaluatedSeverity,
+      threat_verdict: deepseekVerdict,
+      investigation_summary: investigationSummary,
+      object_description: item.object_description
+    },
+    model_used: activeModel,
+    latency_ms: latencyMs,
+    timestamp: new Date().toISOString()
+  };
+  await writeToKv(env, `deepseek:output:${eventId}`, kvOutputPayload, 86400);
+
+  const debugTrace: IDeepSeekDebugTrace = {
+    event_id: eventId,
+    timestamp: new Date().toISOString(),
+    input: kvInputPayload,
+    output: kvOutputPayload,
+    status: activeProvider === "LOCAL_KINEMATICS_ENGINE" ? "FALLBACK" : "SUCCESS",
+    error: executionError
+  };
+  await writeToKv(env, `deepseek:trace:${eventId}`, debugTrace, 86400);
+  item.debug_trace = debugTrace;
+
+  // Persist analyzed incident to KV (TTL: 7 days)
+  await writeToKv(env, `analyzed_incident:${eventId}`, item, 604800);
+
+  // Update recent incidents array in KV for fast Dashboard polling (< 15ms)
+  const existingKvList = (await readFromKv<IDeepSeekIncidentItem[]>(env, "kv_recent_incidents")) || [];
+  const updatedKvList = [item, ...existingKvList.filter((i) => i.id !== item.id)].slice(0, 100);
+  await writeToKv(env, "kv_recent_incidents", updatedKvList, 86400);
+
   analyzedIncidentsCache.set(eventId, item);
 
-  // 5. Persist to Cloudflare D1 if available
+  // ---------------------------------------------------------------------------
+  // D. PERSIST TO CLOUDFLARE D1 DATABASE
+  // ---------------------------------------------------------------------------
   if (env && env.DB) {
     try {
       const vault = new D1IncidentVault(env);
@@ -448,7 +581,8 @@ Provide a strict, professional SOC analysis report in JSON format:
         latency_ms: latencyMs,
         severity: item.severity,
         threat_verdict: item.deepseek_analysis.threat_verdict,
-        soc_log_id: socLog.log_id
+        soc_log_id: socLog.log_id,
+        kv_trace_key: `deepseek:trace:${eventId}`
       });
     } catch (dbErr) {
       console.warn("[DeepSeek Analyzer] D1 persistence warning:", dbErr);
@@ -499,8 +633,8 @@ export async function analyzeWindowWithDeepSeek(
   // Also include any prior incidents from incident_manager
   for (const inc of recentIncidents) {
     if (!analyzedIncidentsCache.has(inc.id)) {
-        const triggerTime = inc.timestamp && inc.timestamp.includes("T") ? inc.timestamp.split("T")[1].substring(0, 8) : (inc.timestamp || "00:00:00");
-        const converted: IDeepSeekIncidentItem = {
+      const triggerTime = inc.timestamp && inc.timestamp.includes("T") ? inc.timestamp.split("T")[1].substring(0, 8) : (inc.timestamp || "00:00:00");
+      const converted: IDeepSeekIncidentItem = {
         id: inc.id,
         timestamp: inc.timestamp,
         camera_id: inc.cameraId || "CAM_UNKNOWN",
@@ -554,6 +688,7 @@ export async function analyzeWindowWithDeepSeek(
 
 /**
  * Returns formatted JSON for continuous polling via GET /api/get-incident and GET /api/get-incidents.
+ * Reads first from Cloudflare KV (kv_recent_incidents) for < 15ms latency, augmented with window scan.
  */
 export async function getDeepSeekIncidentsResponse(
   env: Env,

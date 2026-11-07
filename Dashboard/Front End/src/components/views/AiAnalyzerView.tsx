@@ -66,53 +66,6 @@ export const AiAnalyzerView: React.FC<AiAnalyzerViewProps> = ({ cameras }) => {
         </div>
       </div>
 
-      {/* 4 Thẻ Phân bố Phân lớp Đối tượng (Class Distribution Matrix) */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
-          <div>
-            <div className="text-[10px] font-mono text-[#64748B]">CLASS: PERSON</div>
-            <div className="font-mono text-xl font-bold text-white mt-0.5">2,410</div>
-            <div className="text-[10px] font-mono text-[#10B981] mt-0.5">72.4% Detection Share</div>
-          </div>
-          <div className="w-8 h-8 bg-[#10B981]/10 border border-[#10B981]/40 flex items-center justify-center font-mono text-xs text-[#10B981] font-bold">
-            P
-          </div>
-        </div>
-
-        <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
-          <div>
-            <div className="text-[10px] font-mono text-[#64748B]">CLASS: VEHICLE</div>
-            <div className="font-mono text-xl font-bold text-white mt-0.5">890</div>
-            <div className="text-[10px] font-mono text-[#3B82F6] mt-0.5">24.1% Detection Share</div>
-          </div>
-          <div className="w-8 h-8 bg-[#3B82F6]/10 border border-[#3B82F6]/40 flex items-center justify-center font-mono text-xs text-[#3B82F6] font-bold">
-            V
-          </div>
-        </div>
-
-        <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
-          <div>
-            <div className="text-[10px] font-mono text-[#64748B]">CLASS: LOITERING</div>
-            <div className="font-mono text-xl font-bold text-white mt-0.5">42</div>
-            <div className="text-[10px] font-mono text-[#F59E0B] mt-0.5">3.2% Anomaly Share</div>
-          </div>
-          <div className="w-8 h-8 bg-[#F59E0B]/10 border border-[#F59E0B]/40 flex items-center justify-center font-mono text-xs text-[#F59E0B] font-bold">
-            L
-          </div>
-        </div>
-
-        <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
-          <div>
-            <div className="text-[10px] font-mono text-[#64748B]">CLASS: INTRUSION / BREACH</div>
-            <div className="font-mono text-xl font-bold text-white mt-0.5">8</div>
-            <div className="text-[10px] font-mono text-[#EF4444] mt-0.5">0.3% Critical Trigger</div>
-          </div>
-          <div className="w-8 h-8 bg-[#EF4444]/10 border border-[#EF4444]/40 flex items-center justify-center font-mono text-xs text-[#EF4444] font-bold">
-            !
-          </div>
-        </div>
-      </div>
-
       {/* 2 Cột: Bảng chỉnh Ngưỡng & Console Log */}
       <div className="grid grid-cols-12 gap-4">
         {/* Cột Trái: Bộ chỉnh Ngưỡng Tin cậy (5 Cột) */}

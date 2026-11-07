@@ -225,6 +225,26 @@ export interface IStandardSocLogEntry {
   operator_status: "AWAITING_OPERATOR_VERIFICATION";
 }
 
+export interface IDeepSeekDebugTrace {
+  event_id: string;
+  timestamp: string;
+  input: {
+    prompt: string;
+    raw_payload: Record<string, any>;
+    model_target: string;
+    timestamp: string;
+  };
+  output: {
+    raw_response?: string;
+    parsed_json?: any;
+    model_used: string;
+    latency_ms: number;
+    timestamp: string;
+  };
+  status: "SUCCESS" | "FALLBACK" | "FAILED";
+  error?: string | null;
+}
+
 export interface IDeepSeekIncidentItem {
   id: string;
   timestamp: string;
@@ -248,6 +268,7 @@ export interface IDeepSeekIncidentItem {
   };
   operator_status: string;
   soc_audit_log?: IStandardSocLogEntry;
+  debug_trace?: IDeepSeekDebugTrace;
 }
 
 export interface IDeepSeekGetIncidentsResponse {
