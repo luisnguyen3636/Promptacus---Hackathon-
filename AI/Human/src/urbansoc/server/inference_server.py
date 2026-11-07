@@ -49,6 +49,18 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             self._handle_get_cameras()
             return
 
+        # 1b. Real-time HTTP MJPEG Camera Streaming (/api/v1/cameras/{camera_id}/stream or /stream.mjpg)
+        if clean_path.startswith("/api/v1/cameras/") and (clean_path.endswith("/stream") or clean_path.endswith("/stream.mjpg")):
+            parts = clean_path.split("/")
+            if len(parts) >= 5:
+                camera_id = parts[4]
+                self._handle_get_camera_mjpeg_stream(camera_id)
+                return
+
+        if clean_path in ("/stream.mjpg", "/stream", "/live"):
+            self._handle_get_camera_mjpeg_stream(None)
+            return
+
         # 2. API: Get latest live visual snapshot for a specific camera
         if clean_path.startswith("/api/v1/cameras/") and clean_path.endswith("/snapshot"):
             parts = clean_path.split("/")
@@ -163,6 +175,86 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(jpeg_bytes)
+
+    def _handle_get_camera_mjpeg_stream(self, camera_id: Optional[str] = None) -> None:
+        """Stream continuous multipart/x-mixed-replace MJPEG video frames for the specified camera or primary active camera."""
+        target_cam_id = camera_id
+        if not target_cam_id:
+            all_cams = self.soc.context_manager.get_all_contexts()
+            active_ids = [cid for cid, ctx in all_cams.items() if getattr(ctx, "is_active", False)]
+            if active_ids:
+                target_cam_id = active_ids[0]
+            elif all_cams:
+                target_cam_id = list(all_cams.keys())[0]
+            else:
+                target_cam_id = "LAPTOP_01"
+
+        # Check if caller specified max frames (e.g. for unit testing)
+        max_frames = -1
+        max_hdr = self.headers.get("X-Max-Frames")
+        if max_hdr and max_hdr.isdigit():
+            max_frames = int(max_hdr)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, pre-check=0, post-check=0, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        sent_frames = 0
+        try:
+            while True:
+                ctx = self.soc.context_manager.get(target_cam_id)
+                frame_to_serve: Optional[np.ndarray] = None
+                if ctx is not None:
+                    with ctx._lock:
+                        if ctx.latest_display_frame is not None:
+                            frame_to_serve = ctx.latest_display_frame.copy()
+                        elif ctx.latest_frame is not None:
+                            frame_to_serve = ctx.latest_frame.copy()
+
+                if frame_to_serve is None:
+                    placeholder = np.full((360, 640, 3), 20, dtype=np.uint8)
+                    cv2.putText(
+                        placeholder,
+                        f"CAM: {target_cam_id} (WAITING FOR STREAM)",
+                        (30, 180),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 180, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    frame_to_serve = placeholder
+
+                success, encoded = cv2.imencode(".jpg", frame_to_serve, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if success:
+                    jpeg_bytes = encoded.tobytes()
+                    part_header = (
+                        f"--frame\r\n"
+                        f"Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(jpeg_bytes)}\r\n"
+                        f"\r\n"
+                    ).encode("utf-8")
+                    self.wfile.write(part_header)
+                    self.wfile.write(jpeg_bytes)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+                    sent_frames += 1
+
+                if 0 < max_frames <= sent_frames:
+                    break
+
+                time.sleep(0.066)
+        except (BrokenPipeError, ConnectionResetError, socket.error):
+            # Client closed stream connection
+            return
+        except Exception as e:
+            logger.debug(f"MJPEG stream ended for {target_cam_id}: {e}")
+            return
 
     def _handle_get_dashboard(self) -> None:
         """Serve the multi-camera interactive SOC web dashboard."""
@@ -634,6 +726,7 @@ class InferenceServer:
                 cameras.forEach(cam => {{
                     const isOnline = (cam.status === 'ONLINE');
                     const threat = cam.highest_threat || 'LOW';
+                    const streamUrl = `/api/v1/cameras/${{encodeURIComponent(cam.camera_id)}}/stream`;
                     const snapUrl = `/api/v1/cameras/${{encodeURIComponent(cam.camera_id)}}/snapshot?t=${{now}}`;
 
                     html += `
@@ -646,7 +739,7 @@ class InferenceServer:
                             <span style="font-size: 11px; color: #64748b; font-family: monospace;">${{cam.camera_id}}</span>
                         </div>
                         <div class="preview-container">
-                            <img class="preview-img" src="${{snapUrl}}" alt="Camera Stream" loading="lazy">
+                            <img class="preview-img" src="${{streamUrl}}" alt="Camera Stream" onerror="this.src='${{snapUrl}}'">
                             <div class="threat-pill threat-${{threat}}">${{threat}}</div>
                         </div>
                         <div class="card-body">
@@ -665,6 +758,10 @@ class InferenceServer:
                             <div class="info-row">
                                 <span class="info-label">Vị trí:</span>
                                 <span class="info-value">${{cam.location ? cam.location.address : 'N/A'}}</span>
+                            </div>
+                            <div class="info-row" style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #334155;">
+                                <span class="info-label">Direct MJPEG:</span>
+                                <a href="${{streamUrl}}" target="_blank" style="color: #38bdf8; font-family: monospace; font-size: 11px; text-decoration: none;">Mở Stream riêng ↗</a>
                             </div>
                         </div>
                     </div>`;
@@ -704,6 +801,8 @@ class InferenceServer:
         print("=" * 76)
         print(f"• Server Listening: http://{self.host}:{self.port}")
         print(f"• LAN Dashboard:    http://{local_ip}:{self.port}")
+        print(f"• Live MJPEG Stream:http://{local_ip}:{self.port}/api/v1/cameras/LAPTOP_01/stream")
+        print(f"• Direct Short Stream: http://{local_ip}:{self.port}/stream.mjpg")
         print(f"• Status API:       http://{local_ip}:{self.port}/api/v1/cameras")
         print(f"• Frame Ingestion:  POST http://{local_ip}:{self.port}/api/v1/ingest/frame")
         print(f"• Model Weights:    {self.model_weights} (Device: {self.detector.device})")

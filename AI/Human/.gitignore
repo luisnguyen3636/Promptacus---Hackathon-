@@ -18,6 +18,7 @@ ENV/
 !yolo/.gitkeep
 !yolo/README.md
 !models/.gitkeep
+bin/
 
 # Runtime media and logs
 records/*

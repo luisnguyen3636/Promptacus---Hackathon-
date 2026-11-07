@@ -73,9 +73,19 @@ case "$MODE" in
         "$PYTHON_BIN" scripts/test_post_endpoint.py
         ;;
 
+    mjpeg|test-mjpeg)
+        echo -e "\n📹 Kiểm thử endpoint HTTP MJPEG Video Stream..."
+        "$PYTEST_BIN" tests/test_mjpeg_stream.py -v
+        ;;
+
+    tunnel|run-all)
+        echo -e "\n🌐 Khởi chạy toàn bộ hệ thống với Cloudflare Tunnel & MJPEG Stream..."
+        ./run_all.sh
+        ;;
+
     *)
         echo "Lựa chọn không hợp lệ: $MODE"
-        echo "Sử dụng: ./run_test.sh [unit | live | test-weapon | test-fallen | test-knife | post]"
+        echo "Sử dụng: ./run_test.sh [unit | live | test-weapon | test-fallen | test-knife | post | mjpeg | tunnel]"
         exit 1
         ;;
 esac
