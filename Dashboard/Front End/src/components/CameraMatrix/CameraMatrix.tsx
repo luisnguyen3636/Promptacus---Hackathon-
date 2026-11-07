@@ -1,46 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { Maximize2, Minimize2, Grid, ZoomIn } from 'lucide-react';
-import { ICameraDevice, IIncidentItem } from '../../types/soc.ts';
+import { ICameraDevice } from '../../types/soc.ts';
 import { CameraSlot } from './CameraSlot.tsx';
 import { PtzToolbar } from './PtzToolbar.tsx';
 
 interface CameraMatrixProps {
-  cameras: ICameraDevice[];
-  incidents?: IIncidentItem[];
+  cameras?: ICameraDevice[];
   onPtzCommand?: (cameraId: string, action: string) => void;
   zoomedCameraId?: string | null;
   onToggleZoom?: (cameraId: string | null) => void;
-  onSelectPlayback?: (incident: IIncidentItem) => void;
 }
 
-export const CameraMatrix: React.FC<CameraMatrixProps> = ({
-  cameras,
-  incidents = [],
+const FIXED_SLOTS = [
+  { index: 0, slotKey: 'slot_0', defaultLabel: 'CAM_01' },
+  { index: 1, slotKey: 'slot_1', defaultLabel: 'CAM_02' },
+  { index: 2, slotKey: 'slot_2', defaultLabel: 'CAM_03' },
+  { index: 3, slotKey: 'slot_3', defaultLabel: 'CAM_04' },
+];
+
+const CameraMatrixInner: React.FC<CameraMatrixProps> = ({
+  cameras = [],
   onPtzCommand,
   zoomedCameraId = null,
   onToggleZoom,
-  onSelectPlayback,
 }) => {
-  const [digitalZoomMap, setDigitalZoomMap] = useState<Record<string, number>>({});
+  const [digitalZoomMap, setDigitalZoomMap] = useState<Record<number, number>>({});
 
-  // Tạo ma trận 4 ô từ danh sách camera thật của Server (ô trống không chứa dữ liệu giả)
-  const displayCameras: ICameraDevice[] = [...cameras];
-  while (displayCameras.length < 4) {
-    const idx = displayCameras.length + 1;
-    displayCameras.push({
-      id: `unassigned_slot_${idx}`,
-      name: `Camera Slot #${idx}`,
-      ip: 'N/A',
-      fps: 0,
-      bitrateKbps: 0,
-      status: 'OFFLINE',
-      streamUrl: '',
-      ptzEnabled: false,
-      boundingBoxes: [],
-    });
-  }
-
-  const activeCamera = displayCameras.find((c) => c.id === zoomedCameraId) || displayCameras[0];
+  const activeSlotIndex =
+    zoomedCameraId !== null
+      ? FIXED_SLOTS.find((s) => s.slotKey === zoomedCameraId || s.defaultLabel === zoomedCameraId)
+          ?.index ?? 0
+      : null;
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -52,49 +42,49 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [zoomedCameraId, onToggleZoom]);
 
-  const handleToggleSlotZoom = (camId: string) => {
-    if (zoomedCameraId === camId) {
+  const handleToggleSlotZoom = (slotIdx: number) => {
+    const targetKey = `slot_${slotIdx}`;
+    if (zoomedCameraId === targetKey) {
       onToggleZoom?.(null);
     } else {
-      onToggleZoom?.(camId);
+      onToggleZoom?.(targetKey);
     }
   };
 
-  const handlePtzZoom = (camId: string, direction: 'IN' | 'OUT') => {
-    if (!camId) return;
+  const handlePtzZoom = (slotIdx: number, direction: 'IN' | 'OUT') => {
     setDigitalZoomMap((prev) => {
-      const current = prev[camId] || 1.0;
+      const current = prev[slotIdx] || 1.0;
       const next =
         direction === 'IN' ? Math.min(3.5, current + 0.25) : Math.max(1.0, current - 0.25);
-      return { ...prev, [camId]: parseFloat(next.toFixed(2)) };
+      return { ...prev, [slotIdx]: parseFloat(next.toFixed(2)) };
     });
 
-    if (onPtzCommand && !camId.startsWith('unassigned_slot_')) {
+    const camId = cameras[slotIdx]?.id || `CAM_0${slotIdx + 1}`;
+    if (onPtzCommand) {
       onPtzCommand(camId, direction === 'IN' ? 'ZOOM_IN' : 'ZOOM_OUT');
     }
   };
 
   const handlePtzLeft = (action: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN' | 'AUTO_FOCUS') => {
-    const targetId = zoomedCameraId || displayCameras[0]?.id;
-    if (!targetId) return;
-    if (action === 'ZOOM_IN') handlePtzZoom(targetId, 'IN');
-    else if (action === 'ZOOM_OUT') handlePtzZoom(targetId, 'OUT');
-    else if (onPtzCommand && !targetId.startsWith('unassigned_slot_')) onPtzCommand(targetId, action);
+    const targetIdx = activeSlotIndex ?? 0;
+    if (action === 'ZOOM_IN') handlePtzZoom(targetIdx, 'IN');
+    else if (action === 'ZOOM_OUT') handlePtzZoom(targetIdx, 'OUT');
+    else if (onPtzCommand) onPtzCommand(cameras[targetIdx]?.id || `CAM_0${targetIdx + 1}`, action);
   };
 
   const handlePtzRight = (action: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN' | 'AUTO_FOCUS') => {
-    const targetId = zoomedCameraId || displayCameras[1]?.id || displayCameras[0]?.id;
-    if (!targetId) return;
-    if (action === 'ZOOM_IN') handlePtzZoom(targetId, 'IN');
-    else if (action === 'ZOOM_OUT') handlePtzZoom(targetId, 'OUT');
-    else if (onPtzCommand && !targetId.startsWith('unassigned_slot_')) onPtzCommand(targetId, action);
+    const targetIdx = activeSlotIndex ?? 1;
+    if (action === 'ZOOM_IN') handlePtzZoom(targetIdx, 'IN');
+    else if (action === 'ZOOM_OUT') handlePtzZoom(targetIdx, 'OUT');
+    else if (onPtzCommand) onPtzCommand(cameras[targetIdx]?.id || `CAM_0${targetIdx + 1}`, action);
   };
 
-  const getLogsForCamera = (camId: string, slotIndex: number): IIncidentItem[] => {
-    if (camId.startsWith('unassigned_slot_')) {
-      return slotIndex === 0 && cameras.length === 0 ? incidents : [];
+  const getSlotLabel = (slotIdx: number): string => {
+    const cam = cameras[slotIdx];
+    if (cam && cam.id && !cam.id.startsWith('unassigned_slot_')) {
+      return `${cam.id}${cam.location ? ` · ${cam.location}` : ''}`;
     }
-    return incidents.filter((inc) => inc.cameraId === camId);
+    return `CAM_0${slotIdx + 1}`;
   };
 
   return (
@@ -104,9 +94,11 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 bg-[#DC2626]"></span>
           <span className="font-bold text-xs uppercase tracking-wider text-[#E2E8F0]">
-            {zoomedCameraId ? `CAMERA FOCUS: ${activeCamera.name}` : 'LIVE CAMERA MATRIX (2x2)'}
+            {activeSlotIndex !== null
+              ? `CAMERA FOCUS: ${getSlotLabel(activeSlotIndex)}`
+              : 'LIVE CAMERA MATRIX (2x2)'}
           </span>
-          {zoomedCameraId && (
+          {activeSlotIndex !== null && (
             <span className="bg-[#1E293B] border border-[#3B82F6] text-[#3B82F6] font-mono text-[9px] font-bold px-1.5 py-0.2">
               CHẾ ĐỘ QUAN SÁT CẬN CẢNH (80% VIEWPORT)
             </span>
@@ -116,10 +108,11 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
         {/* Cụm nút công cụ điều khiển View & Zoom */}
         <div className="flex items-center gap-1.5">
           <button
-            onClick={() => displayCameras[0] && handleToggleSlotZoom(displayCameras[0].id)}
+            type="button"
+            onClick={() => handleToggleSlotZoom(activeSlotIndex ?? 0)}
             title="Chế độ 1x1 (Phóng to quan sát camera chính)"
             className={`px-2 h-6 border font-mono text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors ${
-              zoomedCameraId
+              activeSlotIndex !== null
                 ? 'bg-[#1E293B] border-[#3B82F6] text-[#3B82F6]'
                 : 'bg-[#0E131A] border-[#1E2631] text-[#94A3B8] hover:text-white hover:border-[#2D3748]'
             }`}
@@ -129,10 +122,11 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={() => onToggleZoom?.(null)}
             title="Chế độ Lưới 2x2 Matrix"
             className={`px-2 h-6 border font-mono text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors ${
-              !zoomedCameraId
+              activeSlotIndex === null
                 ? 'bg-[#1E293B] border-[#10B981] text-[#10B981]'
                 : 'bg-[#0E131A] border-[#1E2631] text-[#94A3B8] hover:text-white hover:border-[#2D3748]'
             }`}
@@ -142,13 +136,14 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={() =>
-              onToggleZoom?.(zoomedCameraId ? null : displayCameras[0]?.id || null)
+              onToggleZoom?.(activeSlotIndex !== null ? null : 'slot_0')
             }
-            title={zoomedCameraId ? 'Thu nhỏ về 2x2 (ESC)' : 'Phóng to quan sát camera'}
+            title={activeSlotIndex !== null ? 'Thu nhỏ về 2x2 (ESC)' : 'Phóng to quan sát camera'}
             className="w-6 h-6 bg-[#0E131A] border border-[#1E2631] text-[#94A3B8] hover:text-white hover:border-[#2D3748] flex items-center justify-center cursor-pointer"
           >
-            {zoomedCameraId ? (
+            {activeSlotIndex !== null ? (
               <Minimize2 className="w-3 h-3 text-[#3B82F6]" />
             ) : (
               <Maximize2 className="w-3 h-3" />
@@ -161,54 +156,43 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
       <div className="p-3 flex gap-2 flex-1 min-h-[380px]">
         <PtzToolbar onCommand={handlePtzLeft} />
 
-        {zoomedCameraId ? (
+        {activeSlotIndex !== null ? (
           <div className="flex-1 flex flex-col gap-2 min-w-0">
             <div className="flex-1 min-h-[320px] relative">
               <CameraSlot
-                camera={activeCamera}
-                slotIndex={displayCameras.findIndex((c) => c.id === activeCamera.id)}
-                cameraLogs={getLogsForCamera(
-                  activeCamera.id,
-                  displayCameras.findIndex((c) => c.id === activeCamera.id)
-                )}
+                key={`camera_slot_${activeSlotIndex}`}
+                slotIndex={activeSlotIndex}
+                cameraLabel={getSlotLabel(activeSlotIndex)}
                 isZoomed={true}
                 onToggleZoom={handleToggleSlotZoom}
-                digitalZoom={digitalZoomMap[activeCamera.id] || 1.0}
-                onSelectLog={onSelectPlayback}
+                digitalZoom={digitalZoomMap[activeSlotIndex] || 1.0}
               />
             </div>
 
             <div className="grid grid-cols-3 gap-2 h-[110px] shrink-0">
-              {displayCameras
-                .filter((cam) => cam.id !== activeCamera.id)
-                .slice(0, 3)
-                .map((cam, idx) => (
-                  <div key={cam.id} className="relative h-full">
-                    <CameraSlot
-                      camera={cam}
-                      slotIndex={idx + 1}
-                      cameraLogs={getLogsForCamera(cam.id, idx + 1)}
-                      isZoomed={false}
-                      onToggleZoom={handleToggleSlotZoom}
-                      digitalZoom={digitalZoomMap[cam.id] || 1.0}
-                      onSelectLog={onSelectPlayback}
-                    />
-                  </div>
-                ))}
+              {FIXED_SLOTS.filter((s) => s.index !== activeSlotIndex).map((slot) => (
+                <div key={`camera_slot_thumb_${slot.index}`} className="relative h-full">
+                  <CameraSlot
+                    slotIndex={slot.index}
+                    cameraLabel={getSlotLabel(slot.index)}
+                    isZoomed={false}
+                    onToggleZoom={handleToggleSlotZoom}
+                    digitalZoom={digitalZoomMap[slot.index] || 1.0}
+                  />
+                </div>
+              ))}
             </div>
           </div>
         ) : (
           <div className="grid grid-cols-2 grid-rows-2 gap-[2px] bg-[#1E2631] flex-1">
-            {displayCameras.slice(0, 4).map((cam, idx) => (
+            {FIXED_SLOTS.map((slot) => (
               <CameraSlot
-                key={cam.id}
-                camera={cam}
-                slotIndex={idx}
-                cameraLogs={getLogsForCamera(cam.id, idx)}
+                key={`camera_slot_${slot.index}`}
+                slotIndex={slot.index}
+                cameraLabel={getSlotLabel(slot.index)}
                 isZoomed={false}
                 onToggleZoom={handleToggleSlotZoom}
-                digitalZoom={digitalZoomMap[cam.id] || 1.0}
-                onSelectLog={onSelectPlayback}
+                digitalZoom={digitalZoomMap[slot.index] || 1.0}
               />
             ))}
           </div>
@@ -219,3 +203,11 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
     </div>
   );
 };
+
+export const CameraMatrix = React.memo(
+  CameraMatrixInner,
+  (prev, next) =>
+    prev.zoomedCameraId === next.zoomedCameraId &&
+    prev.cameras?.length === next.cameras?.length &&
+    prev.cameras?.[0]?.id === next.cameras?.[0]?.id
+);
