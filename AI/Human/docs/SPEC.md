@@ -1,121 +1,276 @@
 # TÀI LIỆU ĐẶC TẢ KỸ THUẬT (TECHNICAL SPECIFICATION)
-## URBAN SAFETY AI-SOC: HỆ THỐNG GIÁM SÁT AN NINH & BỘ LUẬT NHẬN DẠNG HÀNH VI NGUY HIỂM CHUẨN CAO (HIGH-PRECISION DANGEROUS ACTION RULES)
-**Mã đặc tả:** `SPEC-URBANSOC-RULES-02`  
+## URBAN SAFETY AI-SOC: HỆ THỐNG GIÁM SÁT ĐA PHƯƠNG THỨC NGHE - NHÌN & PHÁT HIỆN TIẾNG LA HÉT / NGUY HIỂM ÂM THANH (MULTIMODAL AUDIO-VISUAL SURVEILLANCE & ACOUSTIC DISTRESS DETECTION)
+**Mã đặc tả:** `SPEC-URBANSOC-AUDIO-03`  
 **Dự án:** Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety AI-SOC)  
 **Phương pháp luận:** Spec-Driven Development (SDD) & Strict Human-in-the-Loop (AGENTS.md)  
-**Mục tiêu:** Mở rộng và chuẩn hóa toàn diện bộ luật nhận dạng các hành vi nguy hiểm (Ẩu đả bạo lực, cầm/chĩa hung khí, cướp giật, rượt đuổi, khống chế/kẹp cổ, vây ráp, đột nhập/trèo tường, nạn nhân gục ngã), tối đa hóa độ chính xác và triệt tiêu báo động giả (False Positive Mitigation).
+**Tác giả:** AI Assistant (dưới quyền Lead Developer / Principal Architect)  
+**Trạng thái:** Chờ phê duyệt (Awaiting Approval)
 
 ---
 
-## 1. TỔNG QUAN BỘ LUẬT & YÊU CẦU NGHIỆP VỤ
+## 1. TỔNG QUAN YÊU CẦU & BỐI CẢNH NGHIỆP VỤ
 
-### 1.1. Bối cảnh
-Theo yêu cầu chỉ đạo từ Lead Developer:
-> "Dựa trên những gì đã có, xây dựng bộ rule để AI có thể detect những hành động nguy hiểm như đánh nhau, cầm vũ khí nguy hiểm, ... nhiều và chính xác nhất có thể, giảm thiểu false positive."
+### 1.1. Yêu cầu từ Principal Architect
+> "bạn có thể add thêm microphone để detect screaming không, có thể áp dụng thêm cái gì vào thì áp dụng"
 
-Hệ thống AI-SOC mở rộng bộ luật từ 7 hành vi cơ sở lên **13 hành vi chuyên sâu**, tập trung vào các tình huống đe dọa an ninh trật tự công cộng và an toàn tính mạng:
+Hệ thống Urban Safety AI-SOC hiện tại đã sở hữu bộ nhận dạng thị giác 13 hành vi nguy hiểm (Pose & Spatial Kinematics). Tuy nhiên, trong môi trường đô thị thực tế:
+1. **Góc chết thị giác (Visual Blindspots):** Nạn nhân bị hành hung sau góc tường, gầm cầu vượt, trong bóng tối hoặc ngoài khung hình camera.
+2. **Nhiễu thị giác (Visual Ambiguity):** Hai người ôm nhau hoặc nhảy múa có thể gây phân vân với hành vi khống chế (`RESTRAINING`) hoặc ẩu đả (`FIGHTING`).
+3. **Phản ứng chậm trễ nếu thiếu âm thanh:** Tiếng la hét cầu cứu (`SCREAM`) hoặc tiếng súng (`GUNSHOT`) xảy ra trước khi hành vi bạo lực hoàn toàn lộ diện trên camera.
 
-1. **`FIGHTING` (Ẩu đả, bạo lực đối kháng, tấn công thể xác):** Đánh đấm tương hỗ hoặc một bên tấn công dồn dập trong cự ly gần.
-2. **`WEAPON_THREAT` (Cầm / Chĩa hung khí nguy hiểm):** Tư thế chĩa súng 2 tay chiến thuật (Isosceles/Weaver), chĩa hung khí 1 tay hướng thẳng mục tiêu, hoặc vung vũ khí tấn công từ trên cao (overhead strike).
-3. **`SNATCHING` (Cướp giật tài sản):** Tiếp cận sát mục tiêu $\to$ vung tay giật giật mạnh $\to$ bứt tốc tháo chạy tốc độ cao kèm phân kỳ khoảng cách đột ngột.
-4. **`PURSUIT` (Rượt đuổi, truy sát):** Hai hoặc nhiều đối tượng cùng chạy ở tốc độ cao với hướng di chuyển đồng quy (Vector Cosine Similarity $\ge 0.70$).
-5. **`RESTRAINING` (Khống chế, kẹp cổ, giằng co ôm giữ):** Hai đối tượng dính chặt với độ giao cắt hộp bao cao (IoU $\ge 0.40$) duy trì liên tục trên 0.6 giây.
-6. **`SURROUNDING` (Vây ráp, tụ tập áp đảo mục tiêu):** Nhóm từ 3 người trở lên khép vòng vây xung quanh một đối tượng đơn lẻ trong bán kính hẹp.
-7. **`INTRUSION` (Trèo tường, vượt rào, đột nhập vùng cấm):** Nâng cao tọa độ cơ thể theo phương thẳng đứng liên tục (chân và hông leo cao dần), hai tay bám trên cao.
-8. **`FALLEN` (Nạn nhân gục ngã / Bất tỉnh):** Thân người nghiêng ngang $\ge 55^\circ$ hoặc tỷ lệ $H/W < 0.90$. Đặc biệt: Tự động leo thang lên mức đe dọa tối đa ($1.00$) nếu xảy ra ngay sau sự kiện ẩu đả hoặc cướp giật.
-9. **`HANDS_UP` (Cầu cứu / Giơ tay đầu hàng):** Hai cổ tay giơ cao quá đầu khi đứng yên dưới tình huống nguy hiểm.
-10. **`RUNNING` (Chạy nhanh):** Tốc độ dịch chuyển chuẩn hóa $\ge 1.75$ chiều cao cơ thể/giây.
-11. **`CROUCHING` (Cúi khom / Ngồi xổm nghi vấn):** Tư thế co cụm $H/W < 1.30$, góc cột sống $< 45^\circ$, có gập gối.
-12. **`LOITERING` (Lảng vảng rình rập bất thường):** Lưu trú tại khu vực nhạy cảm trên 10s (leo thang rủi ro cao nếu $>20\text{s}$).
-13. **`NORMAL` (Sinh hoạt bình thường):** Trạng thái đi đứng bình thường, không vi phạm các luật trên.
-
----
-
-## 2. PHÂN TÍCH ĐỘNG HỌC & ĐẶC TRƯNG MỞ RỘNG (KINEMATICS)
-
-Để phát hiện chính xác các hành vi phức tạp và loại bỏ báo động giả (False Positives), hệ thống tính toán thêm các đại lượng sinh trắc học và hình học không gian:
-
-1. **Góc Khuỷu Tay ($\theta_{\text{elbow}}$):**
-   - Góc hợp bởi Vai - Khuỷu tay - Cổ tay cho từng tay:
-     $$\theta_{\text{elbow}} = \arccos\left(\frac{\vec{v}_{es} \cdot \vec{v}_{ew}}{\|\vec{v}_{es}\| \|\vec{v}_{ew}\|}\right)$$
-   - *Ứng dụng:* Cánh tay duỗi thẳng chĩa vũ khí ($\theta_{\text{elbow}} \ge 150^\circ$) khác với tay gập nghe điện thoại ($\theta_{\text{elbow}} < 65^\circ$).
-2. **Độ Vươn Cánh Tay Chuẩn Hóa ($L_{\text{arm\_norm}}$):**
-   - Khoảng cách từ cổ tay tới vai tương ứng, chia cho chiều cao cơ thể $H$:
-     $$L_{\text{arm\_norm}} = \frac{\text{hypot}(x_w - x_s, y_w - y_s)}{H}$$
-   - *Ứng dụng:* Tay chĩa vũ khí hoặc vung đấm có $L_{\text{arm\_norm}} \ge 0.38$.
-3. **Khoảng Cách Hội Tụ Hai Cổ Tay ($D_{\text{wrist\_convergence}}$):**
-   - Khoảng cách giữa cổ tay trái và cổ tay phải:
-     $$D_{\text{wrists}} = \text{hypot}(x_{wl} - x_{wr}, y_{wl} - y_{wr})$$
-   - *Ứng dụng:* Cầm súng 2 tay chiến thuật có $D_{\text{wrists}} < 0.18 \times H$ ở phía trước ngực.
-4. **Vận Tốc & Động Năng Cổ Tay ($V_{\text{wrist}}, E_{\text{wrist}}$):**
-   - Đạo hàm bậc 1 của tọa độ cổ tay theo thời gian:
-     $$V_{\text{wrist}} = \sqrt{\frac{1}{N}\sum \left(\frac{\Delta x_w}{\Delta t}\right)^2 + \left(\frac{\Delta y_w}{\Delta t}\right)^2}$$
-5. **Góc Hướng Di Chuyển & Độ Tương Đồng Vector (Cosine Similarity):**
-   - Với hai đối tượng di chuyển với vector vận tốc $\vec{v}_1, \vec{v}_2$:
-     $$\cos(\theta) = \frac{\vec{v}_1 \cdot \vec{v}_2}{\|\vec{v}_1\| \|\vec{v}_2\|}$$
-   - *Ứng dụng:* Rượt đuổi (`PURSUIT`) yêu cầu $\cos(\theta) \ge 0.70$ (cùng hướng đuổi nhau), loại bỏ trường hợp hai người chạy ngược chiều lướt qua nhau.
-6. **Tốc Độ Phân Kỳ Khoảng Cách ($d(\text{Dist})/dt$):**
-   - Tốc độ thay đổi khoảng cách giữa hai đối tượng. Dùng để phát hiện cướp giật bứt tốc rời xa nạn nhân ($> 250\text{ px/s}$).
+### 1.2. Mục tiêu Kỹ thuật
+Bổ sung hệ thống **Giám sát Âm thanh Thời gian Thực (Real-Time Acoustic Threat Surveillance)** và **Động cơ Hợp nhất Đa phương thức Nghe - Nhìn (Multimodal Audio-Visual Threat Fusion Engine)**:
+1. **Thu nhận âm thanh đa kênh không khóa (Non-blocking Audio Ingestion):** Luồng Microphone độc lập, hỗ trợ tự động nhận diện phần cứng (ALSA `arecord` / `sounddevice`), file âm thanh kiểm thử (WAV), và bộ sinh âm thanh nhân tạo (Synthetic Mock) cho kiểm thử tự động.
+2. **Bộ phát hiện tiếng la hét & âm thanh nguy hại (Acoustic Threat Classifier):**
+   - **`SCREAM` (Tiếng la hét kinh hoàng / thét thất thanh):** Năng lượng tập trung ở dải tần số cao 1.5 kHz - 4.5 kHz, Spectral Centroid > 2000 Hz, RMS năng lượng cao vượt ngưỡng nền động, Zero-Crossing Rate (ZCR) cao, thời lượng duy trì $\ge 0.25\text{s}$.
+   - **`GUNSHOT` (Tiếng nổ súng / Xung kích cực đoan):** Xung năng lượng bộc phát cực nhanh (Attack Time $< 15\text{ms}$), tỷ số đỉnh/nền (Peak-to-Average Ratio / Crest Factor $> 14\text{ dB}$), kèm suy giảm hàm mũ (decay).
+   - **`AGGRESSIVE_SHOUT` (Tiếng quát tháo / Cãi vã bạo lực):** Dao động năng lượng dải trung 400 Hz - 2.5 kHz có nhịp điệu ngắt quãng và biên độ cao.
+   - **`GLASS_BREAK` (Tiếng kính vỡ / Đập phá tài sản):** Năng lượng tần số rất cao $> 4.5\text{ kHz}$ dạng tạp âm trắng (broadband noise).
+3. **Hợp nhất đa phương thức Nghe - Nhìn (Audio-Visual Fusion):**
+   - Kết hợp điểm đe dọa thị giác ($S_{\text{visual}}$) và âm thanh ($S_{\text{audio}}$).
+   - Leo thang mức đe dọa tức thì (`FAST-TRACK CRITICAL`) khi có sự đồng quy giữa tư thế thị giác và âm thanh hiểm họa (ví dụ: `HANDS_UP` + `SCREAM`, `FIGHTING` + `SCREAM`, `WEAPON_THREAT` + `GUNSHOT`).
+   - Cảnh báo âm thanh ngoài khung hình (`OFF_SCREEN_ACOUSTIC_DISTRESS`) khi camera chưa thấy đối tượng nhưng micro thu được tiếng kêu cứu.
+4. **Bộ đệm bằng chứng âm thanh (Audio Rolling Evidence Buffer):** Lưu giữ 5 giây âm thanh trước và sau sự kiện, tự động đóng gói kèm clip video khi gửi hồ sơ sự cố lên Vận hành viên SOC.
+5. **HUD hiển thị âm thanh & VU Meter thời gian thực:** Đồng hồ đo mức decibel/RMS và nhãn cảnh báo đỏ nhấp nháy trên màn hình trực quan.
 
 ---
 
-## 3. ĐẶC TẢ CHI TIẾT BỘ LUẬT & CƠ CHẾ GIẢM THIỂU FALSE POSITIVE
+## 2. KIẾN TRÚC HỆ THỐNG & SƠ ĐỒ LUỒNG DỮ LIỆU (DATA FLOW & MERMAID)
 
-| # | Hành vi | Mức Đe dọa | Threat Score | Điều kiện Kích hoạt Kỹ thuật | Cơ chế Triệt tiêu Báo động Giả (Anti-False-Positive) |
-| :-: | :--- | :---: | :---: | :--- | :--- |
-| **1** | **WEAPON_THREAT** | `CRITICAL` | `0.96` | **Kịch bản A (Chĩa 2 tay chiến thuật):** $D_{\text{wrists}} < 0.20 H$ VÀ $y_w$ nằm giữa vai và hông VÀ $L_{\text{arm\_norm}} \ge 0.30$ VÀ tốc độ di chuyển thấp $< 0.8\text{ bh/s}$.<br>**Kịch bản B (Chĩa 1 tay duỗi thẳng):** $\theta_{\text{elbow}} \ge 150^\circ$ VÀ $L_{\text{arm\_norm}} \ge 0.40$ VÀ góc nâng cánh tay so với phương ngang trong khoảng $\pm 35^\circ$ duy trì $\ge 6$ frames.<br>**Kịch bản C (Vung đòn từ trên cao):** Một cổ tay ở trên đỉnh đầu ($y_w < y_{\text{nose}}$) VÀ $\theta_{\text{elbow}} < 85^\circ$ VÀ $V_{\text{wrist}} > 1000\text{ px/s}$. | - Loại trừ vỗ tay: vỗ tay có vận tốc đối xứng nhưng không duỗi tay ra xa thân mình.<br>- Loại trừ nghe điện thoại: nghe điện thoại có cổ tay sát tai ($y_w \approx y_{\text{ear}}$) nhưng khuỷu tay gập sâu ($\theta_{\text{elbow}} < 60^\circ$) và không có độ vươn ngang.<br>- Yêu cầu duy trì $\ge 6$ frames liên tiếp để chống nhiễu 1 frame vung tay chỉ đường. |
-| **2** | **FIGHTING** | `CRITICAL` | `0.95` | Khoảng cách tâm giữa 2 đối tượng $< 1.35 \times \text{avg\_w}$ **VÀ** một trong các điều kiện:<br>(a) $V_{\text{wrist1}} + V_{\text{wrist2}} > 1200\text{ px/s}$ (Ẩu đả đối kháng hai chiều).<br>(b) $V_{\text{wrist1}} > 900\text{ px/s}$ VÀ đối tượng 2 có góc nghiêng cột sống giật lùi $\Delta \theta_{\text{spine2}} > 20^\circ$ (Tấn công một chiều / đấm đối phương). | - Loại trừ bắt tay: Bắt tay diễn ra êm dịu ($V_{\text{wrist}} < 350\text{ px/s}$).<br>- Loại trừ hai người đi bộ gần nhau: Vận tốc cổ tay tự nhiên khi đi bộ chỉ $< 400\text{ px/s}$.<br>- Loại trừ chào nhau: Chỉ 1 tay chuyển động nhịp nhàng, không có áp sát khoảng cách kèm giật thân. |
-| **3** | **SNATCHING** | `CRITICAL` | `0.94` | Giai đoạn 1: Hai người tiếp cận sát $< 1.2 \times \text{avg\_w}$ VÀ có vận tốc cổ tay bộc phát $> 800\text{ px/s}$.<br>Giai đoạn 2 (trong vòng 1.5s tiếp theo): Một đối tượng bứt tốc $\text{speed} \ge 2.0\text{ bh/s}$ thoát ly khỏi đối tượng kia với tốc độ phân kỳ $d(\text{Dist})/dt > 250\text{ px/s}$. | - Bắt buộc phải có đủ 2 pha: Pha va chạm tiếp xúc cự ly hẹp và Pha bứt tốc phân kỳ ngay sau đó. Nếu chỉ chạy bình thường cạnh nhau thì không kích hoạt. |
-| **4** | **RESTRAINING** | `CRITICAL` | `0.92` | Hai đối tượng có độ chồng lấn hộp bao lớn ($\text{IoU} \ge 0.38$ hoặc cự ly tâm $< 0.55 \times \text{avg\_w}$) duy trì liên tục $\ge 12$ frames ($0.6\text{s}$) VÀ độ giằng co động năng cổ tay $V_{\text{wrist\_total}} > 500\text{ px/s}$. | - Loại trừ người đứng xếp hàng: Người đứng xếp hàng có IoU thấp và động năng cổ tay gần bằng 0 ($< 150\text{ px/s}$). |
-| **5** | **PURSUIT** | `HIGH` | `0.88` | Hai đối tượng đều đang có trạng thái `RUNNING` ($\text{speed} \ge 1.6\text{ bh/s}$) VÀ cự ly giữa 2 người nằm trong khoảng $[0.5, 4.0] \times \text{body\_height}$ VÀ Cosine Similarity giữa 2 vector hướng vận tốc $\cos(\theta) \ge 0.70$. | - Hai người chạy ngược chiều lướt qua nhau có $\cos(\theta) \approx -1.0 \to$ Bị loại bỏ lập tức.<br>- Hai người chạy thể dục nhịp điệu cùng vận tốc nhưng cách xa nhau $> 5.0 H \to$ Bị loại bỏ. |
-| **6** | **SURROUNDING** | `HIGH` | `0.85` | Có $\ge 3$ đối tượng vây quanh 1 đối tượng mục tiêu trong bán kính $< 2.5 \times \text{body\_height}$, tạo thành đa giác bao quanh mục tiêu. | - Loại trừ đám đông đi bộ cùng hướng: kiểm tra vector vận tốc không đồng hướng về một phía. |
-| **7** | **INTRUSION** | `HIGH` | `0.82` | Vị trí bàn chân ($y_{\text{ankle}}$) và hông ($y_{\text{hip}}$) của đối tượng dâng cao liên tục qua các frame ($\Delta y_{\text{ankle}} < -40\text{ px}$) trong khi tốc độ di chuyển ngang rất thấp $< 0.5\text{ bh/s}$ VÀ hai tay vươn bám phía trên đầu. | - Loại trừ người đang chạy nhảy: Người chạy nhảy có tốc độ ngang cao và chân chạm đất theo chu kỳ. Trèo tường có tốc độ ngang gần bằng 0 và độ cao duy trì không giảm. |
-| **8** | **FALLEN** | `CRITICAL` | `0.98` | $\theta_{\text{spine}} \ge 55^\circ$ HOẶC tỷ lệ $H/W < 0.90$. Nếu xảy ra sau sự kiện `FIGHTING` trong vòng 5 giây thì gán threat score = `1.00` ("Incapacitated assault victim"). | - Khử tráo nhãn bằng bộ lọc EMA góc cột sống ($0.70 / 0.30$) và kiểm tra gập gối để không nhầm với người ngồi xổm. |
-| **9** | **HANDS_UP** | `HIGH` | `0.78` | Cả hai cổ tay đều nằm cao hơn đỉnh đầu ($y_w < y_{\text{head}}$). | - Yêu cầu cả 2 tay và duy trì $\ge 6$ frames. |
-| **10**| **RUNNING** | `HIGH` | `0.80` | Tốc độ dịch chuyển chuẩn hóa $\ge 1.75$ body-heights/sec. | - Tính toán trên chuỗi 5 frames để loại trừ giật hộp bao nhất thời. |
-| **11**| **CROUCHING** | `MEDIUM` | `0.55` | $H/W < 1.30$ VÀ $\theta_{\text{spine}} < 45^\circ$ VÀ có đầu gối gập. | - Phải có khớp gối để phân biệt với người nằm ngã. |
-| **12**| **LOITERING** | `MEDIUM/HIGH` | `0.52 / 0.72` | Dwell time $\ge 10\text{s}$ ($\ge 20\text{s}$ cho mức HIGH) trong bán kính dịch chuyển ròng nhỏ. | - Kiểm tra độ dịch chuyển ròng tính từ tâm ban đầu để không bắt nhầm người đi bộ chậm ngang qua. |
-| **13**| **NORMAL** | `LOW` | `0.10` | Mặc định không vi phạm các luật trên. | - Trạng thái an toàn chuẩn. |
+### 2.1. Sơ đồ Kiến trúc Đa phương thức Nghe - Nhìn (Multimodal AI-SOC Architecture)
 
----
+```mermaid
+flowchart TD
+    subgraph SENSORS ["Tầng Thu Nhận Dữ Liệu (Layer 1: Sensors & Buffers)"]
+        CAM["Camera Stream (RTSP / Video File / Webcam)"]
+        MIC["Microphone / ALSA (arecord) / SoundDevice / WAV Mock"]
+        
+        V_BUF["Video Ring Buffer (5s Rolling Buffer)"]
+        A_BUF["Audio Ring Buffer (5s PCM 16kHz Rolling Buffer)"]
+        
+        CAM --> V_BUF
+        MIC --> A_BUF
+    end
 
-## 4. MÁY TRẠNG THÁI TRỄ & FAST-TRACK ĐỐI VỚI HÀNH VI NGUY HIỂM
+    subgraph WORKERS ["Tầng Phân Tích Độc Lập (Layer 2: Async Analytics)"]
+        V_ANALYZE["Video Pipeline (YOLOv11 Pose + 13 Action Rules)"]
+        A_ANALYZE["Audio Pipeline (FFT / Spectral Centroid / ZCR / RMS Scream Detector)"]
+        
+        V_BUF --> V_ANALYZE
+        A_BUF --> A_ANALYZE
+    end
+
+    subgraph FUSION ["Tầng Hợp Nhất & Đánh Giá Động (Layer 3: Fusion & State Machine)"]
+        V_RES["Visual Result: SOCFrameAnalysisResult"]
+        A_RES["Audio Result: AudioAnalysisResult"]
+        
+        FUSER["Multimodal Threat Fusion Engine"]
+        STATE_MACH["Dynamic Threat State Machine (LOW / MEDIUM / HIGH / CRITICAL)"]
+        
+        V_ANALYZE --> V_RES --> FUSER
+        A_ANALYZE --> A_RES --> FUSER
+        FUSER --> STATE_MACH
+    end
+
+    subgraph HITL ["Tầng Chốt Chặn Vận Hành Viên (Layer 4: Operational HITL)"]
+        HUD["Real-Time SOC HUD (Pose Skeleton + Audio VU Meter + Flashing Threat Banner)"]
+        AUDIT["Audit Logger (Structured JSONL + Incident Log)"]
+        OP_GATE{"Threat >= HIGH ?"}
+        OPERATOR["Human Operator (Confirm / Downgrade / Dismiss)"]
+        DISPATCH["Automated Dispatch (Video + Audio Evidence Bundle)"]
+
+        STATE_MACH --> HUD
+        STATE_MACH --> AUDIT
+        STATE_MACH --> OP_GATE
+        OP_GATE -- Yes --> OPERATOR
+        OPERATOR -- CONFIRM --> DISPATCH
+    end
+```
+
+### 2.2. Sơ đồ Máy Trạng Thái Đe Dọa Âm Thanh & Hợp Nhất (Audio-Visual State Machine)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NORMAL : Khởi tạo Track ID
+    [*] --> SILENT_AMBIENT : Khởi tạo bộ đệm âm thanh
 
-    NORMAL --> CANDIDATE_STREAK : Phát hiện dấu hiệu hành vi mới
+    SILENT_AMBIENT --> AMBIENT_LEARNING : Cập nhật ngưỡng ồn nền động (EMA)
+    AMBIENT_LEARNING --> SILENT_AMBIENT : Không có đột biến âm thanh
 
-    state CANDIDATE_STREAK {
-        [*] --> STREAK_COUNTING
-        STREAK_COUNTING --> STREAK_COUNTING : Cùng candidate (streak++)
-        STREAK_COUNTING --> STREAK_RESET : Đổi candidate khác (streak=1)
+    SILENT_AMBIENT --> ACOUSTIC_SPIKE : RMS vượt ngưỡng nền (>= 18 dB)
+    
+    state ACOUSTIC_SPIKE {
+        [*] --> SPECTRAL_EVALUATION
+        SPECTRAL_EVALUATION --> SCREAM_CANDIDATE : Centroid 1.5k-4.5kHz & ZCR cao
+        SPECTRAL_EVALUATION --> GUNSHOT_CANDIDATE : Attack Time < 15ms & Crest > 14dB
+        SPECTRAL_EVALUATION --> SHOUT_CANDIDATE : Centroid 400Hz-2.5kHz & Âm lượng lớn
+        SPECTRAL_EVALUATION --> DISCARD_NOISE : Tiếng quạt / Tiếng xe cộ / Ồn trắng
     }
 
-    CANDIDATE_STREAK --> NORMAL : Không đủ streak (Khử nhiễu tức thời)
+    SCREAM_CANDIDATE --> AUDIO_CONFIRMED_SCREAM : Duy trì >= 250ms
+    GUNSHOT_CANDIDATE --> AUDIO_CONFIRMED_GUNSHOT : Đột biến tức thời 1-2 frames
+    SHOUT_CANDIDATE --> AUDIO_CONFIRMED_SHOUT : Dao động nhịp điệu
 
-    CANDIDATE_STREAK --> CRITICAL_DANGER : streak >= 6 (FALLEN, FIGHTING, WEAPON_THREAT, SNATCHING, RESTRAINING)
-    CANDIDATE_STREAK --> HIGH_ALERT : streak >= 8 (PURSUIT, SURROUNDING, INTRUSION, HANDS_UP, RUNNING)
-    CANDIDATE_STREAK --> MEDIUM_ELEVATED : streak >= 8 (CROUCHING, LOITERING)
+    AUDIO_CONFIRMED_SCREAM --> MULTIMODAL_FUSION : Bắn sự kiện âm thanh
+    AUDIO_CONFIRMED_GUNSHOT --> MULTIMODAL_FUSION
+    AUDIO_CONFIRMED_SHOUT --> MULTIMODAL_FUSION
 
-    state CRITICAL_DANGER {
-        [*] --> FAST_TRACK_COMMIT : Ghi nhận tức thời (~0.3s)
-        FAST_TRACK_COMMIT --> AUDIT_LOG_CRITICAL : Ghi nhận CRITICAL_ALERT
-        AUDIT_LOG_CRITICAL --> SOC_DISPATCH_ALERT : Đẩy còi & badge đỏ lên HUD
+    state MULTIMODAL_FUSION {
+        [*] --> CHECK_VISUAL_CORRELATION
+        CHECK_VISUAL_CORRELATION --> INSTANT_CRITICAL : Visual có FIGHTING, WEAPON_THREAT, HANDS_UP, FALLEN
+        CHECK_VISUAL_CORRELATION --> HIGH_OFFSCREEN : Visual bình thường (Tiếng hét ngoài tầm nhìn)
+        CHECK_VISUAL_CORRELATION --> ELEVATED_INVESTIGATION : Visual có RUNNING, PURSUIT
     }
-
-    CRITICAL_DANGER --> NORMAL : streak >= 12 frames (Cần bằng chứng chắc chắn để hoàn nguyên)
-    HIGH_ALERT --> NORMAL : streak >= 12 frames
 ```
 
-- **Nhóm Khẩn cấp (Fast-Track Streak = 6 frames ~ 0.3s):**
-  `FALLEN`, `FIGHTING`, `WEAPON_THREAT`, `SNATCHING`, `RESTRAINING`.
-  Nhóm này đe dọa trực tiếp tính mạng nên cần phát hiện nhanh trong vòng 300ms, đồng thời vẫn đủ 6 frames để khử nhiễu camera giật.
-- **Nhóm Cảnh báo Cao (Enter Streak = 8 frames ~ 0.4s):**
-  `PURSUIT`, `SURROUNDING`, `INTRUSION`, `HANDS_UP`, `RUNNING`, `CROUCHING`, `LOITERING`.
-- **Nhóm Hoàn nguyên An toàn (Exit Streak = 12 frames ~ 0.6s):**
-  Để chuyển từ một trạng thái nguy hiểm trở về `NORMAL`, hệ thống đòi hỏi 12 frames liên tiếp không còn bất kỳ dấu hiệu nguy hiểm nào.
+---
+
+## 3. CƠ CHẾ KỸ THUẬT PHÁT HIỆN TIẾNG LA HÉT (SCREAM DETECTION ALGORITHM)
+
+### 3.1. Đặc trưng Sinh học Âm thanh của Tiếng La Hét Con Người
+Tiếng la hét (Human Scream) khác biệt hoàn toàn với tiếng nói thường, tiếng cười hoặc tiếng còi xe nhờ các chỉ số vật lý âm thanh sau:
+
+1. **Năng lượng Hiệu dụng (Root Mean Square - RMS & Decibel):**
+   - Biên độ âm thanh đột biến cao hơn độ ồn nền thích nghi (Adaptive Ambient Floor) ít nhất $18\text{ dB}$:
+     $$\text{RMS} = \sqrt{\frac{1}{N}\sum_{i=1}^{N} x_i^2}, \quad \text{dBFS} = 20 \log_{10}(\text{RMS} + \epsilon)$$
+2. **Trọng tâm Phổ Âm (Spectral Centroid - $f_c$):**
+   - Tiếng la hét con người có trọng tâm phổ dồn mạnh vào dải tần số **$1800\text{ Hz} - 4200\text{ Hz}$** (do dây thanh quản căng cực đại và cộng hưởng khoang họng):
+     $$f_c = \frac{\sum_{k=0}^{K-1} f_k |X(k)|}{\sum_{k=0}^{K-1} |X(k)|}$$
+   - *Ngược lại:* Giọng nói thông thường có $f_c \in [300, 1200]\text{ Hz}$. Tiếng động cơ xe cộ có $f_c < 600\text{ Hz}$.
+3. **Tỷ Lệ Năng Lượng Dải Hét (Scream Band Energy Ratio - SBER):**
+   - Tỷ số giữa năng lượng trong dải $[1500, 4500]\text{ Hz}$ so với tổng năng lượng phổ:
+     $$\text{SBER} = \frac{\sum_{f \in [1500, 4500]} |X(f)|^2}{\sum_{f} |X(f)|^2 + \epsilon} \ge 0.45$$
+4. **Tỷ Lệ Băng Qua Điểm Không (Zero Crossing Rate - ZCR):**
+   - Đo độ thô ráp và tần số biến thiên cao của sóng âm:
+     $$\text{ZCR} = \frac{1}{N-1} \sum_{i=1}^{N-1} \mathbb{I}(x_i \cdot x_{i+1} < 0)$$
+   - Tiếng hét có $\text{ZCR} \ge 0.12$.
+5. **Độ Bền Thời Gian (Temporal Duration Gate):**
+   - Tiếng hét phải duy trì tối thiểu **$250\text{ ms}$** để không bị kích hoạt nhầm bởi tiếng gõ bàn phím, tiếng vỗ tay hay tiếng đóng sầm cửa.
+
+### 3.2. Cơ chế Loại trừ Báo Động Giả (Anti-False-Positive Filtering)
+- **Tiếng còi xe / Còi báo động (Siren / Horn):** Có năng lượng cao nhưng phổ là các vạch điều hòa đơn âm rất hẹp (Spectral Flatness rất thấp).
+- **Tiếng đóng cửa / Đập bàn:** Xung diễn ra cực ngắn ($< 50\text{ ms}$) $\to$ Bị bộ lọc thời lượng $\ge 250\text{ ms}$ triệt tiêu.
+- **Tiếng cười đùa bình thường:** Tần số thấp hơn, thiếu độ thô ráp (Roughness) và SBER $< 0.35$.
+- **Thích nghi ồn nền (Adaptive Noise Floor):** Nền ồn được cập nhật liên tục bằng bộ lọc Exponential Moving Average (EMA) để tự thích ứng với môi trường yên tĩnh (văn phòng) lẫn môi trường ồn ào (đường phố).
+
+---
+
+## 4. BẢNG QUY TẮC HỢP NHẤT ĐA PHƯƠNG THỨC (MULTIMODAL FUSION MATRIX)
+
+| Mã | Dấu hiệu Thị giác (Visual Pose) | Dấu hiệu Âm thanh (Acoustic Cue) | Threat Score Tổng | Threat Level | Hành động Hệ thống & SOC |
+| :-: | :--- | :--- | :---: | :---: | :--- |
+| **MM-01** | `FIGHTING` (Ẩu đả) | `SCREAM` (La hét) | **`1.00`** | **`CRITICAL`** | Đẩy cảnh báo đỏ khẩn cấp nhất, còi báo động HUD, tự động khóa video+audio buffer. |
+| **MM-02** | `HANDS_UP` (Giơ tay đầu hàng) | `SCREAM` / `GUNSHOT` | **`0.99`** | **`CRITICAL`** | Kịch bản cướp có vũ trang hoặc đe dọa con tin. Fast-track ngay lập tức. |
+| **MM-03** | `FALLEN` (Nạn nhân gục ngã) | `DISTRESS_CRY` / `SCREAM` | **`1.00`** | **`CRITICAL`** | Nạn nhân chấn thương nặng hoặc bị tấn công gục tại chỗ. Yêu cầu cứu thương khẩn cấp. |
+| **MM-04** | `WEAPON_THREAT` (Chĩa súng/dao) | `GUNSHOT` / `SCREAM` | **`1.00`** | **`CRITICAL`** | Kịch bản nổ súng hoặc đâm chém có thương vong. |
+| **MM-05** | `SNATCHING` (Cướp giật) | `SCREAM` | **`0.98`** | **`CRITICAL`** | Nạn nhân tri hô thất thanh sau khi bị cướp bứt tốc tháo chạy. |
+| **MM-06** | `PURSUIT` (Rượt đuổi) | `SCREAM` / `AGGRESSIVE_SHOUT` | **`0.95`** | **`CRITICAL`** | Đuổi bắt thù hằn, hung thủ truy sát nạn nhân. |
+| **MM-07** | `NORMAL` (Không phát hiện người) | `SCREAM` / `GUNSHOT` | **`0.78`** | **`HIGH`** | **Off-Screen Threat:** Sự cố xảy ra ngoài góc nhìn camera hoặc khu vực khuất. SOC điều hướng PTZ. |
+| **MM-08** | `LOITERING` / `CROUCHING` | `AGGRESSIVE_SHOUT` | **`0.80`** | **`HIGH`** | Nghi can rình rập và bắt đầu phát động đe dọa ngôn từ. |
+| **MM-09** | `NORMAL` | `AGGRESSIVE_SHOUT` | **`0.60`** | **`MEDIUM`** | Tranh cãi to tiếng nơi công cộng, theo dõi diễn biến. |
+| **MM-10** | Mọi hành vi nguy hiểm | Không có âm thanh (Silent) | Giữ nguyên điểm Video | Giữ nguyên điểm | Hệ thống chạy chế độ Video thuần túy (vẫn bảo đảm 100% chức năng hiện có). |
+
+---
+
+## 5. THIẾT KẾ SCHEMA DỮ LIỆU & GIAO DIỆN HÀM (DATA SCHEMA & INTERFACES)
+
+### 5.1. Data Schemas (Python Dataclasses & Enums)
+
+```python
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Any
+import numpy as np
+
+class AudioThreatType(str, Enum):
+    NONE = "NONE"
+    SCREAM = "SCREAM"                   # Tiếng la hét, thét kinh hoàng
+    GUNSHOT = "GUNSHOT"                 # Tiếng súng nổ / tiếng nổ xung kích
+    AGGRESSIVE_SHOUT = "AGGRESSIVE_SHOUT" # Tiếng cãi vã, quát tháo hung bạo
+    DISTRESS_CRY = "DISTRESS_CRY"       # Tiếng rên rỉ, kêu cứu
+    GLASS_BREAK = "GLASS_BREAK"         # Tiếng kính vỡ / va chạm đập phá
+
+@dataclass
+class AudioAnalysisResult:
+    """Kết quả phân tích một khối âm thanh (Window ~ 0.25 - 0.5s)."""
+    timestamp: float                    # Thời điểm phân tích
+    event_type: AudioThreatType         # Loại sự kiện âm thanh
+    confidence: float                   # Độ tin cậy (0.0 - 1.0)
+    threat_score: float                 # Điểm đe dọa (0.0 - 1.0)
+    rms_db: float                       # Cường độ âm thanh (dBFS)
+    spectral_centroid_hz: float         # Trọng tâm phổ (Hz)
+    scream_band_ratio: float            # Tỷ lệ năng lượng dải hét (1.5kHz - 4.5kHz)
+    zero_crossing_rate: float           # Tỷ lệ ZCR
+    duration_sec: float                 # Thời lượng duy trì của tín hiệu
+    is_threat: bool                     # Cờ báo hiệu âm thanh nguy hiểm
+    reasoning: str                      # Giải trình nguyên nhân kích hoạt
+    waveform_sample: Optional[np.ndarray] = None # Khung mẫu sóng phục vụ hiển thị/chứng thực
+
+@dataclass
+class MultimodalThreatResult:
+    """Kết quả hợp nhất đa phương thức Thị giác + Âm thanh."""
+    timestamp: float
+    threat_level: str                   # LOW | MEDIUM | HIGH | CRITICAL
+    fused_threat_score: float           # Điểm hợp nhất cuối cùng (0.0 - 1.0)
+    visual_threat_type: str             # Tên hành vi thị giác nguy hiểm nhất
+    audio_threat_type: AudioThreatType  # Loại sự kiện âm thanh
+    visual_score: float                 # Điểm thị giác
+    audio_score: float                  # Điểm âm thanh
+    fusion_rule_applied: str            # Mã quy tắc hợp nhất (ví dụ: MM-01, MM-02)
+    reasoning: str                      # Lý giải hợp nhất cho Operator
+    is_urgent_dispatch: bool            # Yêu cầu kích hoạt chốt chặn HITL khẩn
+    evidence_audio_chunk: Optional[bytes] = None # Buffer âm thanh kèm theo
+```
+
+### 5.2. Chữ Ký Hàm Core Module `urbansoc.audio`
+
+1. **`src/urbansoc/audio/microphone.py`:**
+   ```python
+   class AudioCaptureBackend:
+       """Quản lý thu nhận âm thanh đa nguồn (ALSA arecord, SoundDevice, WAV, Mock)."""
+       def __init__(self, sample_rate: int = 16000, chunk_duration_sec: float = 0.25, source_type: str = "auto", wav_path: Optional[str] = None): ...
+       def start(self) -> bool: ...
+       def read_chunk(self, timeout: float = 0.5) -> Optional[np.ndarray]: ...
+       def get_rolling_buffer(self, duration_sec: float = 5.0) -> bytes: ...
+       def stop(self) -> None: ...
+       @property
+       def is_active(self) -> bool: ...
+   ```
+
+2. **`src/urbansoc/audio/scream_detector.py`:**
+   ```python
+   class AcousticThreatDetector:
+       """Bộ phân tích phổ và phát hiện tiếng la hét, tiếng súng, tiếng quát tháo."""
+       def __init__(self, sample_rate: int = 16000, sensitivity: float = 0.85): ...
+       def process_chunk(self, audio_data: np.ndarray, timestamp: float) -> AudioAnalysisResult: ...
+       def update_ambient_floor(self, current_rms: float) -> None: ...
+       def reset(self) -> None: ...
+   ```
+
+3. **`src/urbansoc/audio/fusion.py`:**
+   ```python
+   class MultimodalThreatFuser:
+       """Động cơ hợp nhất Nghe - Nhìn và chuyển tiếp máy trạng thái."""
+       def __init__(self, audio_weight: float = 0.40): ...
+       def fuse(self, visual_result: SOCFrameAnalysisResult, audio_result: AudioAnalysisResult) -> MultimodalThreatResult: ...
+   ```
+
+---
+
+## 6. RÀNG BUỘC KỸ THUẬT & CƠ CHẾ DỰ PHÒNG (FAIL-SAFE & PERFORMANCE CONSTRAINTS)
+
+1. **Độ Trễ Phản Hồi Âm Thanh (Audio Latency):**
+   - Kích thước khung âm thanh xử lý: 4096 mẫu tại 16 kHz ($256\text{ ms}$).
+   - Thời gian tính toán FFT & trích xuất đặc trưng trên CPU: $< 5\text{ ms}$ (sử dụng thư viện `numpy` vector hóa cao độ).
+   - Tổng độ trễ từ lúc âm thanh phát ra đến khi phát hiện: $\le 300\text{ ms}$.
+2. **Cơ chế Dự Phòng Đa Tầng (Graceful Multi-Backend Fallback):**
+   - Hệ thống tự động kiểm tra theo thứ tự ưu tiên:
+     1. `sounddevice` (nếu PortAudio có sẵn trên OS).
+     2. ALSA `arecord` subprocess trực tiếp (đã kiểm chứng hoạt động tốt trên môi trường Linux hiện tại).
+     3. Tệp âm thanh đầu vào (`--audio-file test_scream.wav`).
+     4. `SilentMockAudioCapture` (Nếu không có micro vật lý hoặc bị lỗi quyền thiết bị).
+   - **Cam kết không sập (Zero-Crash Guarantee):** Nếu micro bị rút ra hoặc không có thiết bị thu âm, hệ thống chỉ ghi nhận cảnh báo Warning vào log và tiếp tục vận hành luồng Video mượt mà, không bao giờ ngắt chương trình.
+3. **Tuân Thủ Tuyệt Đối Dual HITL (AGENTS.md CD-04):**
+   - Kể cả khi tiếng súng hoặc tiếng hét đạt độ tin cậy $100\%$ ($1.00$), hệ thống **tuyệt đối không gửi lệnh điều phối ra cơ quan chức năng ngoài xã hội** nếu chưa có lệnh `CONFIRM` từ Vận hành viên SOC. Âm thanh chỉ dùng để leo thang ưu tiên trên HUD và chuẩn bị gói bằng chứng video+audio.
 
 ---
 
