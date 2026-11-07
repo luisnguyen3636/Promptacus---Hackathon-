@@ -406,8 +406,9 @@ def evaluate_single_track_behavior(
     loiter_disp_limit = max(120.0, float(pose.bbox.width) * 2.5)
 
     if dwell_time >= loiter_time_threshold and len(history) >= 20 and net_disp < loiter_disp_limit:
-        # If subject has upright normal posture at desk/station, loitering is normal seated activity, NOT High/Critical
-        if is_head_upright and aspect_ratio < 1.4:
+        has_legs = (LEFT_ANKLE in kp_map) or (RIGHT_ANKLE in kp_map) or (LEFT_KNEE in kp_map) or (RIGHT_KNEE in kp_map)
+        # If subject has upright normal posture at desk/station or webcam crop (no legs visible), presence is NORMAL
+        if is_head_upright and (not has_legs or aspect_ratio < 1.4):
             pred = BehaviorPrediction(
                 primary_behavior=BehaviorType.NORMAL,
                 confidence=0.92,

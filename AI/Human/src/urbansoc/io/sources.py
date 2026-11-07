@@ -113,6 +113,7 @@ class CameraSource:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, req_w)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, req_h)
         self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

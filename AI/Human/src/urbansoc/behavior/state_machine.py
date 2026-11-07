@@ -25,6 +25,7 @@ class TrackDebounceState:
     confirmed_threat_score: float = 0.10
     confirmed_reasoning: str = "Normal activity"
     confirmed_interacting_id: Optional[int] = None
+    confirmed_role: str = "individual"
     confirmed_since: float = 0.0
 
     candidate_behavior: Optional[BehaviorType] = None
@@ -39,7 +40,7 @@ class HysteresisDebouncer:
         self,
         enter_debounce_frames: int = 8,
         exit_debounce_frames: int = 12,
-        fast_track_debounce_frames: int = 6,
+        fast_track_debounce_frames: int = 4,
     ) -> None:
         self.enter_debounce_frames = enter_debounce_frames
         self.exit_debounce_frames = exit_debounce_frames
@@ -65,6 +66,7 @@ class HysteresisDebouncer:
             state.candidate_prediction = None
             if raw_pred.interacting_with_track_id is not None:
                 state.confirmed_interacting_id = raw_pred.interacting_with_track_id
+            state.confirmed_role = getattr(raw_pred, "role", "individual")
             return None
 
         # Candidate differs from confirmed behavior
@@ -92,6 +94,7 @@ class HysteresisDebouncer:
             state.confirmed_threat_score = raw_pred.threat_score
             state.confirmed_reasoning = raw_pred.reasoning
             state.confirmed_interacting_id = raw_pred.interacting_with_track_id
+            state.confirmed_role = getattr(raw_pred, "role", "individual")
             state.confirmed_since = curr_time
 
             # Audit event type taxonomy

@@ -26,6 +26,7 @@ class BehaviorPrediction:
     threat_score: float                      # 0.00..1.00
     reasoning: str                           # audit reasoning explanation
     interacting_with_track_id: Optional[int] = None
+    role: str = "individual"                 # "attacker", "victim", "mutual_combatant", "bystander", "individual"
 
 
 @dataclass

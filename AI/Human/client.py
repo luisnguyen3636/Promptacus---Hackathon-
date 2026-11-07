@@ -137,6 +137,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Maximum frames to stream before exiting (useful for testing)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="HTTP POST stream timeout in seconds (default: 30.0)",
+    )
     return parser.parse_args()
 
 
@@ -156,6 +162,7 @@ def main() -> int:
         address=args.address,
         headless=args.headless,
         test_action=args.test_action,
+        timeout=args.timeout,
     )
 
     print("=" * 70)

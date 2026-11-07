@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import queue
 import socket
 import threading
 import time
@@ -15,9 +16,13 @@ from urllib.parse import unquote
 import cv2
 import numpy as np
 
+from urbansoc.ai.nvidia_vlm import NvidiaVisionClient
 from urbansoc.detection.yolo_pose import YOLOPoseDetector
 from urbansoc.domain.webhook_models import CameraLocationConfig
+from urbansoc.evidence.keeper import EvidenceKeeper
 from urbansoc.server.camera_context import CameraContext, CameraContextManager
+from urbansoc.server.dashboard_html import DASHBOARD_HTML
+from urbansoc.telemetry.soc_logger import SOCLogger
 from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher, compute_forensic_sha256
 
 logger = logging.getLogger("urbansoc.server.inference_server")
@@ -49,6 +54,18 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             self._handle_get_cameras()
             return
 
+        # 1b. Real-time HTTP MJPEG Camera Streaming (/api/v1/cameras/{camera_id}/stream or /stream.mjpg)
+        if clean_path.startswith("/api/v1/cameras/") and (clean_path.endswith("/stream") or clean_path.endswith("/stream.mjpg")):
+            parts = clean_path.split("/")
+            if len(parts) >= 5:
+                camera_id = parts[4]
+                self._handle_get_camera_mjpeg_stream(camera_id)
+                return
+
+        if clean_path in ("/stream.mjpg", "/stream", "/live"):
+            self._handle_get_camera_mjpeg_stream(None)
+            return
+
         # 2. API: Get latest live visual snapshot for a specific camera
         if clean_path.startswith("/api/v1/cameras/") and clean_path.endswith("/snapshot"):
             parts = clean_path.split("/")
@@ -62,24 +79,72 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             self._handle_get_incident_image(clean_path)
             return
 
-        # 3. Web Dashboard UI
-        if clean_path in ("", "/", "/dashboard"):
-            self._handle_get_dashboard()
+        # 2c. Real-time Dashboard State and SSE Events API
+        if clean_path == "/api/v1/dashboard/state":
+            self._handle_get_dashboard_state()
+            return
+
+        if clean_path == "/api/v1/dashboard/events":
+            self._handle_get_dashboard_events()
+            return
+
+        # 2d. Structured AI Reasoning & Audit Log APIs
+        if clean_path == "/api/v1/dashboard/logs":
+            self._handle_get_dashboard_logs()
+            return
+
+        if clean_path in ("/api/v1/dashboard/logs/download", "/api/v1/dashboard/export"):
+            self._handle_download_dashboard_logs()
+            return
+
+        # 2e. Cryptographic Evidence Verification API (/api/v1/evidence/{event_id}/verify)
+        if clean_path.startswith("/api/v1/evidence/") and clean_path.endswith("/verify"):
+            self._handle_verify_evidence(clean_path)
+            return
+
+        # 3. SOC Interactive Web Dashboard & Root Info
+        if clean_path == "/dashboard":
+            self._handle_serve_dashboard()
+            return
+
+        if clean_path in ("", "/"):
+            accept = self.headers.get("Accept", "")
+            if "text/html" in accept and "application/json" not in accept and "format=json" not in self.path:
+                self._handle_serve_dashboard()
+            else:
+                self._handle_get_root_info()
             return
 
         # Fallback to standard file serving
         super().do_GET()
 
     def do_POST(self) -> None:
-        """Route POST requests: camera registration, binary frame ingestion, and incident webhooks."""
+        """Route POST requests: camera registration, binary frame ingestion, NVIDIA VLM analysis, and incident webhooks."""
         clean_path = self.path.split("?")[0].rstrip("/")
 
         if clean_path == "/api/v1/cameras/register":
             self._handle_register_camera()
             return
 
-        if clean_path == "/api/v1/ingest/frame":
+        # Support streaming directly via HTTP POST /api/v1/cameras/{camera_id}/stream
+        if clean_path.startswith("/api/v1/cameras/") and clean_path.endswith("/stream"):
+            parts = clean_path.split("/")
+            if len(parts) >= 5:
+                self.headers["X-Camera-ID"] = parts[4]
             self._handle_ingest_frame()
+            return
+
+        if clean_path in ("/api/v1/ingest/frame", "/api/v1/stream/push"):
+            self._handle_ingest_frame()
+            return
+
+        if clean_path in ("/api/v1/analyze/nvidia", "/api/v1/analyze"):
+            self._handle_nvidia_analyze()
+            return
+
+        # Operational HITL Operator Action Endpoint
+        if clean_path == "/api/v1/operator/action":
+            self._handle_operator_action()
             return
 
         # Incident webhook reception endpoint (compatible with server.py)
@@ -164,15 +229,349 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(jpeg_bytes)
 
-    def _handle_get_dashboard(self) -> None:
-        """Serve the multi-camera interactive SOC web dashboard."""
-        html = self.soc.render_dashboard_html()
-        html_bytes = html.encode("utf-8")
+    def _handle_get_camera_mjpeg_stream(self, camera_id: Optional[str] = None) -> None:
+        """Stream continuous multipart/x-mixed-replace MJPEG video frames for the specified camera or primary active camera."""
+        target_cam_id = camera_id
+        if not target_cam_id:
+            all_cams = self.soc.context_manager.get_all_contexts()
+            active_ids = [cid for cid, ctx in all_cams.items() if getattr(ctx, "is_active", False)]
+            if active_ids:
+                target_cam_id = active_ids[0]
+            elif all_cams:
+                target_cam_id = list(all_cams.keys())[0]
+            else:
+                target_cam_id = "LAPTOP_01"
+
+        # Check if caller specified max frames (e.g. for unit testing)
+        max_frames = -1
+        max_hdr = self.headers.get("X-Max-Frames")
+        if max_hdr and max_hdr.isdigit():
+            max_frames = int(max_hdr)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, pre-check=0, post-check=0, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        sent_frames = 0
+        try:
+            while True:
+                ctx = self.soc.context_manager.get(target_cam_id)
+                jpeg_bytes: Optional[bytes] = None
+                if ctx is not None:
+                    with ctx._lock:
+                        if ctx.latest_jpeg_bytes is not None:
+                            jpeg_bytes = ctx.latest_jpeg_bytes
+                        elif ctx.latest_display_frame is not None:
+                            success, encoded = cv2.imencode(".jpg", ctx.latest_display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                            if success:
+                                jpeg_bytes = encoded.tobytes()
+                                ctx.latest_jpeg_bytes = jpeg_bytes
+
+                if jpeg_bytes is None:
+                    placeholder = np.full((360, 640, 3), 20, dtype=np.uint8)
+                    cv2.putText(
+                        placeholder,
+                        f"CAM: {target_cam_id} (WAITING FOR STREAM)",
+                        (30, 180),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 180, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    success, encoded = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if success:
+                        jpeg_bytes = encoded.tobytes()
+
+                if jpeg_bytes is not None:
+                    part_header = (
+                        f"--frame\r\n"
+                        f"Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(jpeg_bytes)}\r\n"
+                        f"\r\n"
+                    ).encode("utf-8")
+                    self.wfile.write(part_header)
+                    self.wfile.write(jpeg_bytes)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+                    sent_frames += 1
+
+                if 0 < max_frames <= sent_frames:
+                    break
+
+                time.sleep(0.04)
+        except (BrokenPipeError, ConnectionResetError, socket.error):
+            # Client closed stream connection
+            return
+        except Exception as e:
+            logger.debug(f"MJPEG stream ended for {target_cam_id}: {e}")
+            return
+
+    def _handle_get_root_info(self) -> None:
+        """Serve JSON info about available camera streams, endpoints, and NVIDIA VLM status."""
+        all_cams = self.soc.context_manager.get_all_contexts()
+        cams_info = [
+            {
+                "camera_id": cid,
+                "name": ctx.config.name,
+                "status": "ONLINE" if ctx.is_active else "OFFLINE",
+                "stream_url": f"/api/v1/cameras/{cid}/stream",
+                "snapshot_url": f"/api/v1/cameras/{cid}/snapshot",
+            }
+            for cid, ctx in all_cams.items()
+        ]
+        info = {
+            "service": "URBAN SAFETY AI-SOC Camera Server",
+            "status": "online",
+            "active_cameras": len(cams_info),
+            "cameras": cams_info,
+            "endpoints": {
+                "cameras": "/api/v1/cameras",
+                "ingest_frame": "POST /api/v1/ingest/frame",
+                "analyze_nvidia_vlm": "POST /api/v1/analyze/nvidia",
+                "live_stream": "/stream.mjpg",
+            },
+            "nvidia_vlm": {
+                "configured": bool(self.soc.nvidia_vlm and self.soc.nvidia_vlm.is_configured),
+                "model": getattr(self.soc.nvidia_vlm, "model", "meta/llama-3.2-11b-vision-instruct"),
+                "base_url": getattr(self.soc.nvidia_vlm, "base_url", "https://integrate.api.nvidia.com/v1"),
+            },
+        }
+        self._send_json_response(200, info)
+
+    def _handle_serve_dashboard(self) -> None:
+        """Serve rich modern responsive SOC Dashboard HTML page."""
+        raw_html = DASHBOARD_HTML.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(html_bytes)))
+        self.send_header("Content-Length", str(len(raw_html)))
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(html_bytes)
+        self.wfile.write(raw_html)
+
+    def _handle_get_dashboard_state(self) -> None:
+        """Serve real-time dashboard state JSON."""
+        all_cams = self.soc.context_manager.get_all_contexts()
+        cams_info = [
+            {
+                "camera_id": cid,
+                "name": ctx.config.name,
+                "status": "ONLINE" if ctx.is_active else "OFFLINE",
+                "measured_fps": round(ctx.measured_fps, 1),
+                "stream_url": f"/api/v1/cameras/{cid}/stream",
+                "snapshot_url": f"/api/v1/cameras/{cid}/snapshot",
+            }
+            for cid, ctx in all_cams.items()
+        ]
+        with self.soc.state_lock:
+            latest_inc = self.soc.latest_events[-1] if self.soc.latest_events else None
+            logs = list(self.soc.recent_logs[:30])
+
+        self._send_json_response(200, {
+            "status": "online",
+            "active_cameras": len(cams_info),
+            "cameras": cams_info,
+            "latest_incident": latest_inc,
+            "recent_logs": logs,
+        })
+
+    def _handle_get_dashboard_events(self) -> None:
+        """Serve Server-Sent Events (SSE) stream for near real-time dashboard updates."""
+        import queue
+        q = queue.Queue(maxsize=50)
+        with self.soc.state_lock:
+            self.soc.sse_queues.append(q)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        init_msg = f"data: {json.dumps({'type': 'init', 'message': 'Connected to SOC Live Stream'})}\n\n".encode("utf-8")
+        self.wfile.write(init_msg)
+        self.wfile.flush()
+
+        try:
+            for _ in range(60):
+                try:
+                    data = q.get(timeout=1.5)
+                    chunk = f"data: {json.dumps({'type': 'incident', 'payload': data}, ensure_ascii=False)}\n\n".encode("utf-8")
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, socket.error):
+            pass
+        finally:
+            with self.soc.state_lock:
+                if q in self.soc.sse_queues:
+                    self.soc.sse_queues.remove(q)
+
+    def _handle_get_dashboard_logs(self) -> None:
+        """Handle GET /api/v1/dashboard/logs with query filtering."""
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+
+        sev = qs.get("severity", [None])[0]
+        cam = qs.get("camera_id", [None])[0]
+        kw = qs.get("keyword", [None])[0]
+        try:
+            limit = min(200, max(1, int(qs.get("limit", [50])[0])))
+        except (ValueError, TypeError):
+            limit = 50
+
+        logs = self.soc.soc_logger.query_logs(
+            severity=sev,
+            camera_id=cam,
+            keyword=kw,
+            limit=limit,
+        )
+        self._send_json_response(200, {
+            "status": "success",
+            "count": len(logs),
+            "filters": {
+                "severity": sev or "ALL",
+                "camera_id": cam or "ALL",
+                "keyword": kw or "",
+                "limit": limit,
+            },
+            "logs": logs,
+        })
+
+    def _handle_download_dashboard_logs(self) -> None:
+        """Handle GET /api/v1/dashboard/logs/download as downloadable text file."""
+        text_content = self.soc.soc_logger.export_logs_text(max_lines=1000)
+        resp_bytes = text_content.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(resp_bytes)))
+        self.send_header("Content-Disposition", 'attachment; filename="urban_soc_audit_log.txt"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(resp_bytes)
+
+    def _handle_verify_evidence(self, clean_path: str) -> None:
+        """Handle /api/v1/evidence/{event_id}/verify."""
+        parts = clean_path.split("/")
+        if len(parts) >= 5:
+            event_id = parts[4]
+            try:
+                pkg = self.soc.evidence_keeper.package_incident_evidence(event_id)
+                self._send_json_response(200, pkg)
+            except KeyError:
+                self._send_json_response(404, {"status": "error", "message": f"Evidence record '{event_id}' not found."})
+            except Exception as e:
+                self._send_json_response(500, {"status": "error", "message": str(e)})
+        else:
+            self._send_json_response(400, {"status": "error", "message": "Invalid evidence verification path"})
+
+    def _handle_operator_action(self) -> None:
+        """Handle POST /api/v1/operator/action (Operational HITL decisions)."""
+        length = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(length)
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+            action = str(payload.get("action", "CONFIRM_AND_DISPATCH")).strip().upper()
+            cam_id = str(payload.get("camera_id", "UNKNOWN")).strip()
+            event_id = payload.get("event_id")
+            op_id = str(payload.get("operator_id", "OPERATOR_CHIEF_01")).strip()
+            notes = payload.get("notes", "")
+
+            msg = f"Vận hành viên {op_id} đã thực hiện: [{action}] cho sự cố {event_id or cam_id}."
+            logger.info("Operational HITL Action: %s", msg)
+
+            audit_log = self.soc.soc_logger.record_audit(
+                operator_id=op_id,
+                action=action,
+                camera_id=cam_id,
+                event_id=event_id,
+                notes=notes,
+            )
+
+            self.soc.record_dashboard_event({
+                "camera_id": cam_id,
+                "action": action,
+                "severity": "AUDIT",
+                "reasoning": msg,
+                "event_id": event_id,
+                "operator_id": op_id,
+                "notes": notes,
+                "timestamp": audit_log.get("timestamp"),
+            })
+
+            self._send_json_response(200, {
+                "status": "success",
+                "action": action,
+                "operator_id": op_id,
+                "event_id": event_id,
+                "message": msg,
+                "verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            })
+        except Exception as e:
+            self._send_json_response(400, {"status": "error", "message": f"Operator action error: {e}"})
+
+    def _handle_nvidia_analyze(self) -> None:
+        """Analyze a frame image directly via NVIDIA NIM Vision API and return structured JSON."""
+        length = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(length)
+
+        content_type = self.headers.get("Content-Type", "")
+        frame_bgr: Optional[np.ndarray] = None
+        camera_id = self.headers.get("X-Camera-ID", "LAPTOP_01")
+        location = self.headers.get("X-Location", "Surveillance Sector")
+        action_hint = self.headers.get("X-Action-Hint", None)
+
+        if "application/json" in content_type:
+            try:
+                data = json.loads(raw_body.decode("utf-8"))
+                camera_id = data.get("camera_id", camera_id)
+                location = data.get("location", location)
+                action_hint = data.get("action_hint", action_hint)
+                b64_str = data.get("frame_base64") or data.get("image_base64") or data.get("image", "")
+                if "," in b64_str:
+                    b64_str = b64_str.split(",", 1)[1]
+                if b64_str:
+                    img_data = base64.b64decode(b64_str)
+                    nparr = np.frombuffer(img_data, np.uint8)
+                    frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            except Exception as e:
+                self._send_json_response(400, {"status": "error", "message": f"Invalid JSON payload: {e}"})
+                return
+        else:
+            # Raw binary JPEG
+            nparr = np.frombuffer(raw_body, np.uint8)
+            frame_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if frame_bgr is None or frame_bgr.size == 0:
+            self._send_json_response(400, {"status": "error", "message": "No valid image provided for NVIDIA VLM analysis"})
+            return
+
+        if self.soc.nvidia_vlm is None:
+            from urbansoc.ai.nvidia_vlm import NvidiaVisionClient
+            self.soc.nvidia_vlm = NvidiaVisionClient()
+
+        result = self.soc.nvidia_vlm.analyze_frame(
+            image_input=frame_bgr,
+            camera_id=camera_id,
+            location=location,
+            action_hint=action_hint,
+        )
+        response_payload = {
+            **result,
+            "status": "success",
+            "result": result,
+        }
+        self.soc.record_dashboard_event(response_payload)
+        self._send_json_response(200, response_payload)
 
     def _handle_register_camera(self) -> None:
         """Handle POST /api/v1/cameras/register."""
@@ -320,6 +719,22 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             if analysis.humans
             else "NORMAL"
         )
+        if test_action_hdr:
+            primary_action = test_action_hdr.strip().upper()
+
+        humans_summary = [
+            {
+                "track_id": h.track_id,
+                "bbox": [int(h.bbox.x1), int(h.bbox.y1), int(h.bbox.x2), int(h.bbox.y2)],
+                "behavior": h.behavior.primary_behavior.value,
+                "threat_level": h.behavior.threat_level.value,
+                "threat_score": round(h.behavior.threat_score, 2),
+                "role": getattr(h.behavior, "role", "individual"),
+                "interacting_with": h.behavior.interacting_with_track_id,
+                "reasoning": h.behavior.reasoning,
+            }
+            for h in analysis.humans
+        ]
 
         response_data = {
             "status": "processed",
@@ -330,7 +745,135 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             "highest_threat_score": round(analysis.highest_threat_score, 2),
             "primary_action": primary_action,
             "measured_fps": round(ctx.measured_fps, 1),
+            "humans": humans_summary,
         }
+
+        # NVIDIA NIM VLM Multimodal Analysis on frame (Always-on mode or on-demand/incident)
+        vlm_hdr = self.headers.get("X-Analyze-VLM", "").lower()
+        should_run_vlm = (
+            getattr(self.soc, "always_vlm", False)
+            or vlm_hdr in ("true", "1", "yes")
+            or analysis.highest_threat_score >= 0.75
+        )
+
+        if self.soc.nvidia_vlm is not None and should_run_vlm:
+            actors_hint = [
+                {
+                    "id": h["track_id"],
+                    "role": h["role"],
+                    "action": h["behavior"].lower(),
+                    "posture": h["reasoning"],
+                }
+                for h in humans_summary
+            ]
+            # Extract normalized bbox and velocity from primary track
+            h_img, w_img = frame_bgr.shape[:2]
+            primary_bbox_norm = (0.2, 0.2, 0.8, 0.8)
+            primary_vel = (0.0, 0.0)
+            if analysis.humans:
+                p_track = analysis.humans[0]
+                primary_bbox_norm = (
+                    p_track.bbox.x1 / max(1.0, w_img),
+                    p_track.bbox.y1 / max(1.0, h_img),
+                    p_track.bbox.x2 / max(1.0, w_img),
+                    p_track.bbox.y2 / max(1.0, h_img),
+                )
+                primary_vel = getattr(p_track, "velocity_vector", (0.0, 0.0))
+
+            vlm_kwargs = dict(
+                camera_id=camera_id,
+                location=ctx.config.name or "Camera Zone",
+                action_hint=primary_action,
+                actors_hint=actors_hint,
+                frame_id=ctx.frame_count,
+                bbox_norm=primary_bbox_norm,
+                velocity_vector=primary_vel,
+                yolov11_raw_actions=[primary_action],
+            )
+
+            is_mock_mode = getattr(self.soc, "mock_vlm", False) or not self.soc.nvidia_vlm.is_configured
+            sync_hdr = self.headers.get("X-Sync-VLM", "").lower() in ("true", "1", "yes")
+
+            if is_mock_mode or sync_hdr:
+                vlm_res = self.soc.nvidia_vlm.analyze_frame(
+                    image_input=frame_bgr,
+                    **vlm_kwargs,
+                )
+            else:
+                # Fast local tactical reasoning for instantaneous response (<5ms, zero camera lag)
+                vlm_res = self.soc.nvidia_vlm.analyze_frame(
+                    image_input=frame_bgr,
+                    mock_mode=True,
+                    **vlm_kwargs,
+                )
+                # Dispatch deep cloud NVIDIA NIM VLM asynchronously without blocking frame ingestion
+                self.soc.submit_vlm_task(
+                    camera_id=camera_id,
+                    frame_bgr=frame_bgr,
+                    vlm_kwargs=vlm_kwargs,
+                    base_response=response_data,
+                )
+
+            with ctx._lock:
+                ctx.latest_vlm_analysis = vlm_res
+
+            response_data["nvidia_vlm_analysis"] = vlm_res
+
+            # Integrate Section 6 schema fields into top-level response
+            if "active_camera" in vlm_res:
+                response_data["active_camera"] = vlm_res["active_camera"]
+            if "evaluated_subjects" in vlm_res:
+                response_data["evaluated_subjects"] = vlm_res["evaluated_subjects"]
+            if "operator_dashboard_directives" in vlm_res:
+                response_data["operator_dashboard_directives"] = vlm_res["operator_dashboard_directives"]
+
+            # Flatten essential VLM metadata fields directly into response JSON
+            response_data["severity"] = vlm_res.get("severity", "low")
+            response_data["action_type"] = vlm_res.get("action_type", primary_action)
+            response_data["primary_action"] = vlm_res.get("action_type", primary_action)
+            response_data["incident_status"] = vlm_res.get("incident_status", "AWAITING_OPERATOR_VERIFICATION" if vlm_res.get("severity") in ("high", "critical") else "MONITORING")
+            if "multi_camera_blind_spot_reasoning" in vlm_res:
+                response_data["multi_camera_blind_spot_reasoning"] = vlm_res["multi_camera_blind_spot_reasoning"]
+            response_data["threat_score"] = vlm_res.get("threat_score", 0.0)
+            response_data["confidence"] = vlm_res.get("confidence", 0.90)
+            response_data["situation_assessment"] = vlm_res.get("situation_assessment", {})
+            response_data["intent_prediction"] = vlm_res.get("intent_prediction", {})
+            response_data["actors"] = vlm_res.get("actors", actors_hint)
+            response_data["visual_cues"] = vlm_res.get("visual_cues", {})
+            response_data["description"] = vlm_res.get("description", "")
+            response_data["reasoning"] = vlm_res.get("reasoning", "")
+            response_data["recommended_action"] = vlm_res.get("recommended_action", "MONITOR")
+            response_data["is_urgent"] = vlm_res.get("is_urgent", False)
+            response_data["timestamp"] = vlm_res.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # Forward JSON metadata directly to Webhook Dispatcher / Test Receiver if enabled
+            if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
+                self.soc.webhook_dispatcher.dispatch_raw_payload(response_data)
+
+        # Record into Forensic Evidence Ledger (SHA-256 / HMAC / Merkle Hash Chain)
+        try:
+            evt_id = f"EVT_{int(timestamp_sec * 1000)}_{camera_id}"
+            rec = self.soc.evidence_keeper.record_evidence(
+                camera_id=camera_id,
+                frame_bgr=frame_bgr,
+                metadata=response_data,
+                event_id=evt_id,
+            )
+            response_data["event_id"] = rec.event_id
+            response_data["frame_sha256"] = rec.frame_sha256
+            response_data["chain_hash"] = rec.chain_hash
+            response_data["evidence"] = {
+                "event_id": rec.event_id,
+                "frame_sha256": rec.frame_sha256,
+                "chain_hash": rec.chain_hash,
+                "verification_status": rec.verification_status,
+            }
+        except Exception as ev_err:
+            logger.debug("Evidence recording notice: %s", ev_err)
+
+        # Broadcast live reasoning event to SOC Dashboard
+        self.soc.record_dashboard_event(response_data)
+
         self._send_json_response(200, response_data)
 
     def _handle_incident_webhook(self) -> None:
@@ -387,13 +930,16 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
 
     def _send_json_response(self, status_code: int, data: Dict[str, Any]) -> None:
         """Send JSON response with appropriate HTTP headers."""
-        resp_bytes = json.dumps(data).encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(resp_bytes)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(resp_bytes)
+        try:
+            resp_bytes = json.dumps(data).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp_bytes)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(resp_bytes)
+        except (BrokenPipeError, ConnectionResetError, socket.error):
+            pass
 
     def log_message(self, format: str, *args: Any) -> None:
         """Suppress noisy frame ingestion logging unless in debug mode."""
@@ -417,6 +963,9 @@ class InferenceServer:
         webhook_min_threat: str = "ALL",
         webhook_cooldown: float = 3.0,
         webhook_filter_noise: bool = True,
+        enable_tunnel: bool = True,
+        always_vlm: bool = False,
+        mock_vlm: bool = False,
     ) -> None:
         self.host = host
         self.port = port
@@ -425,11 +974,24 @@ class InferenceServer:
         self.conf_threshold = conf_threshold
         self.output_dir = os.path.abspath(output_dir)
         self.webhook_url = webhook_url
+        self.enable_tunnel = enable_tunnel
+        self.always_vlm = always_vlm or os.getenv("ALWAYS_ANALYZE_VLM", "").lower() in ("true", "1", "yes")
+        self.mock_vlm = mock_vlm or os.getenv("MOCK_VLM", "").lower() in ("true", "1", "yes")
 
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Context manager for multi-tenant isolation
         self.context_manager = CameraContextManager(output_dir=self.output_dir)
+
+        # Cloudflare Tunnel Manager for native remote external access
+        self.public_tunnel_url: Optional[str] = None
+        self.tunnel_manager = None
+        if self.enable_tunnel:
+            try:
+                from urbansoc.server.tunnel import CloudflareTunnelManager
+                self.tunnel_manager = CloudflareTunnelManager(local_port=self.port, local_host="127.0.0.1")
+            except Exception as e:
+                logger.warning(f"Could not initialize CloudflareTunnelManager: {e}")
 
         # Shared YOLO detector instance
         logger.info("Initializing shared YOLOv11-Pose engine on server...")
@@ -451,8 +1013,144 @@ class InferenceServer:
                 filter_noise=webhook_filter_noise,
             )
 
+        # NVIDIA VLM Client for deep multimodal vision reasoning
+        self.nvidia_vlm = NvidiaVisionClient(mock_mode=self.mock_vlm)
+
+        # Evidence Keeper for forensic cryptographic integrity
+        self.evidence_keeper = EvidenceKeeper(
+            storage_dir=os.path.join(self.output_dir, "evidence_storage")
+        )
+
+        # Structured SOC Logger for 4-layer persistent logging and in-memory log buffer
+        self.soc_logger = SOCLogger(
+            log_dir=os.path.join(self.output_dir, "logs")
+        )
+
+        # Dashboard live state & SSE
+        self.latest_events: List[Dict[str, Any]] = []
+        self.recent_logs: List[Dict[str, Any]] = []
+        self.sse_queues: List[Any] = []
+        self.state_lock = threading.Lock()
+
         self._httpd: Optional[ThreadedHTTPServer] = None
         self._server_thread: Optional[threading.Thread] = None
+
+        # Asynchronous non-blocking VLM Inference Worker (AGENTS.md CD-05 / Non-blocking Ingestion)
+        self._vlm_queue: queue.Queue = queue.Queue(maxsize=3)
+        self._vlm_stop_event = threading.Event()
+        self._vlm_worker_thread = threading.Thread(
+            target=self._vlm_worker_loop,
+            name="SOCAsyncVLMWorker",
+            daemon=True,
+        )
+        self._vlm_worker_thread.start()
+
+    def _vlm_worker_loop(self) -> None:
+        """Background thread executing deep Multimodal VLM analysis asynchronously.
+
+        Guarantees that cloud/NVIDIA NIM latency never blocks the video ingestion pipeline (AGENTS.md 3.1).
+        """
+        while not self._vlm_stop_event.is_set():
+            try:
+                task = self._vlm_queue.get(timeout=0.5)
+            except Exception:
+                continue
+
+            try:
+                camera_id = task["camera_id"]
+                ctx = self.context_manager.get(camera_id)
+                frame_bgr = task["frame_bgr"]
+                vlm_kwargs = task["vlm_kwargs"]
+                base_response = task["base_response"]
+
+                if self.nvidia_vlm is not None:
+                    vlm_res = self.nvidia_vlm.analyze_frame(image_input=frame_bgr, **vlm_kwargs)
+                    if ctx is not None:
+                        with ctx._lock:
+                            ctx.latest_vlm_analysis = vlm_res
+                            ctx.last_vlm_time = time.time()
+
+                    # Merge VLM results into dashboard event
+                    dashboard_payload = dict(base_response)
+                    dashboard_payload["nvidia_vlm_analysis"] = vlm_res
+                    dashboard_payload["severity"] = vlm_res.get("severity", dashboard_payload.get("severity", "low"))
+                    dashboard_payload["action_type"] = vlm_res.get("action_type", dashboard_payload.get("primary_action"))
+                    dashboard_payload["primary_action"] = vlm_res.get("action_type", dashboard_payload.get("primary_action"))
+                    dashboard_payload["threat_score"] = vlm_res.get("threat_score", dashboard_payload.get("threat_score", 0.0))
+                    dashboard_payload["reasoning"] = vlm_res.get("reasoning", "")
+                    dashboard_payload["description"] = vlm_res.get("description", "")
+                    dashboard_payload["recommended_action"] = vlm_res.get("recommended_action", "MONITOR")
+                    dashboard_payload["is_urgent"] = vlm_res.get("is_urgent", False)
+                    dashboard_payload["timestamp"] = vlm_res.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                    # Dispatch to dashboard and webhook
+                    self.record_dashboard_event(dashboard_payload)
+                    if self.webhook_dispatcher is not None and self.webhook_dispatcher.is_enabled:
+                        self.webhook_dispatcher.dispatch_raw_payload(dashboard_payload)
+            except Exception as e:
+                logger.warning("Asynchronous VLM worker error: %s", e)
+            finally:
+                try:
+                    self._vlm_queue.task_done()
+                except Exception:
+                    pass
+
+    def submit_vlm_task(
+        self,
+        camera_id: str,
+        frame_bgr: np.ndarray,
+        vlm_kwargs: Dict[str, Any],
+        base_response: Dict[str, Any],
+    ) -> bool:
+        """Submit frame to asynchronous VLM queue with rate limiting to prevent network/worker congestion."""
+        now = time.time()
+        ctx = self.context_manager.get(camera_id)
+        if ctx is not None:
+            # Enforce at least 1.5s sampling cooldown per camera for VLM
+            if (now - ctx.last_vlm_time) < 1.5:
+                return False
+
+        # Drop older queued task if full so worker always processes latest keyframe
+        if self._vlm_queue.full():
+            try:
+                self._vlm_queue.get_nowait()
+                self._vlm_queue.task_done()
+            except Exception:
+                pass
+
+        try:
+            self._vlm_queue.put_nowait({
+                "camera_id": camera_id,
+                "frame_bgr": frame_bgr.copy(),
+                "vlm_kwargs": vlm_kwargs,
+                "base_response": base_response,
+            })
+            if ctx is not None:
+                ctx.last_vlm_time = now
+            return True
+        except Exception:
+            return False
+
+    def record_dashboard_event(self, event_data: Dict[str, Any]) -> None:
+        """Publish real-time AI reasoning event to dashboard state, structured log, and SSE subscribers."""
+        log_item = self.soc_logger.record_ai_reasoning(event_data)
+        with self.state_lock:
+            self.latest_events.append(event_data)
+            if len(self.latest_events) > 50:
+                self.latest_events.pop(0)
+
+            self.recent_logs.insert(0, log_item)
+            if len(self.recent_logs) > 100:
+                self.recent_logs.pop()
+
+            for q in list(self.sse_queues):
+                try:
+                    q.put_nowait({
+                        "event": event_data,
+                        "log": log_item,
+                    })
+                except Exception:
+                    pass
 
     def get_local_ip(self) -> str:
         """Find local LAN IP address to display to user for laptop-to-laptop connectivity."""
@@ -464,211 +1162,6 @@ class InferenceServer:
             return ip
         except Exception:
             return "127.0.0.1"
-
-    def render_dashboard_html(self) -> str:
-        """Generate real-time multi-camera SOC web dashboard HTML/JS."""
-        local_ip = self.get_local_ip()
-        return f"""<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>URBAN SAFETY AI-SOC | Multi-Camera Grid</title>
-    <style>
-        :root {{
-            --bg-main: #090d16;
-            --bg-card: #131b2e;
-            --border-card: #202d4a;
-            --text-main: #f1f5f9;
-            --text-sub: #94a3b8;
-            --accent-cyan: #06b6d4;
-            --accent-green: #10b981;
-            --accent-amber: #f59e0b;
-            --accent-rose: #f43f5e;
-            --accent-purple: #8b5cf6;
-        }}
-        * {{ margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-        body {{ background: var(--bg-main); color: var(--text-main); min-height: 100vh; padding: 20px; }}
-        header {{
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 16px 24px; background: var(--bg-card); border: 1px solid var(--border-card);
-            border-radius: 12px; margin-bottom: 24px;
-        }}
-        .brand {{ display: flex; align-items: center; gap: 14px; }}
-        .brand-badge {{ background: var(--accent-cyan); color: #000; font-weight: 800; padding: 6px 12px; border-radius: 6px; font-size: 13px; }}
-        .brand-title {{ font-size: 20px; font-weight: 700; letter-spacing: 0.5px; }}
-        .header-stats {{ display: flex; align-items: center; gap: 20px; }}
-        .stat-pill {{ background: #1e293b; padding: 6px 14px; border-radius: 20px; font-size: 13px; border: 1px solid #334155; }}
-        .stat-pill strong {{ color: var(--accent-cyan); }}
-
-        .instructions {{
-            background: #0f172a; border-left: 4px solid var(--accent-cyan);
-            padding: 14px 20px; border-radius: 8px; margin-bottom: 24px; font-size: 14px; line-height: 1.6;
-        }}
-        .code-block {{ background: #020617; padding: 8px 12px; border-radius: 6px; font-family: monospace; color: var(--accent-cyan); display: inline-block; margin-top: 6px; }}
-
-        .camera-grid {{
-            display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-            gap: 20px;
-        }}
-        .camera-card {{
-            background: var(--bg-card); border: 1px solid var(--border-card);
-            border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.4); transition: transform 0.2s, border-color 0.2s;
-        }}
-        .camera-card:hover {{ transform: translateY(-2px); border-color: #3b82f6; }}
-        .card-header {{
-            padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;
-            background: #101726; border-bottom: 1px solid var(--border-card);
-        }}
-        .cam-name {{ font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }}
-        .status-dot {{ width: 10px; height: 10px; border-radius: 50%; background: #64748b; }}
-        .status-dot.online {{ background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }}
-
-        .preview-container {{
-            position: relative; width: 100%; aspect-ratio: 4/3; background: #000;
-            display: flex; align-items: center; justify-content: center; overflow: hidden;
-        }}
-        .preview-img {{ width: 100%; height: 100%; object-fit: contain; }}
-        .threat-pill {{
-            position: absolute; top: 12px; right: 12px;
-            padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 12px;
-            text-transform: uppercase; letter-spacing: 0.5px;
-        }}
-        .threat-LOW {{ background: rgba(16, 185, 129, 0.25); color: #34d399; border: 1px solid #10b981; }}
-        .threat-MEDIUM {{ background: rgba(245, 158, 11, 0.25); color: #fbbf24; border: 1px solid #f59e0b; }}
-        .threat-HIGH {{ background: rgba(249, 115, 22, 0.25); color: #fb923c; border: 1px solid #f97316; }}
-        .threat-CRITICAL {{ background: rgba(244, 63, 94, 0.35); color: #fda4af; border: 1px solid #f43f5e; animation: pulse 1s infinite; }}
-
-        @keyframes pulse {{
-            0% {{ transform: scale(1); }}
-            50% {{ transform: scale(1.05); }}
-            100% {{ transform: scale(1); }}
-        }}
-
-        .card-body {{ padding: 14px 16px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }}
-        .info-row {{ display: flex; justify-content: space-between; }}
-        .info-label {{ color: var(--text-sub); }}
-        .info-value {{ font-weight: 500; }}
-        .action-highlight {{ color: var(--accent-cyan); font-weight: 700; }}
-
-        .empty-placeholder {{
-            text-align: center; padding: 60px 20px; color: var(--text-sub);
-            background: var(--bg-card); border-radius: 12px; border: 1px dashed var(--border-card);
-        }}
-    </style>
-</head>
-<body>
-    <header>
-        <div class="brand">
-            <span class="brand-badge">SOC CORE</span>
-            <span class="brand-title">URBAN SAFETY AI-SOC — MULTI-CAMERA CENTRAL SERVER</span>
-        </div>
-        <div class="header-stats">
-            <div class="stat-pill">Mạng LAN IP: <strong>{local_ip}:{self.port}</strong></div>
-            <div class="stat-pill">Cameras: <strong id="cam-count">0</strong></div>
-            <div class="stat-pill" id="clock">--:--:--</div>
-        </div>
-    </header>
-
-    <div class="instructions">
-        💡 <strong>Hướng dẫn kết nối các Laptop khác làm Camera biên:</strong><br/>
-        Mở Terminal trên bất kỳ chiếc laptop nào khác trong cùng mạng Wi-Fi và chạy lệnh:
-        <br/>
-        <div class="code-block">python3 client.py --server-url http://{local_ip}:{self.port} --camera 0 --camera-id LAPTOP_01 --camera-name "Laptop Cổng Đông"</div>
-    </div>
-
-    <div id="camera-grid" class="camera-grid">
-        <div class="empty-placeholder">
-            <h3>Đang quét các Camera kết nối...</h3>
-            <p style="margin-top: 8px;">Chưa có chiếc Laptop nào gửi luồng video. Hãy chạy script client trên laptop khác để bắt đầu!</p>
-        </div>
-    </div>
-
-    <script>
-        function updateClock() {{
-            document.getElementById('clock').textContent = new Date().toLocaleTimeString('vi-VN');
-        }}
-        setInterval(updateClock, 1000);
-        updateClock();
-
-        let knownCameras = new Set();
-
-        async function fetchCameraStatus() {{
-            try {{
-                const resp = await fetch('/api/v1/cameras');
-                if (!resp.ok) return;
-                const data = await resp.json();
-                const cameras = data.cameras || [];
-
-                document.getElementById('cam-count').textContent = cameras.length;
-                const grid = document.getElementById('camera-grid');
-
-                if (cameras.length === 0) {{
-                    grid.innerHTML = `
-                        <div class="empty-placeholder" style="grid-column: 1 / -1;">
-                            <h3>Đang chờ tín hiệu từ Laptop Client...</h3>
-                            <p style="margin-top: 8px;">Khởi động client trên laptop khác để hiển thị trực tiếp tại đây.</p>
-                        </div>`;
-                    return;
-                }}
-
-                let html = '';
-                const now = Date.now();
-
-                cameras.forEach(cam => {{
-                    const isOnline = (cam.status === 'ONLINE');
-                    const threat = cam.highest_threat || 'LOW';
-                    const snapUrl = `/api/v1/cameras/${{encodeURIComponent(cam.camera_id)}}/snapshot?t=${{now}}`;
-
-                    html += `
-                    <div class="camera-card">
-                        <div class="card-header">
-                            <div class="cam-name">
-                                <div class="status-dot ${{isOnline ? 'online' : ''}}"></div>
-                                ${{cam.name || cam.camera_id}}
-                            </div>
-                            <span style="font-size: 11px; color: #64748b; font-family: monospace;">${{cam.camera_id}}</span>
-                        </div>
-                        <div class="preview-container">
-                            <img class="preview-img" src="${{snapUrl}}" alt="Camera Stream" loading="lazy">
-                            <div class="threat-pill threat-${{threat}}">${{threat}}</div>
-                        </div>
-                        <div class="card-body">
-                            <div class="info-row">
-                                <span class="info-label">Hành vi chính:</span>
-                                <span class="info-value action-highlight">${{cam.primary_action || 'NORMAL'}}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Số người trong khung:</span>
-                                <span class="info-value">${{cam.human_count}}</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Tốc độ khung hình:</span>
-                                <span class="info-value">${{cam.fps}} FPS (${{cam.total_frames}} frames)</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Vị trí:</span>
-                                <span class="info-value">${{cam.location ? cam.location.address : 'N/A'}}</span>
-                            </div>
-                        </div>
-                    </div>`;
-                }});
-
-                grid.innerHTML = html;
-
-            }} catch (err) {{
-                console.error("Error fetching camera status:", err);
-            }}
-        }}
-
-        // Poll camera status and snapshots every 1.5 seconds
-        setInterval(fetchCameraStatus, 1500);
-        fetchCameraStatus();
-    </script>
-</body>
-</html>
-"""
 
     def start(self, blocking: bool = True) -> None:
         """Start the threaded intermediate inference server."""
@@ -684,20 +1177,40 @@ class InferenceServer:
         self._httpd.inference_server = self
         local_ip = self.get_local_ip()
 
-        print("=" * 76)
-        print("🌐 [URBAN SAFETY AI-SOC] CENTRAL MULTI-CAMERA INFERENCE SERVER RUNNING")
-        print("=" * 76)
-        print(f"• Server Listening: http://{self.host}:{self.port}")
-        print(f"• LAN Dashboard:    http://{local_ip}:{self.port}")
-        print(f"• Status API:       http://{local_ip}:{self.port}/api/v1/cameras")
-        print(f"• Frame Ingestion:  POST http://{local_ip}:{self.port}/api/v1/ingest/frame")
-        print(f"• Model Weights:    {self.model_weights} (Device: {self.detector.device})")
-        print(f"• Output Directory: {self.output_dir}/")
+        # Start Cloudflare Tunnel if enabled
+        if self.tunnel_manager is not None:
+            print("🌐 [Cloudflare Tunnel] Đang tự động kết nối Quick Tunnel...")
+            self.public_tunnel_url = self.tunnel_manager.start(timeout_seconds=12.0)
+
+        vlm_key_status = "Đã cấu hình (NVIDIA_API_KEY)" if self.nvidia_vlm.api_key else "Chưa có key (Fallback MOCK mode)"
+
+        print("=" * 78)
+        print("📹 [URBAN SAFETY AI-SOC] CENTRAL CAMERA INFERENCE & NVIDIA VLM SERVER")
+        print("=" * 78)
+        print(f"• Server Listening:   http://{self.host}:{self.port}")
+        print(f"• LAN Status URL:     http://{local_ip}:{self.port}/api/v1/cameras")
+        print(f"• Frame Ingestion:    POST http://{local_ip}:{self.port}/api/v1/ingest/frame")
+        print(f"• NVIDIA VLM API:     POST http://{local_ip}:{self.port}/api/v1/analyze/nvidia")
+        print(f"• NVIDIA Model:       {self.nvidia_vlm.model} ({vlm_key_status})")
+        print(f"• VLM Analysis Mode:  {'ALWAYS-ON (Phân tích mọi request frame)' if self.always_vlm else 'ON-DEMAND'}")
+        print(f"• Live MJPEG Stream:  http://{local_ip}:{self.port}/api/v1/cameras/LAPTOP_01/stream")
+        print(f"• Direct Short Stream:http://{local_ip}:{self.port}/stream.mjpg")
+        if self.public_tunnel_url:
+            print("------------------------------------------------------------------------------")
+            print("🌍 PUBLIC CLOUDFLARE TUNNEL (TRUY CẬP TỪ MỌI NƠI QUA INTERNET):")
+            print(f"• 🔗 Public Base URL:   {self.public_tunnel_url}")
+            print(f"• 📹 Public Stream:     {self.public_tunnel_url}/api/v1/cameras/LAPTOP_01/stream")
+            print(f"• ⚡ Direct Short Stream:{self.public_tunnel_url}/stream.mjpg")
+            print(f"• 🧠 Public VLM API:    POST {self.public_tunnel_url}/api/v1/analyze/nvidia")
+            print("------------------------------------------------------------------------------")
+        print(f"• Local YOLO Model:   {self.model_weights} (Device: {self.detector.device})")
+        print(f"• Output Directory:   {self.output_dir}/")
         if self.webhook_url:
-            print(f"• Webhook Forward:  {self.webhook_url} (Auto-Dispatched to AI Model)")
-        print("=" * 76)
-        print(f"👉 Để kết nối Laptop khác, chạy trên laptop đó:")
-        print(f"   python3 client.py --server-url http://{local_ip}:{self.port} --camera 0 --camera-id LAPTOP_01\n")
+            print(f"• Webhook Forward:    {self.webhook_url}")
+        print("=" * 78)
+        print(f"👉 Để khởi động camera client gửi video về server:")
+        print(f"   ./start.sh")
+        print(f"   hoặc: ./start.sh client --camera 0 --camera-id LAPTOP_01\n")
 
         if blocking:
             try:
@@ -716,10 +1229,13 @@ class InferenceServer:
 
     def stop(self) -> None:
         """Gracefully shut down the server and worker threads."""
+        self._vlm_stop_event.set()
         if self._httpd is not None:
             self._httpd.shutdown()
             self._httpd.server_close()
             self._httpd = None
+        if self.tunnel_manager is not None:
+            self.tunnel_manager.stop()
         if self.webhook_dispatcher is not None:
             self.webhook_dispatcher.close()
         logger.info("InferenceServer shut down cleanly.")
