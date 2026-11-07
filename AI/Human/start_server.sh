@@ -15,6 +15,9 @@
 #   4. Chạy với device CPU/CUDA cụ thể:
 #      ./start_server.sh 8000 --device cuda
 #
+#   5. Chạy kết nối sang Test Receiver Server (Port 9000):
+#      ./start_server.sh 8000 --webhook-forward-url http://127.0.0.1:9000/api/v1/test/receive
+#
 # Cấu hình API Key NVIDIA VLM:
 #   - Đặt NVIDIA_API_KEY=nvapi-... vào file .env trong thư mục hiện tại.
 #   - Model mặc định: meta/llama-3.2-11b-vision-instruct (tùy chỉnh qua NVIDIA_MODEL trong .env)

@@ -111,6 +111,12 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
         default=True,
         help="Enable automatic Cloudflare Tunnel for public remote access (default: True)",
     )
+    parser.add_argument(
+        "--always-vlm",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Always analyze every incoming camera request with NVIDIA VLM (default: True)",
+    )
     return parser.parse_args(args)
 
 
@@ -130,6 +136,7 @@ def main() -> int:
         output_dir=args.output_dir,
         webhook_url=webhook_url,
         enable_tunnel=bool(args.tunnel),
+        always_vlm=bool(args.always_vlm),
     )
     server.start(blocking=True)
     return 0

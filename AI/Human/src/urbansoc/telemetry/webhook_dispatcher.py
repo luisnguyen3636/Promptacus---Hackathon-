@@ -693,6 +693,22 @@ class WebhookDispatcher:
                 logger.error("Failed to enqueue event %s: queue contention", event_id)
                 return False
 
+    def dispatch_raw_payload(self, payload: Dict[str, Any]) -> bool:
+        """Enqueue arbitrary raw JSON metadata payload for non-blocking asynchronous dispatch."""
+        if not self.is_enabled:
+            return False
+        try:
+            self.queue.put_nowait(payload)
+            return True
+        except queue.Full:
+            self.dropped_count += 1
+            try:
+                _ = self.queue.get_nowait()
+                self.queue.put_nowait(payload)
+                return True
+            except (queue.Empty, queue.Full):
+                return False
+
     def _satisfies_min_threat(self, threat_level: ThreatLevel) -> bool:
         """Check if threat_level meets the configured minimum filter."""
         if self.min_threat_level == "ALL":

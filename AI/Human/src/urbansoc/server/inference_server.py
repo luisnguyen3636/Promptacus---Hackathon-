@@ -519,9 +519,13 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             "humans": humans_summary,
         }
 
-        # Optional NVIDIA NIM VLM Multimodal Analysis on frame
+        # NVIDIA NIM VLM Multimodal Analysis on frame (Always-on mode or on-demand/incident)
         vlm_hdr = self.headers.get("X-Analyze-VLM", "").lower()
-        should_run_vlm = vlm_hdr in ("true", "1", "yes") or analysis.highest_threat_score >= 0.75
+        should_run_vlm = (
+            getattr(self.soc, "always_vlm", False)
+            or vlm_hdr in ("true", "1", "yes")
+            or analysis.highest_threat_score >= 0.75
+        )
 
         if self.soc.nvidia_vlm is not None and should_run_vlm:
             actors_hint = [
@@ -533,13 +537,30 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 }
                 for h in humans_summary
             ]
-            response_data["nvidia_vlm_analysis"] = self.soc.nvidia_vlm.analyze_frame(
+            vlm_res = self.soc.nvidia_vlm.analyze_frame(
                 image_input=frame_bgr,
                 camera_id=camera_id,
                 location=ctx.config.name or "Camera Zone",
                 action_hint=primary_action,
                 actors_hint=actors_hint,
             )
+            response_data["nvidia_vlm_analysis"] = vlm_res
+            # Flatten essential VLM metadata fields directly into response JSON
+            response_data["severity"] = vlm_res.get("severity", "low")
+            response_data["action_type"] = vlm_res.get("action_type", primary_action)
+            response_data["threat_score"] = vlm_res.get("threat_score", 0.0)
+            response_data["confidence"] = vlm_res.get("confidence", 0.90)
+            response_data["actors"] = vlm_res.get("actors", actors_hint)
+            response_data["visual_cues"] = vlm_res.get("visual_cues", {})
+            response_data["description"] = vlm_res.get("description", "")
+            response_data["reasoning"] = vlm_res.get("reasoning", "")
+            response_data["recommended_action"] = vlm_res.get("recommended_action", "MONITOR")
+            response_data["is_urgent"] = vlm_res.get("is_urgent", False)
+            response_data["timestamp"] = vlm_res.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # Forward JSON metadata directly to Webhook Dispatcher / Test Receiver if enabled
+            if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
+                self.soc.webhook_dispatcher.dispatch_raw_payload(response_data)
 
         self._send_json_response(200, response_data)
 
@@ -628,6 +649,7 @@ class InferenceServer:
         webhook_cooldown: float = 3.0,
         webhook_filter_noise: bool = True,
         enable_tunnel: bool = True,
+        always_vlm: bool = False,
     ) -> None:
         self.host = host
         self.port = port
@@ -637,6 +659,7 @@ class InferenceServer:
         self.output_dir = os.path.abspath(output_dir)
         self.webhook_url = webhook_url
         self.enable_tunnel = enable_tunnel
+        self.always_vlm = always_vlm or os.getenv("ALWAYS_ANALYZE_VLM", "").lower() in ("true", "1", "yes")
 
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -719,6 +742,7 @@ class InferenceServer:
         print(f"• Frame Ingestion:    POST http://{local_ip}:{self.port}/api/v1/ingest/frame")
         print(f"• NVIDIA VLM API:     POST http://{local_ip}:{self.port}/api/v1/analyze/nvidia")
         print(f"• NVIDIA Model:       {self.nvidia_vlm.model} ({vlm_key_status})")
+        print(f"• VLM Analysis Mode:  {'ALWAYS-ON (Phân tích mọi request frame)' if self.always_vlm else 'ON-DEMAND'}")
         print(f"• Live MJPEG Stream:  http://{local_ip}:{self.port}/api/v1/cameras/LAPTOP_01/stream")
         print(f"• Direct Short Stream:http://{local_ip}:{self.port}/stream.mjpg")
         if self.public_tunnel_url:
