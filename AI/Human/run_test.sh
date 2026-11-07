@@ -68,9 +68,14 @@ case "$MODE" in
         "$PYTHON_BIN" run_system.py --test-action KNIFE_THREAT
         ;;
 
+    post|test-endpoint)
+        echo -e "\n🌐 Gửi test POST request trực tiếp tới Endpoint Sự Cố (UrbanStrike)..."
+        "$PYTHON_BIN" scripts/test_post_endpoint.py
+        ;;
+
     *)
         echo "Lựa chọn không hợp lệ: $MODE"
-        echo "Sử dụng: ./run_test.sh [unit | live | test-weapon | test-fallen | test-knife]"
+        echo "Sử dụng: ./run_test.sh [unit | live | test-weapon | test-fallen | test-knife | post]"
         exit 1
         ;;
 esac
