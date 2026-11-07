@@ -1,5 +1,5 @@
 # TÀI LIỆU ĐẶC TẢ KỸ THUẬT (TECHNICAL SPECIFICATION)
-## URBAN SAFETY AI-SOC: KIẾN TRÚC CLIENT - SERVER ĐA CAMERA VỚI MÁY CHỦ SUY LUẬN TRUNG GIAN (MULTI-CAMERA CLIENT-SERVER ARCHITECTURE WITH CENTRALIZED AI INFERENCE INTERMEDIARY)
+## URBAN SAFETY AI-SOC: MÔ HÌNH CLIENT - SERVER ĐA LAPTOP/CAMERA VỚI MÁY CHỦ SUY LUẬN TRUNG GIAN (MULTI-LAPTOP CLIENT-SERVER AI-SOC WITH CENTRALIZED INFERENCE SERVER)
 **Mã đặc tả:** `SPEC-URBANSOC-MULTICAM-06`  
 **Dự án:** Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety AI-SOC)  
 **Phương pháp luận:** Spec-Driven Development (SDD) & Strict Human-in-the-Loop (AGENTS.md)  
@@ -8,165 +8,117 @@
 
 ---
 
-## 1. TỔNG QUAN YÊU CẦU & BỐI CẢNH TRIỂN KHAI
+## 1. TỔNG QUAN YÊU CẦU & KỊCH BẢN TRIỂN KHAI THỰC TẾ
 
-### 1.1. Yêu cầu từ Principal Architect
-> *"dựa vào cấu trúc sẵn có hãy thiết lập làm sao để có thể deploy lên nhiều camera với mô hình client server với 1 server làm trung gian để chạy model detect"*
+### 1.1. Yêu cầu Cụ Thể Từ Lead Developer
+> *"không cần chạy trên các thiết bị cảm ứng camera, chỉ cần chạy trên chiếc laptop khác"*
 
-### 1.2. Thách Thức Kỹ Thuật Khi Triển Khai Thực Tế
-1. **Chi phí Phần cứng Biên (Edge Cost Bottleneck):**
-   - Các điểm giám sát thực tế (cột đèn, cổng trường, ngã tư, công viên) sử dụng camera IP, Raspberry Pi, Jetson Nano hoặc mini PC giá rẻ. Các thiết bị này **không đủ tài nguyên GPU** để chạy đồng thời mô hình lớn YOLOv11-Pose + phân tích động học 13 hành vi nguy hiểm.
-2. **Quản lý Tập trung & Cách ly Đa Camera (Multi-Tenant Isolation):**
-   - Nếu gom nhiều luồng camera về một server, phải đảm bảo **mã đối tượng (Track ID)** của Camera 1 không bị xung đột hoặc lẫn lộn với Camera 2. Mỗi camera bắt buộc phải có ngữ cảnh theo vết (`CameraContext`), lịch sử động học và máy trạng thái độc lập.
-3. **Nghẽn Băng Thông & Độ Trễ (Latency & Backpressure):**
-   - Khi có nhiều camera gửi luồng video liên tục, server trung gian phải có cơ chế bộ đệm vòng (Ring Buffer) và cơ chế tự động bỏ khung hình cũ (Adaptive Frame Dropping) để luôn bảo đảm thời gian thực, độ trễ xử lý $\le 150\text{ms}$.
+### 1.2. Kịch Bản Triển Khai Thực Tế (Laptop-to-Laptop Deployment)
+Hệ thống được thiết kế để triển khai cực kỳ thuận tiện giữa **2 hoặc nhiều chiếc Laptop/PC kết nối cùng mạng Wi-Fi hoặc mạng LAN**:
+
+1. **Laptop Máy Chủ AI (Central AI-SOC Server):**
+   - Đóng vai trò là **Máy chủ Suy Luận Trung Gian (Intermediate Inference Server)**.
+   - Nạp mô hình AI YOLOv11-Pose (sử dụng GPU/CPU của máy chủ).
+   - Lắng nghe kết nối mạng (mặc định: port `8000`).
+   - Quản lý đồng thời $N$ camera gửi về, cấp phát từng `CameraContext` riêng biệt (đảm bảo Track ID của Laptop 1 không bị lẫn với Laptop 2).
+   - Hiển thị màn hình giám sát tập trung (Multi-Camera Grid Web Dashboard) trên trình duyệt.
+   - Khi bất kỳ Laptop nào phát hiện nguy hiểm, Server tự động đóng gói sự kiện kèm mã băm **Forensic SHA-256 (Raw Bytes + Timestamp)** và trọn vẹn 17 keypoints để bắn Webhook cảnh báo.
+
+2. **Laptop Client Biên (Edge Laptop Camera Clients):**
+   - Chạy trên **các chiếc Laptop khác** trong cùng mạng (Laptop 1, Laptop 2, ...).
+   - **Cực kỳ nhẹ nhàng (Zero-AI footprint):** Không cần GPU, không cần PyTorch hay Ultralytics YOLO! Chỉ cần cài đặt `opencv-python` và `requests`.
+   - Mở Webcam tích hợp của laptop (hoặc webcam USB/file video) bằng 1 câu lệnh duy nhất:
+     ```bash
+     python3 client.py --server-url http://192.168.1.50:8000 --camera 0 --camera-id LAPTOP_01 --camera-name "Laptop Vinh - Cổng Đông"
+     ```
+   - Nén khung hình JPEG và gửi qua mạng Wi-Fi/LAN lên Máy Chủ Trung Gian với độ trễ thấp $\le 100\text{ms}$.
+   - Tự động kết nối lại (Auto-reconnect) nếu Wi-Fi bị chập chờn.
 
 ---
 
-## 2. KIẾN TRÚC HỆ THỐNG ĐA CAMERA (CLIENT - SERVER ARCHITECTURE)
+## 2. KIẾN TRÚC LUỒNG DỮ LIỆU ĐA LAPTOP (MERMAID)
 
 ```mermaid
 flowchart TD
-    subgraph EDGE_LAYER ["Tầng Ngoại Vi (Edge Camera Clients)"]
-        CAM1["Edge Client 1 (CAM_01 - Cổng Đông)<br/>Lightweight Frame Grabber"]
-        CAM2["Edge Client 2 (CAM_02 - Phố Đi Bộ)<br/>Lightweight Frame Grabber"]
-        CAMN["Edge Client N (CAM_N - Bến Xe)<br/>Lightweight Frame Grabber"]
+    subgraph CLIENT_LAPTOPS ["Các Chiếc Laptop Client (Chỉ Cần Cài OpenCV, Không Cần GPU)"]
+        LAP1["Laptop 1 (Webcam 0)<br/>python3 client.py --camera-id LAPTOP_01"]
+        LAP2["Laptop 2 (Webcam 0)<br/>python3 client.py --camera-id LAPTOP_02"]
+        LAPN["Laptop N (Webcam 0)<br/>python3 client.py --camera-id LAPTOP_0N"]
     end
 
-    subgraph NETWORK ["Mạng Truyền Dẫn (LAN / 4G / VPN)"]
-        STREAM["HTTP POST / Multipart Raw Stream<br/>Headers: X-Camera-ID, X-Timestamp-Ms"]
+    subgraph WI_FI_LAN ["Mạng Nội Bộ Wi-Fi / LAN (HTTP Binary Stream)"]
+        STREAM["POST http://<IP_SERVER>:8000/api/v1/ingest/frame<br/>Headers: X-Camera-ID, X-Timestamp-Ms"]
     end
 
-    subgraph CENTRAL_SERVER ["Tầng Máy Chủ Suy Luận Trung Gian (Intermediate AI Server)"]
-        INGEST["Multi-Stream Ingestor & Router"]
+    subgraph SERVER_LAPTOP ["Laptop Máy Chủ Trung Gian (Central AI Server - Port 8000)"]
+        INGEST["Multi-Camera Stream Router"]
         
-        subgraph CONTEXTS ["Ngữ Cảnh Độc Lập Cho Từng Camera (Isolated CameraContext)"]
-            CTX1["Context CAM_01<br/>ByteTrack + Kinematics + State Machine"]
-            CTX2["Context CAM_02<br/>ByteTrack + Kinematics + State Machine"]
-            CTXN["Context CAM_N<br/>ByteTrack + Kinematics + State Machine"]
+        subgraph CONTEXTS ["Ngữ Cảnh Tách Biệt Cho Từng Laptop (Isolated CameraContext)"]
+            CTX1["Context LAPTOP_01<br/>ByteTrack + Kinematics + Rules"]
+            CTX2["Context LAPTOP_02<br/>ByteTrack + Kinematics + Rules"]
+            CTXN["Context LAPTOP_0N<br/>ByteTrack + Kinematics + Rules"]
         end
         
-        YOLO["Centralized YOLOv11-Pose Model Pool<br/>(Shared High-Performance GPU/CPU Inference)"]
+        YOLO["Shared YOLOv11-Pose Engine<br/>(Chạy tập trung trên GPU máy chủ)"]
     end
 
-    subgraph DISPATCH_LAYER ["Tầng Điều Phối & Giám Sát SOC"]
-        WEB_HUD["Multi-Camera SOC Grid Dashboard (Web UI)"]
-        WEBHOOK["Forensic Webhook Dispatcher<br/>(SHA-256 + 17 Keypoints + Telemetry)"]
-        SOC_OP["Human Operator (HITL Verification)"]
+    subgraph SOC_OUTPUT ["Đầu Ra Giám Sát & Điều Phối"]
+        DASH["Giao Diện Web Đa Camera (http://localhost:8000)"]
+        WEBHOOK["Forensic Webhook (SHA-256 + 17 Keypoints)"]
+        OPERATOR["Vận Hành Viên SOC (HITL Verification)"]
     end
 
-    CAM1 --> STREAM
-    CAM2 --> STREAM
-    CAMN --> STREAM
+    LAP1 --> STREAM
+    LAP2 --> STREAM
+    LAPN --> STREAM
     STREAM --> INGEST
     INGEST --> YOLO
     YOLO --> CTX1
     YOLO --> CTX2
     YOLO --> CTXN
-    CTX1 --> WEB_HUD
-    CTX2 --> WEB_HUD
-    CTXN --> WEB_HUD
+    CTX1 --> DASH
+    CTX2 --> DASH
+    CTXN --> DASH
     CTX1 --> WEBHOOK
     CTX2 --> WEBHOOK
     CTXN --> WEBHOOK
-    WEBHOOK --> SOC_OP
+    WEBHOOK --> OPERATOR
 ```
 
 ---
 
-## 3. CƠ CHẾ CÁCH LY ĐA CAMERA TRÊN SERVER TRUNG GIAN
+## 3. GIAO DIỆN HÀM & CHỮ KÝ API
 
-Mỗi camera kết nối vào Server trung gian sẽ được cấp phát một **`CameraContext`** riêng biệt:
-
+### 3.1. Phía Laptop Client (`client.py` & `src/urbansoc/client/edge_client.py`)
 ```python
-class CameraContext:
-    """Ngữ cảnh cách ly hoàn toàn cho từng camera trên Server trung gian."""
-    camera_id: str
-    config: CameraLocationConfig
-    behavior_engine: BehaviorEngine      # Bộ phân tích 13 luật và Hysteresis Debouncer độc lập
-    throttler: EventThrottler            # Bộ lọc chống bão và cooldown độc lập
-    evidence_recorder: EvidenceClipRecorder # Bộ đệm 5s video bằng chứng riêng
-    last_frame_time: float
-    fps: float
-    latest_analysis: Optional[SOCFrameAnalysisResult]
-    latest_frame: Optional[np.ndarray]
-    is_active: bool
+class EdgeCameraClient:
+    """Client chạy trên laptop khác để đọc webcam và truyền về server trung gian."""
+    def __init__(
+        self,
+        server_url: str,
+        camera_id: str = "LAPTOP_01",
+        camera_name: str = "Laptop Webcam",
+        camera_index: Union[int, str] = 0,
+        fps: float = 15.0,
+        resolution: Tuple[int, int] = (640, 480),
+        quality: int = 75,
+        lat: float = 10.776889,
+        lon: float = 106.700806,
+        address: str = "Laptop Client",
+    ) -> None: ...
+
+    def register(self) -> bool: ...
+    def stream_loop(self) -> None: ...
+    def stop(self) -> None: ...
 ```
 
-**Lợi ích kiến trúc:**
-- **Không va chạm ID:** Đối tượng #1 ở CAM_01 và Đối tượng #1 ở CAM_02 được phân tích trong 2 không gian tọa độ và chuỗi thời gian tách biệt 100%.
-- **Dùng chung Mô hình AI (Shared Model Instance):** Toàn bộ các camera chia sẻ một thực thể `YOLOPoseDetector` duy nhất, tận dụng tối đa năng lực tính toán GPU/NPU của máy chủ trung gian.
-
----
-
-## 4. GIAO THỨC TRUYỀN DẪN CLIENT - SERVER (API CONTRACTS)
-
-### 4.1. Đăng Ký Camera (`POST /api/v1/cameras/register`)
-- **Edge Client gửi khi khởi động:**
-  ```json
-  {
-    "camera_id": "CAM_01",
-    "name": "Cổng Đông - Phố Đi Bộ",
-    "zone_id": "ZONE_ALPHA",
-    "address": "Nguyễn Huệ, Quận 1, TP.HCM",
-    "latitude": 10.776889,
-    "longitude": 106.700806,
-    "target_fps": 15
-  }
-  ```
-- **Server phản hồi:** `{"status": "registered", "camera_id": "CAM_01", "keepalive_timeout": 10}`
-
-### 4.2. Đẩy Khung Hình Lên Server (`POST /api/v1/ingest/frame`)
-- **Headers:**
-  - `X-Camera-ID: CAM_01`
-  - `X-Timestamp-Ms: 1794038622128`
-  - `Content-Type: image/jpeg`
-- **Body:** Dữ liệu nhị phân của ảnh JPEG (Binary Raw JPEG Bytes - truyền trực tiếp với độ trễ thấp nhất và không tốn chi phí Base64).
-- **Server phản hồi tức thì:**
-  ```json
-  {
-    "status": "processed",
-    "camera_id": "CAM_01",
-    "frame_index": 142,
-    "human_count": 2,
-    "highest_threat": "CRITICAL",
-    "primary_action": "WEAPON_THREAT",
-    "is_urgent": true
-  }
-  ```
-
-### 4.3. Giám Sát Trạng Thái Đa Camera (`GET /api/v1/cameras`)
-Trả về danh sách toàn bộ camera kèm trạng thái Online/Offline, FPS thực tế, số người hiện diện và mức độ đe dọa.
-
-### 4.4. Giao Diện Web Giám Sát Tập Trung (Multi-Camera SOC Web Dashboard - `GET /`)
-Cung cấp màn hình trực quan dạng lưới (Grid View 2x2, 3x3) hiển thị đồng thời các camera, gắn khung nhận diện, thanh HUD, mức cảnh báo và đồng hồ đo xa.
-
----
-
-## 5. THIẾT KẾ CÁC MODULE TRIỂN KHAI
-
-### 5.1. Edge Client (`src/urbansoc/client/edge_client.py` & `client.py`)
-- Script siêu nhẹ chạy trên thiết bị cắm camera (Raspberry Pi / Laptop / Camera IP / File Video).
-- Không yêu cầu cài đặt PyTorch hay Ultralytics YOLO! Chỉ cần `opencv-python-headless` và `urllib/requests`.
-- Thu nhận khung hình qua `CameraSource`, nén JPEG và truyền bất đồng bộ sang Intermediate Server.
-- Tự động kết nối lại (Auto-reconnect) khi rớt mạng.
-
-### 5.2. Intermediate Inference Server (`src/urbansoc/server/inference_server.py`)
-- Server trung gian đa luồng (`HTTPServer` / `ThreadingHTTPServer`).
-- Tiếp nhận luồng từ $N$ Edge Client song song.
-- Sử dụng hàng đợi phi khóa (Lock-free Ring Buffer) cho từng camera.
-- Đóng gói sự kiện nguy hiểm gửi tiếp tới Webhook Dispatcher bên ngoài kèm mã băm **Forensic SHA-256 (Raw Bytes + Timestamp)** và trọn vẹn 17 keypoints.
-
----
-
-## 6. RÀNG BUỘC KỸ THUẬT & DỰ PHÒNG (FAIL-SAFE & CONSTRAINTS)
-
-1. **Cam kết Độ trễ Thời Gian Thực (Latency $\le 150\text{ms}$):**
-   - Hàng đợi của mỗi camera trên Server chỉ giữ tối đa 2 frame (`maxsize=2`). Nếu luồng xử lý AI chưa kịp giải phóng, frame cũ bị hủy ngay (Drop oldest) để bảo đảm AI luôn phân tích frame tươi mới nhất của camera.
-2. **Tự Động Phát Hiện Mất Kết Nối (Heartbeat Timeout = 5.0s):**
-   - Nếu một Edge Client ngừng gửi frame quá 5 giây, Server chuyển trạng thái camera đó sang `DISCONNECTED` và ghi log cảnh báo tới SOC Operator.
-3. **Tuân thủ Tuyệt đối Dual HITL (AGENTS.md CD-04):**
-   - Dù nhận diện được súng hay ẩu đả trên bất kỳ camera nào, server chỉ phát cảnh báo ưu tiên và chuẩn bị hồ sơ bằng chứng; không tự động điều phối nếu chưa có xác nhận từ Vận hành viên.
+### 3.2. Phía Laptop Server Trung Gian (`server.py` & `src/urbansoc/server/`)
+- Quản lý cách ly đa camera qua `CameraContextManager`:
+  - Mỗi laptop kết nối tới được định danh bằng `X-Camera-ID`.
+  - Nếu `X-Camera-ID` chưa có trong bộ nhớ, server tự động tạo `CameraContext` mới (bao gồm `BehaviorEngine` riêng để không bị đè Track ID).
+- Trả về mã HTTP 200 kèm kết quả nhận dạng tức thì:
+  `{"status": "processed", "camera_id": "LAPTOP_01", "humans": 1, "action": "NORMAL", "threat_level": "LOW"}`.
+- Dashboard trực quan qua `GET http://<IP_SERVER>:8000/`.
 
 ---
 
