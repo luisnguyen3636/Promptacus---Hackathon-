@@ -255,6 +255,7 @@ class BehaviorEngine:
                 threat_score=deb_state.confirmed_threat_score,
                 reasoning=deb_state.confirmed_reasoning,
                 interacting_with_track_id=deb_state.confirmed_interacting_id,
+                role=getattr(deb_state, "confirmed_role", "individual"),
             )
 
             # Build telemetry object for rendering

@@ -23,7 +23,7 @@ from urbansoc.domain.schemas import (
 )
 from urbansoc.domain.webhook_models import CameraLocationConfig
 from urbansoc.render.hud import draw_diagnostic_alert_box, draw_soc_hud_dashboard
-from urbansoc.render.skeleton import draw_pose_skeleton_and_indicators
+from urbansoc.render.skeleton import draw_interaction_links, draw_pose_skeleton_and_indicators
 from urbansoc.render.theme import THREAT_COLORS
 from urbansoc.telemetry.webhook_dispatcher import EventThrottler
 
@@ -214,6 +214,7 @@ class CameraContext:
 
         # Render display overlay
         display_frame = frame_bgr.copy()
+        draw_interaction_links(display_frame, tracked_poses)
         for human in tracked_poses:
             palette = THREAT_COLORS[human.behavior.threat_level]
             draw_pose_skeleton_and_indicators(
@@ -284,6 +285,7 @@ class CameraContext:
         )
 
         display_frame = frame_bgr.copy()
+        draw_interaction_links(display_frame, tracked_poses)
         for human in tracked_poses:
             palette = THREAT_COLORS[human.behavior.threat_level]
             draw_pose_skeleton_and_indicators(

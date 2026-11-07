@@ -544,7 +544,11 @@ class WebhookDispatcher:
 
             # Classify role
             b_enum = track.behavior.primary_behavior
-            role = self._infer_role(b_enum)
+            track_role = getattr(track.behavior, "role", None)
+            if track_role and track_role not in ("individual", ""):
+                role = track_role
+            else:
+                role = self._infer_role(b_enum)
 
             if track.behavior.threat_score > highest_score:
                 highest_score = track.behavior.threat_score
@@ -598,6 +602,7 @@ class WebhookDispatcher:
                 crop_image_base64=crop_b64,
                 crop_image_sha256=crop_sha256,
                 crop_image_size_bytes=crop_size,
+                interacting_with_track_id=track.behavior.interacting_with_track_id,
             )
             subject_crop_list.append(subject_data)
 

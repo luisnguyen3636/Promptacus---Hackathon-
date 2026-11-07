@@ -47,12 +47,14 @@ class SubjectCropData:
     crop_image_base64: str          # "data:image/jpeg;base64,..."
     crop_image_sha256: str          # Cryptographic SHA-256 (RawJPEGBytes + TimestampMs)
     crop_image_size_bytes: int
+    interacting_with_track_id: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "track_id": self.track_id,
             "role": self.role,
             "behavior": self.behavior,
+            "interacting_with_track_id": self.interacting_with_track_id,
             "threat_level": self.threat_level,
             "threat_score": round(self.threat_score, 4),
             "confidence": round(self.confidence, 4),
@@ -100,15 +102,29 @@ class WebhookIncidentPayload:
         first_subject = self.subjects[0] if self.subjects else None
         subject_b64 = first_subject.crop_image_base64 if first_subject else ""
 
+        # Multi-person interaction summary
+        multi_person_summary = ""
+        attackers = [s for s in self.subjects if s.role == "attacker"]
+        victims = [s for s in self.subjects if s.role == "victim"]
+        bystanders = [s for s in self.subjects if s.role == "bystander"]
+        if attackers and victims:
+            a_ids = ", ".join(f"#{s.track_id}" for s in attackers)
+            v_ids = ", ".join(f"#{s.track_id}" for s in victims)
+            multi_person_summary = f"Assault Incident: Attacker ({a_ids}) striking Victim ({v_ids})."
+            if bystanders:
+                b_ids = ", ".join(f"#{s.track_id}" for s in bystanders)
+                multi_person_summary += f" Observing Bystander: {b_ids}."
+
         # Construct DeepSeek VLM prompt and OpenAI-compatible message structure
         ai_prompt = (
             f"URBAN SAFETY AI-SOC SURVEILLANCE EVENT [{self.event_id} | CAMERA: {self.camera.camera_id}]:\n"
             f"Detected action: {self.primary_action} (Threat: {self.threat_level}, Score: {self.threat_score:.2f}).\n"
+            f"{('Multi-person dynamic: ' + multi_person_summary + '\n') if multi_person_summary else ''}"
             f"Reasoning: {self.reasoning}.\n"
             f"Task for DeepSeek VLM: Please inspect the attached surveillance frame and zoomed hand/object crop:\n"
             f"1. Is the subject wielding or holding a weapon, sharp object, knife, firearm, or harmless object?\n"
             f"2. Confirm specific weapon classification (knife, blade, box cutter, firearm, tool, phone).\n"
-            f"3. Provide situational assessment and emergency dispatch advisory."
+            f"3. In multi-person confrontation, evaluate assault severity, striking kinematics, and emergency advisory."
         )
 
         deepseek_content = [
@@ -128,7 +144,7 @@ class WebhookIncidentPayload:
             "camera_id": self.camera.camera_id,
             "camera_name": self.camera.name,
             "cameraId": self.camera.camera_id,
-            "title": f"Cảnh báo: {self.primary_action} ({self.threat_level})",
+            "title": f"Cảnh báo: {self.primary_action} ({self.threat_level}) - {multi_person_summary}" if multi_person_summary else f"Cảnh báo: {self.primary_action} ({self.threat_level})",
             "severity": self.threat_level,
             "vlmAnalysis": self.reasoning,
             "primary_action": self.primary_action,

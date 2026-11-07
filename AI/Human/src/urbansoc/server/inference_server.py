@@ -321,6 +321,20 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             else "NORMAL"
         )
 
+        humans_summary = [
+            {
+                "track_id": h.track_id,
+                "bbox": [int(h.bbox.x1), int(h.bbox.y1), int(h.bbox.x2), int(h.bbox.y2)],
+                "behavior": h.behavior.primary_behavior.value,
+                "threat_level": h.behavior.threat_level.value,
+                "threat_score": round(h.behavior.threat_score, 2),
+                "role": getattr(h.behavior, "role", "individual"),
+                "interacting_with": h.behavior.interacting_with_track_id,
+                "reasoning": h.behavior.reasoning,
+            }
+            for h in analysis.humans
+        ]
+
         response_data = {
             "status": "processed",
             "camera_id": camera_id,
@@ -330,6 +344,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             "highest_threat_score": round(analysis.highest_threat_score, 2),
             "primary_action": primary_action,
             "measured_fps": round(ctx.measured_fps, 1),
+            "humans": humans_summary,
         }
         self._send_json_response(200, response_data)
 

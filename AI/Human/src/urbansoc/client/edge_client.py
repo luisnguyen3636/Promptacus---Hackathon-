@@ -248,6 +248,62 @@ class EdgeCameraClient:
         }
         banner_color = threat_colors.get(threat, (100, 100, 100))
 
+        # 0. Draw detected subjects and interaction links received from server
+        humans_list = res.get("humans", []) if res else []
+        pos_by_id = {}
+        for h_info in humans_list:
+            bx1, by1, bx2, by2 = h_info.get("bbox", [0, 0, 0, 0])
+            tid = h_info.get("track_id", 0)
+            h_beh = h_info.get("behavior", "NORMAL")
+            h_role = h_info.get("role", "individual")
+            h_target = h_info.get("interacting_with")
+            h_threat = h_info.get("threat_level", "LOW")
+            h_color = threat_colors.get(h_threat, (0, 220, 0))
+
+            cx = int((bx1 + bx2) / 2)
+            cy = int((by1 + by2) / 2)
+            pos_by_id[tid] = (cx, cy)
+
+            if bx2 > bx1 and by2 > by1:
+                # Bounding box
+                cv2.rectangle(display, (bx1, by1), (bx2, by2), h_color, 2, cv2.LINE_AA)
+
+                # Label text
+                if h_beh == "FIGHTING":
+                    if h_role == "attacker" and h_target:
+                        lbl = f"ID #{tid} | ATTACKING #{h_target}"
+                        h_color = (40, 40, 230)
+                    elif h_role == "victim" and h_target:
+                        lbl = f"ID #{tid} | VICTIM (DEFENDING #{h_target})"
+                        h_color = (30, 160, 240)
+                    elif h_role == "mutual_combatant" and h_target:
+                        lbl = f"ID #{tid} | BRAWL <=> #{h_target}"
+                        h_color = (40, 40, 230)
+                    else:
+                        lbl = f"ID #{tid} | FIGHTING"
+                elif h_role == "bystander":
+                    lbl = f"ID #{tid} | BYSTANDER (CLEAR)"
+                    h_color = (70, 180, 50)
+                elif h_target:
+                    lbl = f"ID #{tid} | {h_beh} vs #{h_target}"
+                else:
+                    lbl = f"ID #{tid} | {h_beh}"
+
+                (tw, th), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+                cv2.rectangle(display, (bx1, max(0, by1 - th - 8)), (bx1 + tw + 8, by1), (20, 20, 20), -1)
+                cv2.rectangle(display, (bx1, max(0, by1 - th - 8)), (bx1 + tw + 8, by1), h_color, 1)
+                cv2.putText(display, lbl, (bx1 + 4, by1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Draw confrontation attack vector lines
+        for h_info in humans_list:
+            tid = h_info.get("track_id", 0)
+            target_id = h_info.get("interacting_with")
+            role = h_info.get("role", "individual")
+            if target_id and tid in pos_by_id and target_id in pos_by_id and role == "attacker":
+                pt1 = pos_by_id[tid]
+                pt2 = pos_by_id[target_id]
+                cv2.arrowedLine(display, pt1, pt2, (0, 0, 255), 2, tipLength=0.20)
+
         # 1. Top HUD Header Bar
         top_bar_h = 42
         overlay = display.copy()
