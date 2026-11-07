@@ -22,6 +22,12 @@ Bạn là một **AI Coding Agent** làm việc dưới sự chỉ đạo trực
    - **Tầng Nghiệp vụ (Operational HITL):** Trong code nghiệp vụ, tuyệt đối không viết bất kỳ nhánh logic nào cho phép hệ thống tự động phát lệnh báo động tới cơ quan chức năng mà bỏ qua bước xác thực của Vận hành viên (Human Operator).
 5. **[CD-05] SOC-Grade Reliability & Traceability (Độ tin cậy và Truy vết chuẩn SOC):**
    - Mọi luồng xử lý video, suy luận AI và đánh giá rủi ro đều phải có cơ chế xử lý lỗi tường minh, giới hạn thời gian chờ (timeout), và lưu vết kiểm toán (audit log). Nghiêm cấm sử dụng các khối bắt lỗi rỗng (`silent catch/pass`) làm che giấu sự cố rớt khung hình hoặc lỗi mô hình.
+6. **[CD-06] Mandatory Tri-Document Sync on Task Completion (Bắt buộc đồng bộ bộ 3 tài liệu khi hoàn tất task):**
+   - Mỗi lần hoàn tất một nhiệm vụ (task completion), bất kể là tính năng mới, sửa lỗi hay refactor, AI Agent **bắt buộc phải cập nhật đồng bộ cả 3 tài liệu cốt lõi** trước khi kết thúc lượt hoặc báo cáo nghiệm thu:
+     1. **`AGENTS.md`**: Cập nhật hướng dẫn cho agent hoạt động, quy tắc nghiệp vụ mới, bài học kinh nghiệm và checklist thực thi.
+     2. **`README.md`**: Cập nhật giới thiệu dự án, kiến trúc tổng thể, hướng dẫn cài đặt, cấu hình biến môi trường, và hướng dẫn sử dụng/API.
+     3. **`PROJECT_STRUCTURE.md`**: Cập nhật chi tiết cây cấu trúc dự án và bảng mô tả chức năng của từng file, thư mục.
+   - **Quy tắc thực thi:** Tuyệt đối nghiêm cấm kết thúc task hoặc xuất tín hiệu hoàn thành nếu chưa rà soát và cập nhật đồng bộ bộ 3 tài liệu này.
 
 ---
 
@@ -151,3 +157,30 @@ Khi đang ở bất kỳ giai đoạn nào (đặc biệt là trong quá trình 
 ### 4.3. Quy tắc Xử lý Phản hồi RFC
 - Nếu Con người phản hồi **`APPROVE`**: Cập nhật lại `SPEC.md` và `PLAN.md` để đồng bộ tài liệu trước, sau đó mới tiến hành viết code.
 - Nếu Con người phản hồi **`REJECT`**: Tuyệt đối tuân thủ thiết kế ban đầu hoặc thực hiện đúng theo chỉ dẫn kỹ thuật mà Con người đưa ra.
+
+---
+
+## 5. QUY TRÌNH KẾT THÚC TASK & BÀN GIAO (TASK COMPLETION & HANDOVER PROTOCOL)
+
+Nhằm đảm bảo dự án luôn trong trạng thái có thể bàn giao, triển khai và tiếp tục phát triển bởi bất kỳ thành viên nào, mọi lượt hoàn thành task của AI Agent đều phải tuân thủ nghiêm ngặt **Quy trình Chốt chặn 3 Tài liệu (Tri-Document Handover Gate)**:
+
+### 5.1. Checklist Bắt buộc trước khi Nghiệm thu
+Trước khi đưa ra thông điệp hoàn thành nhiệm vụ (hoặc gắn cờ `<!-- GOAL_COMPLETE -->`), Agent bắt buộc phải thực hiện các bước sau:
+1. **Kiểm tra & Cập nhật `AGENTS.md`:**
+   - Bổ sung quy tắc mới (nếu có phát sinh trong quá trình giải quyết bài toán).
+   - Ghi lại các bài học kinh nghiệm, lưu ý kỹ thuật (Gotchas & Workarounds), mẹo xử lý lỗi đặc thù của môi trường Cloudflare Worker / Python / React.
+2. **Kiểm tra & Cập nhật `README.md`:**
+   - Cập nhật các endpoint mới, schema payload hoặc tính năng mới hoàn thành.
+   - Hướng dẫn cài đặt, chạy thử nghiệm cục bộ và triển khai thực tế.
+   - Đảm bảo người mới clone repo có thể khởi chạy toàn bộ hệ thống chỉ qua tài liệu này.
+3. **Kiểm tra & Cập nhật `PROJECT_STRUCTURE.md`:**
+   - Quét lại toàn bộ cây thư mục dự án và phản ánh chính xác cấu trúc hiện tại.
+   - Cập nhật mô tả vai trò của từng tệp và thư mục mới thêm/sửa/xóa.
+4. **Kiểm tra Toàn vẹn Bản Build (Build Integrity Check):**
+   - Chạy `pnpm run build` để chứng minh toàn bộ frontend và backend đều compile sạch 100%, không có lỗi type hoặc broken imports.
+
+### 5.2. Mẹo & Kinh nghiệm Kỹ thuật Vận hành (Agent Gotchas & Best Practices)
+- **Cloudflare Worker & WebSocket:** Worker runtime tại môi trường local Miniflare không hỗ trợ trực tiếp một số API Node.js như `child_process`. Mọi kết nối WebSocket phải dùng chuẩn Cloudflare `WebSocketPair` và HTTP response status `101 Switching Protocols`.
+- **D1 SQL & In-Memory Fallback:** Luôn duy trì bộ đệm In-Memory song song với D1 để dự phòng khi chạy môi trường dev cục bộ hoặc khi D1 binding chưa được provisioned đầy đủ.
+- **Bounding Box Normalization:** Dữ liệu bounding box từ camera AI dạng pixel `[x1, y1, x2, y2]` phải luôn được chuẩn hóa sang tỉ đối `[0.0 - 1.0]` (`w, h, x, y`) trước khi phát tới frontend để hiển thị responsive trên canvas.
+- **Operational HITL State:** Mọi incident mới gửi vào endpoint `/api/v1/ai/detection` hoặc `/api/incidents` bắt buộc phải có trạng thái khởi tạo là `PENDING_VERIFICATION` / `AWAITING_OPERATOR_VERIFICATION`. Tuyệt đối không được bypass chốt chặn này.

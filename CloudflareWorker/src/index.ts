@@ -213,17 +213,25 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 6. REST API: Camera Fleet & Live Tracking (/api/devices/cameras)
+    // 6. REST API: Camera Fleet & Live Tracking (/api/devices/cameras, /api/cameras)
     // -------------------------------------------------------------------------
-    if (path === "/api/devices/cameras" && method === "GET") {
+    if ((path === "/api/devices/cameras" || path === "/api/cameras") && method === "GET") {
       return jsonResponse(getCameras());
     }
 
     // -------------------------------------------------------------------------
-    // 7. REST API: PTZ Camera Control (/api/cameras/:id/ptz)
+    // 7. REST API: PTZ Camera Control (/api/cameras/:id/ptz, /api/devices/cameras/:id/ptz)
     // -------------------------------------------------------------------------
-    if (path.startsWith("/api/cameras/") && path.endsWith("/ptz") && method === "POST") {
-      const cameraId = path.replace("/api/cameras/", "").replace("/ptz", "").trim();
+    if (
+      (path.startsWith("/api/cameras/") || path.startsWith("/api/devices/cameras/")) &&
+      path.endsWith("/ptz") &&
+      method === "POST"
+    ) {
+      const cameraId = path
+        .replace("/api/devices/cameras/", "")
+        .replace("/api/cameras/", "")
+        .replace("/ptz", "")
+        .trim();
       try {
         const body = (await request.json().catch(() => ({}))) as { action?: string; speed?: number };
         if (!body.action) {
@@ -319,9 +327,14 @@ export default {
     }
 
     // -------------------------------------------------------------------------
-    // 9. REST API: Recent Incidents (/api/incidents/recent)
+    // 9. REST API: Recent Incidents (/api/incidents/recent, /api/incidents)
     // -------------------------------------------------------------------------
-    if (path === "/api/incidents/recent" && method === "GET") {
+    if (
+      (path === "/api/incidents/recent" ||
+        path === "/api/incidents" ||
+        path === "/api/v1/incidents/recent") &&
+      method === "GET"
+    ) {
       return jsonResponse(getRecentIncidents());
     }
 
