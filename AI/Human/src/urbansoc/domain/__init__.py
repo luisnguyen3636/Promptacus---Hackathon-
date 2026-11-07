@@ -27,6 +27,11 @@ from urbansoc.domain.schemas import (
     TrackHistoryState,
     TrackKinematicsTelemetry,
 )
+from urbansoc.domain.webhook_models import (
+    CameraLocationConfig,
+    SubjectCropData,
+    WebhookIncidentPayload,
+)
 
 __all__ = [
     "ThreatLevel",
@@ -48,6 +53,9 @@ __all__ = [
     "BehaviorAuditLogEntry",
     "HumanPoseTrack",
     "SOCFrameAnalysisResult",
+    "CameraLocationConfig",
+    "SubjectCropData",
+    "WebhookIncidentPayload",
     "Keypoint",
     "HumanPose",
     "FrameAnalysisResult",

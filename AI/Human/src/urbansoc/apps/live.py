@@ -10,8 +10,10 @@ import cv2
 import numpy as np
 
 from urbansoc.detection.yolo_pose import YOLOPoseDetector
+from urbansoc.domain.webhook_models import CameraLocationConfig
 from urbansoc.io.evidence import EvidenceClipRecorder
 from urbansoc.io.sources import CameraSource
+from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher
 
 logger = logging.getLogger("urbansoc.apps.live")
 
@@ -31,6 +33,10 @@ class CameraRecorder:
         output_dir: str = "output",
         records_dir: str = "records",
         fps: float = 20.0,
+        webhook_url: Optional[str] = None,
+        camera_config: Optional[CameraLocationConfig] = None,
+        webhook_min_threat: str = "ALL",
+        webhook_cooldown: float = 3.0,
     ) -> None:
         self.camera_index = camera_index
         self.resolution = resolution
@@ -42,6 +48,8 @@ class CameraRecorder:
         self.output_dir = os.path.abspath(output_dir)
         self.records_dir = os.path.abspath(records_dir)
         self.fps = fps
+        self.webhook_url = webhook_url
+        self.camera_config = camera_config if camera_config is not None else CameraLocationConfig()
 
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.records_dir, exist_ok=True)
@@ -73,6 +81,14 @@ class CameraRecorder:
             frame_size=self.frame_size,
             pre_roll_seconds=1.5,
             post_roll_seconds=2.0,
+        )
+
+        # 4. Initialize Asynchronous HTTP POST Webhook Dispatcher
+        self.webhook_dispatcher = WebhookDispatcher(
+            server_url=self.webhook_url,
+            camera_config=self.camera_config,
+            min_threat_level=webhook_min_threat,
+            cooldown_seconds=webhook_cooldown,
         )
 
         if self.record_full_session:
@@ -147,11 +163,19 @@ class CameraRecorder:
                     if saved_clip:
                         print(f"[CameraRecorder] Evidence clip finalized: {saved_clip}")
 
-                # 4. Continuous session recording
+                # 4. Asynchronous Webhook Event Dispatching (Non-blocking)
+                if analysis and self.webhook_dispatcher.is_enabled:
+                    self.webhook_dispatcher.dispatch_frame_event(
+                        frame=frame,
+                        annotated_frame=display_frame,
+                        analysis_result=analysis,
+                    )
+
+                # 5. Continuous session recording
                 if self.session_writer is not None:
                     self.session_writer.write(display_frame)
 
-                # 5. Display GUI
+                # 6. Display GUI
                 if has_gui:
                     try:
                         cv2.imshow(window_name, display_frame)
@@ -196,6 +220,7 @@ class CameraRecorder:
         self.source.release()
         self._stop_session_recorder()
         self.evidence_recorder.release()
+        self.webhook_dispatcher.shutdown()
         self.detector.close()
         try:
             cv2.destroyAllWindows()

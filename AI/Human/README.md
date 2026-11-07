@@ -86,6 +86,79 @@ python3 main.py --mode batch
 ```
 Hệ thống sử dụng cơ chế **Streaming VideoWriter** ghi trực tiếp ra đĩa, đảm bảo bộ nhớ RAM luôn ở mức thấp cố định ($<200\text{MB}$) ngay cả với video độ phân giải cao và thời lượng dài.
 
+### 3.4. Gửi Sự Kiện Tự Động Qua HTTP POST Webhook Đến Server Ngoài
+Hệ thống tích hợp sẵn **WebhookDispatcher** bất đồng bộ (Non-blocking Queue Worker). Khi phát hiện hành vi nguy hiểm, hệ thống sẽ tự động đóng gói toàn bộ metadata (Thời gian, Vị trí camera, Hung khí, Danh sách đối tượng, Ảnh cắt từng đối tượng Base64, và Ảnh toàn cảnh Base64) và gửi phương thức `HTTP POST` đến server của bạn:
+
+```bash
+python3 main.py \
+  --webhook-url "http://127.0.0.1:8000/api/v1/incidents" \
+  --camera-id "CAM_01" \
+  --camera-name "Cổng Chính - Phố Đi Bộ" \
+  --camera-lat 10.776889 \
+  --camera-lon 106.700806 \
+  --camera-address "Nguyễn Huệ, Quận 1, TP.HCM" \
+  --webhook-min-threat ALL \
+  --webhook-cooldown 3.0
+```
+
+#### Cấu Trúc JSON Payload Được Gửi Lên Server:
+```json
+{
+  "event_id": "EVT_20261107_143000_a1b2c3d4",
+  "timestamp": "2026-11-07T14:30:15.234+07:00",
+  "timestamp_ms": 1794036615234,
+  "camera": {
+    "camera_id": "CAM_01",
+    "name": "Cổng Chính - Phố Đi Bộ",
+    "zone_id": "ZONE_DEFAULT",
+    "address": "Nguyễn Huệ, Quận 1, TP.HCM",
+    "latitude": 10.776889,
+    "longitude": 106.700806
+  },
+  "detection": {
+    "primary_action": "WEAPON_THREAT",
+    "threat_level": "CRITICAL",
+    "threat_score": 0.96,
+    "is_urgent": true,
+    "reasoning": "Detected action: WEAPON_THREAT (threat score: 0.96)",
+    "weapon": {
+      "is_weapon_detected": true,
+      "weapon_types": ["TACTICAL_WEAPON_POSTURE"],
+      "confidence": 0.95,
+      "description": "Tactical pointing or overhead strike stance detected"
+    },
+    "subjects": [
+      {
+        "track_id": 1,
+        "role": "suspect",
+        "behavior": "WEAPON_THREAT",
+        "threat_level": "CRITICAL",
+        "threat_score": 0.96,
+        "bbox": [180, 110, 310, 440],
+        "speed": 0.42,
+        "confidence": 0.92,
+        "crop_image_base64": "data:image/jpeg;base64,/9j/4AAQ..."
+      }
+    ],
+    "full_image": {
+      "format": "jpeg",
+      "width": 640,
+      "height": 480,
+      "image_base64": "data:image/jpeg;base64,/9j/4AAQ..."
+    },
+    "audio": {
+      "is_audio_active": false,
+      "audio_threat_detected": false
+    }
+  },
+  "audit": {
+    "frame_index": 42,
+    "human_count": 1,
+    "verification_status": "AI_AUTO_DETECTED_PENDING_SOC_CONFIRMATION"
+  }
+}
+```
+
 ---
 
 ## 4. CHẠY KIỂM THỬ TỰ ĐỘNG (PYTEST)
@@ -94,4 +167,4 @@ Toàn bộ test suite được thiết kế tất định (deterministic), khôn
 ```bash
 pytest -v
 ```
-Toàn bộ **33 test cases** kiểm chứng toàn diện từ schema, 13 luật hành vi nguy hiểm, khử false positive, ẩu đả cặp đôi, cướp giật, rượt đuổi, khống chế, vây ráp, ghi log kiểm toán, rolling buffer clip, cho đến render đa độ phân giải.
+Toàn bộ **40 test cases** kiểm chứng toàn diện từ schema, 13 luật hành vi nguy hiểm, khử false positive, ẩu đả cặp đôi, cướp giật, rượt đuổi, khống chế, vây ráp, ghi log kiểm toán, rolling buffer clip, render đa độ phân giải, cho đến trích xuất webhook payload, cắt ảnh crop Base64 và worker HTTP POST bất đồng bộ.

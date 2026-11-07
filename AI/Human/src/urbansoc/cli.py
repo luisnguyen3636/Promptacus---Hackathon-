@@ -7,6 +7,7 @@ from typing import Optional
 
 from urbansoc.apps.batch import BatchHumanDetector
 from urbansoc.apps.live import CameraRecorder
+from urbansoc.domain.webhook_models import CameraLocationConfig
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -66,6 +67,55 @@ def create_parser() -> argparse.ArgumentParser:
         default=0.25,
         help="Object and keypoint detection confidence threshold (default: 0.25)",
     )
+    parser.add_argument(
+        "--webhook-url",
+        type=str,
+        default=os.environ.get("URBANSOC_WEBHOOK_URL", None),
+        help="Target server URL to POST incident event metadata (default: None or URBANSOC_WEBHOOK_URL)",
+    )
+    parser.add_argument(
+        "--camera-id",
+        type=str,
+        default="CAM_01",
+        help="Unique camera identifier (default: CAM_01)",
+    )
+    parser.add_argument(
+        "--camera-name",
+        type=str,
+        default="Camera Giám Sát Trung Tâm",
+        help="Descriptive name of the camera (default: Camera Giám Sát Trung Tâm)",
+    )
+    parser.add_argument(
+        "--camera-lat",
+        type=float,
+        default=10.776889,
+        help="Camera GPS latitude (default: 10.776889)",
+    )
+    parser.add_argument(
+        "--camera-lon",
+        type=float,
+        default=106.700806,
+        help="Camera GPS longitude (default: 106.700806)",
+    )
+    parser.add_argument(
+        "--camera-address",
+        type=str,
+        default="Khu vực Trung Tâm",
+        help="Physical address/zone of camera installation (default: Khu vực Trung Tâm)",
+    )
+    parser.add_argument(
+        "--webhook-min-threat",
+        type=str,
+        choices=["ALL", "LOW", "MEDIUM", "HIGH", "CRITICAL"],
+        default="ALL",
+        help="Minimum threat level required to trigger HTTP POST (default: ALL)",
+    )
+    parser.add_argument(
+        "--webhook-cooldown",
+        type=float,
+        default=3.0,
+        help="Cooldown in seconds between successive POSTs for the same track (default: 3.0)",
+    )
 
     return parser
 
@@ -80,6 +130,9 @@ def print_banner(args: argparse.Namespace) -> None:
     print(f"Device:      {args.device if args.device else 'auto-detect'}")
     print(f"Conf Thresh: {args.conf_thresh}")
     print(f"Output Dir:  {os.path.abspath(args.output_dir)}")
+    if args.webhook_url:
+        print(f"Webhook URL: {args.webhook_url} (Min Threat: {args.webhook_min_threat})")
+        print(f"Camera Info: ID={args.camera_id} [{args.camera_name}] ({args.camera_lat}, {args.camera_lon})")
     if args.mode == "batch":
         print(f"Records Dir: {os.path.abspath(args.records_dir)}")
     else:
@@ -95,6 +148,14 @@ def main(argv: Optional[list] = None) -> int:
 
     print_banner(args)
 
+    camera_cfg = CameraLocationConfig(
+        camera_id=args.camera_id,
+        name=args.camera_name,
+        address=args.camera_address,
+        latitude=args.camera_lat,
+        longitude=args.camera_lon,
+    )
+
     if args.mode == "live":
         app = CameraRecorder(
             camera_index=args.camera,
@@ -104,6 +165,10 @@ def main(argv: Optional[list] = None) -> int:
             min_confidence=args.conf_thresh,
             output_dir=args.output_dir,
             records_dir=args.records_dir,
+            webhook_url=args.webhook_url,
+            camera_config=camera_cfg,
+            webhook_min_threat=args.webhook_min_threat,
+            webhook_cooldown=args.webhook_cooldown,
         )
         app.record_video()
     elif args.mode == "batch":
