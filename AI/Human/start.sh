@@ -297,16 +297,90 @@ case "${ACTION}" in
         ;;
 
     # --------------------------------------------------------------------------
-    # CHẾ ĐỘ 2: Khởi động riêng Camera Client
+    # CHẾ ĐỘ 2: Khởi động Camera Client kèm Tự động kích hoạt Public Tunneling
     # --------------------------------------------------------------------------
     client)
         shift
+        CLIENT_ARGS=("$@")
+
+        # Xác định Server Port từ tham số --server-url (nếu có)
+        SERVER_PORT="8000"
+        for i in "${!CLIENT_ARGS[@]}"; do
+            if [[ "${CLIENT_ARGS[$i]}" == "--server-url" && $((i + 1)) -lt ${#CLIENT_ARGS[@]} ]]; then
+                ARG_URL="${CLIENT_ARGS[$((i + 1))]}"
+                if [[ "${ARG_URL}" =~ :([0-9]+) ]]; then
+                    SERVER_PORT="${BASH_REMATCH[1]}"
+                fi
+            fi
+        done
+
+        SERVER_LOCAL_URL="http://127.0.0.1:${SERVER_PORT}"
+
         echo "======================================================================"
-        echo "📹 Khởi động Edge Camera Client"
+        echo "📹 Khởi động Edge Camera Client + Tự động kích hoạt Cloudflare Tunnel"
         echo "🐍 Python: $PYTHON_BIN"
-        echo "📁 Thư mục: $SCRIPT_DIR"
+        echo "🔌 Cổng Server mục tiêu: $SERVER_PORT ($SERVER_LOCAL_URL)"
         echo "======================================================================"
-        exec "$PYTHON_BIN" "$SCRIPT_DIR/client.py" "$@"
+
+        TUNNEL_PID=""
+        cleanup_client_tunnel() {
+            if [[ -n "${TUNNEL_PID}" ]] && kill -0 "${TUNNEL_PID}" 2>/dev/null; then
+                echo ""
+                echo "🛑 Đang dừng Cloudflare Tunnel (PID: ${TUNNEL_PID})..."
+                kill -SIGTERM "${TUNNEL_PID}" 2>/dev/null || true
+            fi
+            exit 0
+        }
+        trap cleanup_client_tunnel SIGINT SIGTERM EXIT
+
+        # Kiểm tra xem Tunnel đã chạy sẵn chưa
+        ALREADY_RUNNING_PID=$(pgrep -f "cloudflared tunnel.*${SERVER_PORT}" | head -n 1 || true)
+        PUBLIC_URL=""
+
+        if [[ -n "${ALREADY_RUNNING_PID}" ]]; then
+            echo "ℹ️ Cloudflare Tunnel đã chạy sẵn trên cổng ${SERVER_PORT} (PID: ${ALREADY_RUNNING_PID})."
+            if [[ -f "/tmp/soc_public_url.txt" ]]; then
+                PUBLIC_URL="$(cat /tmp/soc_public_url.txt || true)"
+            fi
+        else
+            CLOUDFLARED_BIN="$(ensure_cloudflared || true)"
+            if [[ -n "${CLOUDFLARED_BIN}" && -x "${CLOUDFLARED_BIN}" ]]; then
+                echo "🌐 Đang tự động kích hoạt Cloudflare Public Tunnel cho cổng ${SERVER_PORT}..."
+                TUNNEL_LOG="/tmp/soc_tunnel_client.log"
+                rm -f "${TUNNEL_LOG}"
+                "${CLOUDFLARED_BIN}" tunnel --url "${SERVER_LOCAL_URL}" --no-autoupdate > "${TUNNEL_LOG}" 2>&1 &
+                TUNNEL_PID=$!
+
+                for i in {1..30}; do
+                    if [[ -f "${TUNNEL_LOG}" ]]; then
+                        FOUND_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "${TUNNEL_LOG}" | head -n 1 || true)
+                        if [[ -n "${FOUND_URL}" ]]; then
+                            PUBLIC_URL="${FOUND_URL}"
+                            break
+                        fi
+                    fi
+                    sleep 0.4
+                done
+            fi
+        fi
+
+        if [[ -n "${PUBLIC_URL}" ]]; then
+            echo "======================================================================"
+            echo "✨ CLOUDFLARE PUBLIC TUNNEL SẴN SÀNG CHO STREAMING CAMERA:"
+            echo "======================================================================"
+            echo "• 📹 Public Video Stream (MJPEG):  ${PUBLIC_URL}/stream.mjpg"
+            echo "• 📺 Public Video Stream (HLS):    ${PUBLIC_URL}/live.m3u8"
+            echo "• 📸 Public Camera Snapshot:       ${PUBLIC_URL}/snapshot.jpg"
+            echo "• 📊 Public SOC Web Dashboard:     ${PUBLIC_URL}/dashboard"
+            echo "• 📡 Public Ingestion Endpoint:    ${PUBLIC_URL}/api/v1/frame"
+            echo "======================================================================"
+            echo "${PUBLIC_URL}" > /tmp/soc_public_url.txt
+        else
+            echo "⚠️ Chưa lấy được URL Cloudflare Tunnel ngay lập tức. Tiếp tục khởi động Client..."
+        fi
+
+        # Khởi động Client
+        "$PYTHON_BIN" "$SCRIPT_DIR/client.py" ${CLIENT_ARGS[@]+"${CLIENT_ARGS[@]}"}
         ;;
 
     # --------------------------------------------------------------------------
