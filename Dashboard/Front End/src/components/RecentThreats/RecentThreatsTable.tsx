@@ -39,9 +39,15 @@ export const RecentThreatsTable: React.FC<RecentThreatsTableProps> = ({
 
         {/* Danh sách Sự kiện */}
         <div>
-          {incidents.map((inc) => (
-            <ThreatRow key={inc.id} incident={inc} onPlayback={onSelectPlayback} />
-          ))}
+          {incidents.length === 0 ? (
+            <div className="py-8 text-center text-slate-500 font-mono text-xs">
+              [SYSTEM NOMINAL] Không có sự cố đe dọa nào · Hệ thống sẵn sàng tiếp nhận luồng cảnh báo từ AI.
+            </div>
+          ) : (
+            incidents.map((inc) => (
+              <ThreatRow key={inc.id} incident={inc} onPlayback={onSelectPlayback} />
+            ))
+          )}
         </div>
       </div>
     </section>

@@ -11,11 +11,18 @@ export const AiAnalyzerView: React.FC<AiAnalyzerViewProps> = ({ cameras }) => {
   const [vehicleThreshold, setVehicleThreshold] = useState<number>(80);
   const [loiterThreshold, setLoiterThreshold] = useState<number>(75);
 
-  const logs = [
-    { time: '16:12:04', model: 'VLM-Llama-Vision', text: 'Target #TRK-8821 matched pre-crime pattern #04 (Loitering near server door > 40s)' },
-    { time: '16:12:01', model: 'YOLOv8x-DeepStream', text: 'Cam 01: Person detected (conf 0.98), bounding box [0.35, 0.22, 0.22, 0.65]' },
-    { time: '16:11:58', model: 'Temporal-Tracker', text: 'Cam 02: Vehicle track #TRK-7714 exit lane 2, velocity normal 18 km/h' },
-    { time: '16:11:45', model: 'Optical-Flow-Engine', text: 'Cam 04: Crowd density nominal, 2 subjects passing perimeter' },
+  const activeTracksCount = cameras.reduce((acc, c) => acc + (c.boundingBoxes?.length || 0), 0);
+
+  const dynamicLogs = cameras.flatMap((cam) =>
+    (cam.boundingBoxes || []).map((b) => ({
+      time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      model: 'YOLO11-Pose / Biomechanical Rules',
+      text: `${cam.name} (${cam.id}): ${b.label} - ${b.subLabel || 'TRACKED'} [Mức độ: ${b.severity}]`
+    }))
+  );
+
+  const logs = dynamicLogs.length > 0 ? dynamicLogs : [
+    { time: '--:--:--', model: 'AI-SOC Ingestion Gateway', text: 'Chờ luồng nhận diện từ AI Detector (Ready to ingest webhook)...' }
   ];
 
   return (
@@ -54,8 +61,8 @@ export const AiAnalyzerView: React.FC<AiAnalyzerViewProps> = ({ cameras }) => {
             <span className="text-[10px] font-mono text-[#F59E0B]">ACTIVE THREADS</span>
             <Sliders className="w-4 h-4 text-[#F59E0B]" />
           </div>
-          <div className="font-mono text-2xl font-bold text-white mt-1">12 Tracks</div>
-          <div className="text-[11px] font-mono text-slate-400 mt-0.5">DeepSORT Multi-Camera</div>
+          <div className="font-mono text-2xl font-bold text-white mt-1">{activeTracksCount} Tracks</div>
+          <div className="text-[11px] font-mono text-slate-400 mt-0.5">Real-time AI Vision Tracks</div>
         </div>
       </div>
 

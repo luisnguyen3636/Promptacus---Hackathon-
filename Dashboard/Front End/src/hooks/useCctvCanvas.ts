@@ -21,31 +21,42 @@ export function useCctvCanvas(
 
       ctx.clearRect(0, 0, width, height);
 
-      // 1. Nền đen CCTV sâu
-      ctx.fillStyle = '#080B10';
-      ctx.fillRect(0, 0, width, height);
+      // 1. Nền đen CCTV hoặc Ảnh chụp thực tế từ AI
+      if (camera.streamUrl && camera.streamUrl.startsWith('data:image/')) {
+        const img = new Image();
+        img.src = camera.streamUrl;
+        if (img.complete && img.naturalWidth > 0) {
+          ctx.drawImage(img, 0, 0, width, height);
+        } else {
+          ctx.fillStyle = '#080B10';
+          ctx.fillRect(0, 0, width, height);
+        }
+      } else {
+        ctx.fillStyle = '#080B10';
+        ctx.fillRect(0, 0, width, height);
 
-      // Lưới phối cảnh hành lang
-      ctx.strokeStyle = '#121822';
-      ctx.lineWidth = 1;
-      for (let x = 0; x < width; x += 32) {
-        ctx.beginPath();
-        ctx.moveTo(x, height);
-        ctx.lineTo(width / 2 + (x - width / 2) * 0.35, height * 0.38);
-        ctx.stroke();
-      }
-      for (let y = height * 0.38; y < height; y += 22) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
-        ctx.stroke();
-      }
+        // Lưới phối cảnh hành lang khi ở chế độ chờ tín hiệu
+        ctx.strokeStyle = '#121822';
+        ctx.lineWidth = 1;
+        for (let x = 0; x < width; x += 32) {
+          ctx.beginPath();
+          ctx.moveTo(x, height);
+          ctx.lineTo(width / 2 + (x - width / 2) * 0.35, height * 0.38);
+          ctx.stroke();
+        }
+        for (let y = height * 0.38; y < height; y += 22) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
 
-      // Khung cửa hành lang hoặc vật thể nền
-      ctx.fillStyle = '#0F151E';
-      ctx.fillRect(width * 0.68, height * 0.16, width * 0.22, height * 0.62);
-      ctx.strokeStyle = '#1E2631';
-      ctx.strokeRect(width * 0.68, height * 0.16, width * 0.22, height * 0.62);
+        // Khung cửa hành lang hoặc vật thể nền
+        ctx.fillStyle = '#0F151E';
+        ctx.fillRect(width * 0.68, height * 0.16, width * 0.22, height * 0.62);
+        ctx.strokeStyle = '#1E2631';
+        ctx.strokeRect(width * 0.68, height * 0.16, width * 0.22, height * 0.62);
+      }
 
       // 2. Vẽ Bounding Boxes AI
       if (camera.boundingBoxes && camera.boundingBoxes.length > 0) {

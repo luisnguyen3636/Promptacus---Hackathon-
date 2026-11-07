@@ -17,53 +17,22 @@ export const LiveVideoWallView: React.FC<LiveVideoWallViewProps> = ({
   const [layoutMode, setLayoutMode] = useState<'3x2' | '2x2' | '1x1'>('3x2');
   const [filterMode, setFilterMode] = useState<'IR' | 'RGB'>('IR');
 
-  const wallCameras: ICameraDevice[] = [
-    ...cameras,
-    {
-      id: "cam_05",
-      name: "Lobby Reception Area",
-      ip: "172.16.2.14",
-      fps: 30,
-      bitrateKbps: 42,
-      status: "ONLINE",
-      streamUrl: "",
-      ptzEnabled: true,
-      boundingBoxes: [
-        {
-          id: "box_05",
-          label: "PERSON 95%",
-          subLabel: "VISITOR",
-          severity: "NORMAL",
-          x: 0.4,
-          y: 0.3,
-          w: 0.2,
-          h: 0.55
-        }
-      ]
-    },
-    {
-      id: "cam_06",
-      name: "Underground Parking Bay",
-      ip: "172.16.3.28",
-      fps: 30,
-      bitrateKbps: 38,
-      status: "ONLINE",
-      streamUrl: "",
-      ptzEnabled: true,
-      boundingBoxes: [
-        {
-          id: "box_06",
-          label: "VEHICLE 97%",
-          subLabel: "ENTRY",
-          severity: "NORMAL",
-          x: 0.25,
-          y: 0.35,
-          w: 0.4,
-          h: 0.45
-        }
-      ]
-    }
-  ];
+  const wallCameras: ICameraDevice[] = [...cameras];
+  const requiredCount = layoutMode === '3x2' ? 6 : (layoutMode === '2x2' ? 4 : 1);
+  while (wallCameras.length < requiredCount) {
+    const idx = wallCameras.length + 1;
+    wallCameras.push({
+      id: `standby_0${idx}`,
+      name: `Camera Slot ${idx} (Chờ luồng AI)`,
+      ip: `192.168.1.${100 + idx}`,
+      fps: 0,
+      bitrateKbps: 0,
+      status: 'DEGRADED',
+      streamUrl: '',
+      ptzEnabled: false,
+      boundingBoxes: []
+    });
+  }
 
   const handleCaptureAll = () => {
     onToast?.('[SNAPSHOT CAPTURED] Đã lưu 6 khung hình bằng chứng đồng loạt vào Rolling Buffer');

@@ -8,6 +8,10 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  build: {
+    outDir: '../../CloudflareWorker/dist',
+    emptyOutDir: true,
+  },
   server: {
     port: 3000,
     host: true,

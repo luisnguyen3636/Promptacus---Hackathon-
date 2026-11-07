@@ -1,0 +1,28 @@
+{
+  "name": "urban-safety-soc-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker AI Evaluator & Forensic Incident Vault for Urban Safety AI-SOC",
+  "main": "src/index.ts",
+  "scripts": {
+    "build:frontend": "cd \"../Dashboard/Front End\" && npx tsc -b && npx vite build",
+    "build:worker": "npx tsc --noEmit",
+    "build": "npm run build:frontend && npm run build:worker",
+    "dev": "wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "db:migrate": "wrangler d1 execute urban_soc_db --file=schema.sql"
+  },
+  "keywords": [
+    "cloudflare-worker",
+    "workers-ai",
+    "d1-database",
+    "urban-safety",
+    "ai-soc"
+  ],
+  "author": "Urban Safety AI-SOC Team",
+  "license": "ISC",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240923.0",
+    "typescript": "^5.6.2",
+    "wrangler": "^3.78.0"
+  }
+}

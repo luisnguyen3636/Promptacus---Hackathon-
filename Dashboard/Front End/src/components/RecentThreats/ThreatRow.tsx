@@ -56,20 +56,24 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
 
       {/* 5. Camera Dual-Thumbnails */}
       <div className="min-w-0 shrink-0">
-        {incident.cameraSnapshots ? (
+        {incident.cameraSnapshots?.eventPeakSnapshotUrl || incident.cameraSnapshots?.preEventSnapshotUrl ? (
           <div className="flex gap-1 items-center">
-            <img
-              src={incident.cameraSnapshots.preEventSnapshotUrl}
-              alt="Pre-Event"
-              title="Pre-Event Snapshot (10s Pre)"
-              className="w-[52px] h-[30px] object-cover border border-[#1E2631] bg-[#05070A] filter grayscale contrast-125 shrink-0"
-            />
-            <img
-              src={incident.cameraSnapshots.eventPeakSnapshotUrl}
-              alt="Peak"
-              title="Intrusion Peak Snapshot"
-              className="w-[52px] h-[30px] object-cover border border-[#1E2631] bg-[#05070A] filter grayscale contrast-125 shrink-0"
-            />
+            {incident.cameraSnapshots.preEventSnapshotUrl && (
+              <img
+                src={incident.cameraSnapshots.preEventSnapshotUrl}
+                alt="Subject"
+                title="Subject Detection Snapshot"
+                className="w-[52px] h-[30px] object-cover border border-[#1E2631] bg-[#05070A] shrink-0"
+              />
+            )}
+            {incident.cameraSnapshots.eventPeakSnapshotUrl && (
+              <img
+                src={incident.cameraSnapshots.eventPeakSnapshotUrl}
+                alt="Peak"
+                title="Full CCTV Event Snapshot"
+                className="w-[52px] h-[30px] object-cover border border-[#EF4444] bg-[#05070A] shrink-0"
+              />
+            )}
           </div>
         ) : (
           <div className="w-[52px] h-[30px] bg-[#121822] border border-[#1E2631] flex items-center justify-center text-slate-500 font-mono text-[9px] shrink-0">

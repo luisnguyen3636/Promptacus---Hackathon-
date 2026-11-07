@@ -43,21 +43,27 @@ export const EvidencePlaybackModal: React.FC<EvidencePlaybackModalProps> = ({
           {/* Cột Trái: Video Player & Timeline (7 Cột) */}
           <div className="col-span-7 flex flex-col space-y-3">
             <div className="bg-[#05070A] border border-[#1E2631] aspect-video relative flex items-center justify-center overflow-hidden">
-              <div className="text-center p-4">
-                <Video className="w-10 h-10 text-[#EF4444] mx-auto mb-2 animate-pulse" />
-                <div className="font-mono text-xs text-white font-bold">
-                  EVIDENCE PLAYBACK BUFFER (10s Pre + 10s Post)
+              {incident.cameraSnapshots?.eventPeakSnapshotUrl || incident.cameraSnapshots?.preEventSnapshotUrl ? (
+                <img
+                  src={incident.cameraSnapshots?.eventPeakSnapshotUrl || incident.cameraSnapshots?.preEventSnapshotUrl}
+                  alt="Forensic Evidence Peak Snapshot"
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <div className="text-center p-4">
+                  <Video className="w-10 h-10 text-[#EF4444] mx-auto mb-2 animate-pulse" />
+                  <div className="font-mono text-xs text-white font-bold">
+                    EVIDENCE PLAYBACK BUFFER (10s Pre + 10s Post)
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-500 mt-1">
+                    Codec: H.264/AAC · Forensic Grade Trace
+                  </div>
                 </div>
-                <div className="text-[10px] font-mono text-slate-500 mt-1">
-                  Codec: H.264/AAC · Forensic Grade Trace
-                </div>
-              </div>
+              )}
 
-              {/* Bounding Box mô phỏng trên video */}
-              <div className="absolute inset-x-12 inset-y-8 border-2 border-[#EF4444] pointer-events-none">
-                <span className="absolute -top-4 left-0 bg-[#EF4444] text-white font-mono text-[9px] font-bold px-1.5 py-0.5">
-                  TARGET #{incident.id.toUpperCase()} [PERSON 98%]
-                </span>
+              {/* Bounding Box tag mô phỏng trên video */}
+              <div className="absolute top-2 left-2 bg-[#EF4444]/90 text-white font-mono text-[9px] font-bold px-2 py-0.5 border border-[#EF4444] shadow">
+                TARGET #{incident.id.toUpperCase()} [{incident.severity}]
               </div>
             </div>
 

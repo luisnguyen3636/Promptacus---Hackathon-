@@ -26,13 +26,18 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
     return matchSeverity && matchStatus && matchSearch;
   });
 
+  const totalIncidents = incidents.length;
+  const criticalCount = incidents.filter(i => i.severity === 'CRITICAL').length;
+  const pendingCount = incidents.filter(i => i.status === 'PENDING_VERIFICATION').length;
+  const verifiedCount = incidents.filter(i => i.status === 'OPERATOR_CONFIRMED').length;
+
   return (
     <div className="space-y-4 select-none min-w-0">
       {/* Thanh Chỉ số Triage Sự cố Hôm nay */}
       <div className="grid grid-cols-4 gap-4">
         <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
           <div>
-            <div className="font-mono text-xl font-bold text-white">14 Incidents</div>
+            <div className="font-mono text-xl font-bold text-white">{totalIncidents} Incidents</div>
             <div className="text-[11px] text-slate-400 font-mono mt-0.5">Recorded Today</div>
           </div>
           <Clock className="w-6 h-6 text-[#10B981]" />
@@ -40,7 +45,7 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
 
         <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
           <div>
-            <div className="font-mono text-xl font-bold text-[#DC2626]">2 Critical</div>
+            <div className="font-mono text-xl font-bold text-[#DC2626]">{criticalCount} Critical</div>
             <div className="text-[11px] text-slate-400 font-mono mt-0.5">Physical Intrusion & Weapons</div>
           </div>
           <ShieldAlert className="w-6 h-6 text-[#DC2626]" />
@@ -48,16 +53,16 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
 
         <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
           <div>
-            <div className="font-mono text-xl font-bold text-[#3B82F6]">3.2 min</div>
-            <div className="text-[11px] text-slate-400 font-mono mt-0.5">MTTR (Operator Response)</div>
+            <div className="font-mono text-xl font-bold text-[#F59E0B]">{pendingCount} Awaiting</div>
+            <div className="text-[11px] text-slate-400 font-mono mt-0.5">Pending Operator HITL</div>
           </div>
-          <CheckCircle2 className="w-6 h-6 text-[#3B82F6]" />
+          <CheckCircle2 className="w-6 h-6 text-[#F59E0B]" />
         </div>
 
         <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
           <div>
-            <div className="font-mono text-xl font-bold text-[#10B981]">2.1%</div>
-            <div className="text-[11px] text-slate-400 font-mono mt-0.5">False Positive Ratio</div>
+            <div className="font-mono text-xl font-bold text-[#10B981]">{verifiedCount} Dispatched</div>
+            <div className="text-[11px] text-slate-400 font-mono mt-0.5">Operator Verified</div>
           </div>
           <XCircle className="w-6 h-6 text-[#10B981]" />
         </div>

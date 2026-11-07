@@ -73,6 +73,9 @@ export function useSocTelemetry() {
             const msg = JSON.parse(event.data);
             if (msg.type === 'TELEMETRY_AND_AI_TICK' && Array.isArray(msg.cameras)) {
               setCameras(msg.cameras);
+            } else if (msg.type === 'NEW_INCIDENT' && msg.incident) {
+              setIncidents((prev) => [msg.incident, ...prev.filter(i => i.id !== msg.incident.id)]);
+              fetchData();
             }
           } catch {
             // bỏ qua gói tin lỗi

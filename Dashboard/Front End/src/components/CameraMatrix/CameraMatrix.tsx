@@ -13,15 +13,31 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
   cameras,
   onPtzCommand,
 }) => {
+  const displayCameras: ICameraDevice[] = [...cameras];
+  while (displayCameras.length < 4) {
+    const idx = displayCameras.length + 1;
+    displayCameras.push({
+      id: `standby_0${idx}`,
+      name: `Slot ${idx} (Chờ luồng AI)`,
+      ip: `192.168.1.${100 + idx}`,
+      fps: 0,
+      bitrateKbps: 0,
+      status: 'DEGRADED',
+      streamUrl: '',
+      ptzEnabled: false,
+      boundingBoxes: []
+    });
+  }
+
   const handlePtzLeft = (action: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN' | 'AUTO_FOCUS') => {
-    if (onPtzCommand && cameras[0]) {
-      onPtzCommand(cameras[0].id, action);
+    if (onPtzCommand && displayCameras[0]) {
+      onPtzCommand(displayCameras[0].id, action);
     }
   };
 
   const handlePtzRight = (action: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN' | 'AUTO_FOCUS') => {
-    if (onPtzCommand && cameras[1]) {
-      onPtzCommand(cameras[1].id, action);
+    if (onPtzCommand && displayCameras[1]) {
+      onPtzCommand(displayCameras[1].id, action);
     }
   };
 
@@ -72,7 +88,7 @@ export const CameraMatrix: React.FC<CameraMatrixProps> = ({
 
         {/* Lưới 4 Ô Video (2x2) */}
         <div className="grid grid-cols-2 grid-rows-2 gap-[2px] bg-[#1E2631] flex-1">
-          {cameras.slice(0, 4).map((cam) => (
+          {displayCameras.slice(0, 4).map((cam) => (
             <CameraSlot key={cam.id} camera={cam} />
           ))}
         </div>

@@ -1,0 +1,11 @@
+{
+  "name": "urban-safety-soc-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --dir CloudflareWorker run dev",
+    "build": "pnpm --dir CloudflareWorker run build",
+    "deploy": "pnpm --dir CloudflareWorker run deploy",
+    "build:frontend": "pnpm --dir \"Dashboard/Front End\" run build"
+  }
+}
