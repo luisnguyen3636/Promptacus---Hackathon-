@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -23,7 +23,7 @@ class CameraRecorder:
 
     def __init__(
         self,
-        camera_index: int = 0,
+        camera_index: Union[int, str] = 0,
         resolution: Tuple[int, int] = (640, 480),
         record_full_session: bool = False,
         auto_extract_evidence: bool = True,

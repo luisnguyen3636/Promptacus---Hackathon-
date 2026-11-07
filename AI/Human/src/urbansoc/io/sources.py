@@ -5,7 +5,7 @@ import platform
 import queue
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -71,7 +71,7 @@ class CameraSource:
 
     def __init__(
         self,
-        camera_index: int = 0,
+        camera_index: Union[int, str] = 0,
         resolution: Tuple[int, int] = (640, 480),
         fps: float = 20.0,
     ) -> None:
@@ -91,8 +91,9 @@ class CameraSource:
     def _init_camera(self) -> None:
         req_w, req_h = self.requested_resolution
 
-        # On Windows, try DirectShow (CAP_DSHOW) first for fast webcam initialization
-        if platform.system() == "Windows":
+        if isinstance(self.camera_index, str):
+            self.cap = cv2.VideoCapture(self.camera_index)
+        elif platform.system() == "Windows":
             try:
                 self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
             except Exception as e:

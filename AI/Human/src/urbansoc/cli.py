@@ -27,9 +27,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--camera",
-        type=int,
-        default=0,
-        help="Camera device index (default: 0)",
+        type=str,
+        default="0",
+        help="Camera device index (default: 0) or path to a video file for simulation",
     )
     parser.add_argument(
         "--weights",
@@ -156,9 +156,11 @@ def main(argv: Optional[list] = None) -> int:
         longitude=args.camera_lon,
     )
 
+    cam_target = int(args.camera) if args.camera.isdigit() else args.camera
+
     if args.mode == "live":
         app = CameraRecorder(
-            camera_index=args.camera,
+            camera_index=cam_target,
             record_full_session=args.record_all,
             model_weights=args.weights,
             device=args.device,
