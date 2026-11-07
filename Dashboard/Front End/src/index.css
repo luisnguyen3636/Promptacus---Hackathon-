@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  /* Bảng màu Nền */
+  --color-bg-app: #080B10;
+  --color-bg-panel: #0E131A;
+  --color-bg-panel-header: #121822;
+  --color-bg-panel-subtle: #161E29;
+  --color-bg-active-nav: #112224;
+  --color-bg-overlay-cctv: rgba(8, 11, 16, 0.85);
+
+  /* Hệ thống Khung viền sắc nét */
+  --color-border-sharp: #1E2631;
+  --color-border-subtle: #2D3748;
+  --color-border-active: #3B82F6;
+
+  /* Bảng màu Chỉ số & Cảnh báo */
+  --color-accent-cyan: #06B6D4;
+  --color-accent-blue: #3B82F6;
+  --color-accent-emerald: #10B981;
+  --color-accent-amber: #F59E0B;
+  --color-accent-red: #DC2626;
+  --color-accent-red-bright: #EF4444;
+
+  /* Hệ thống Màu chữ */
+  --color-text-white: #FFFFFF;
+  --color-text-primary: #F8FAFC;
+  --color-text-secondary: #94A3B8;
+  --color-text-muted: #64748B;
+
+  /* Phông chữ Kỹ thuật */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ==========================================================================
+   SHARP INDUSTRIAL GRID ENFORCEMENT (ÉP PHẲNG 100%)
+   ========================================================================== */
+*, *::before, *::after {
+  box-sizing: border-box;
+  border-radius: 0px !important;
+  box-shadow: none !important;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-bg-app);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar tối giản công nghiệp */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg-app);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-sharp);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-subtle);
+}
+
+/* Bộ lọc video giả lập CCTV Hồng ngoại (Monochrome High Contrast) */
+.cctv-stream-filter {
+  filter: grayscale(85%) contrast(125%) brightness(95%);
+}

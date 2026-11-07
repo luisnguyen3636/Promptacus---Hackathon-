@@ -1,0 +1,47 @@
+system:
+  fps: 20.0
+  resolution: [640, 480]
+  device: null
+
+detector:
+  model_weights: "yolo/yolo11n-pose.pt"
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  track_activation_threshold: 0.25
+  lost_track_buffer: 45
+  minimum_matching_threshold: 0.80
+  keypoint_confidence_threshold: 0.25
+
+behavior:
+  history_window_size: 30
+  fall_angle_threshold: 55.0
+  fall_aspect_ratio_thresh: 0.90
+  run_speed_multiplier: 1.75
+  loiter_time_threshold: 10.0
+  fight_wrist_energy_thresh: 1200.0
+  fight_distance_norm: 1.35
+  enter_debounce_frames: 8
+  exit_debounce_frames: 12
+  fast_track_debounce_frames: 6
+  bbox_ema_alpha: 0.65
+  track_disappeared_timeout: 5.0
+  heartbeat_interval: 1.0
+
+evidence:
+  pre_roll_seconds: 1.5
+  post_roll_seconds: 2.0
+  trigger_policy: "HUMAN_PRESENCE"  # Options: HUMAN_PRESENCE | THREAT_THRESHOLD
+  threat_threshold: "HIGH"
+
+render:
+  show_skeleton: true
+  show_debug_box: true
+  hud_height_px: 44
+  debug_box_width_px: 410
+  debug_box_height_px: 165
+
+paths:
+  yolo_dir: "yolo"
+  models_dir: "models"
+  output_dir: "output"
+  records_dir: "records"
