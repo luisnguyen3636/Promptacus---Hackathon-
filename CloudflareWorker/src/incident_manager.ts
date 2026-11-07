@@ -291,20 +291,25 @@ export async function ingestServerPayloadToKv(
     payload.id ||
     `EVT_${cameraId}_${frameIndex !== undefined ? frameIndex : Date.now()}_${Date.now().toString().slice(-4)}`;
 
-  const fullImageBase64 =
+  const cleanImg = (val?: string | null): string | undefined => {
+    if (!val || typeof val !== "string") return undefined;
+    if (val.includes("...")) return undefined;
+    return val;
+  };
+
+  const fullImageBase64 = cleanImg(
     payload.image_base64 ||
-    payload.image ||
-    det?.full_image?.image_base64 ||
-    payload.snapshot_url ||
-    payload.evidence_url ||
-    undefined;
+      payload.image ||
+      det?.full_image?.image_base64 ||
+      payload.snapshot_url ||
+      payload.evidence_url
+  );
 
-  const subjectCropBase64 =
-    payload.subject_crop_base64 ||
-    subjects[0]?.crop_image_base64 ||
-    undefined;
+  const subjectCropBase64 = cleanImg(
+    payload.subject_crop_base64 || subjects[0]?.crop_image_base64
+  );
 
-  const handCropBase64 = payload.hand_crop_base64 || undefined;
+  const handCropBase64 = cleanImg(payload.hand_crop_base64);
 
   const forensicSha256 =
     payload.forensic_hash ||
@@ -315,7 +320,7 @@ export async function ingestServerPayloadToKv(
   const imageUrl = payload.image_url || (fullImageBase64 ? `/api/v1/incidents/${incidentId}/image.jpg` : undefined);
   const handCropUrl = payload.hand_crop_url || (handCropBase64 ? `/api/v1/incidents/${incidentId}/hand_crop.jpg` : undefined);
 
-  const peakSnapshot = fullImageBase64 || imageUrl;
+  const peakSnapshot = fullImageBase64;
   const preSnapshot = subjectCropBase64 || handCropBase64 || peakSnapshot;
 
   const incident: IIncidentItem = {

@@ -19,46 +19,44 @@ export const CameraSlot: React.FC<CameraSlotProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [streamError, setStreamError] = useState<boolean>(false);
   const [streamLoaded, setStreamLoaded] = useState<boolean>(false);
-  const [currentStreamSrc, setCurrentStreamSrc] = useState<string>(camera.streamUrl || '');
   const [retryCount, setRetryCount] = useState<number>(0);
 
   const isUnassigned = camera.id.startsWith('unassigned_slot_');
 
-  const isHttpStream = Boolean(
-    !isUnassigned &&
-      camera.streamUrl &&
-      (camera.streamUrl.startsWith('http://') ||
-        camera.streamUrl.startsWith('https://') ||
-        camera.streamUrl.startsWith('/api/'))
-  );
+  // Prefer valid base64 snapshot from Server JSON if present; otherwise use same-origin Worker stream route
+  const validSnapshot =
+    camera.lastSnapshotBase64 && !camera.lastSnapshotBase64.includes('...')
+      ? camera.lastSnapshotBase64
+      : null;
+
+  const effectiveStreamSrc =
+    validSnapshot || `/api/v1/cameras/${encodeURIComponent(camera.id)}/stream`;
+
+  const isHttpStream = Boolean(!isUnassigned && effectiveStreamSrc);
 
   useEffect(() => {
-    setCurrentStreamSrc(camera.streamUrl || '');
     setStreamError(false);
-  }, [camera.streamUrl]);
+  }, [camera.id, validSnapshot]);
 
   const handleStreamError = () => {
-    if (camera.directStreamUrl && currentStreamSrc !== camera.directStreamUrl) {
-      setCurrentStreamSrc(camera.directStreamUrl);
-    } else {
-      setStreamError(true);
-      setStreamLoaded(false);
-    }
+    setStreamError(true);
+    setStreamLoaded(false);
   };
 
   const handleManualRetry = (e: React.MouseEvent) => {
     e.stopPropagation();
     setStreamError(false);
     setRetryCount((prev) => prev + 1);
-    setCurrentStreamSrc(
-      `${camera.streamUrl || ''}${camera.streamUrl?.includes('?') ? '&' : '?'}retry=${Date.now()}`
-    );
   };
 
   useCctvCanvas(canvasRef, camera, isHttpStream && streamLoaded && !streamError);
 
   const zoomScale = Math.max(1.0, Math.min(3.5, digitalZoom || camera.ptzState?.zoom || 1.0));
   const fpsVal = camera.measuredFps !== undefined ? camera.measuredFps : camera.fps;
+
+  const imgSrcWithRetry =
+    validSnapshot ||
+    `${effectiveStreamSrc}${effectiveStreamSrc.includes('?') ? '&' : '?'}r=${retryCount}`;
 
   return (
     <div
@@ -69,11 +67,11 @@ export const CameraSlot: React.FC<CameraSlotProps> = ({
         isZoomed ? 'border-[#3B82F6]' : 'border-[#1E2631] hover:border-[#3B82F6]'
       }`}
     >
-      {/* 1. Luồng Video Trực tiếp */}
-      {isHttpStream && (
+      {/* 1. Luồng Video / Snapshot Trực tiếp từ Server */}
+      {isHttpStream && !streamError && (
         <img
-          key={`${currentStreamSrc}-${retryCount}`}
-          src={currentStreamSrc}
+          key={`${camera.id}-${retryCount}`}
+          src={imgSrcWithRetry}
           alt={camera.name}
           onLoad={() => {
             setStreamLoaded(true);

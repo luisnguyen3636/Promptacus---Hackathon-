@@ -28,6 +28,11 @@ export async function loadCamerasFromKv(env?: Env): Promise<ICameraDevice[]> {
         if (Array.isArray(parsed)) {
           for (const cam of parsed) {
             if (cam && cam.id) {
+              cam.streamUrl = `/api/v1/cameras/${cam.id}/stream`;
+              cam.directStreamUrl = `/api/v1/cameras/${cam.id}/stream`;
+              if (cam.lastSnapshotBase64 && cam.lastSnapshotBase64.includes("...")) {
+                cam.lastSnapshotBase64 = undefined;
+              }
               cameraRegistry.set(cam.id, cam);
             }
           }
@@ -207,16 +212,18 @@ export async function upsertCameraFromServerPayload(
       });
   }
 
-  const defaultStreamUrl =
-    env?.LIVE_CAMERA_STREAM_URL ||
-    "https://means-brick-determined-send.trycloudflare.com/api/v1/cameras/LAPTOP_01/stream";
-
-  const snapshotBase64 =
+  const rawSnapshot =
     payload.image_base64 ||
     payload.image ||
     payload.snapshot_url ||
-    payload.detection?.full_image?.image_base64 ||
-    existing?.lastSnapshotBase64;
+    payload.detection?.full_image?.image_base64;
+
+  const isValidSnapshot =
+    typeof rawSnapshot === "string" &&
+    rawSnapshot.length > 60 &&
+    !rawSnapshot.includes("...");
+
+  const snapshotBase64 = isValidSnapshot ? rawSnapshot : existing?.lastSnapshotBase64;
 
   const displayName = cameraName
     ? `${cameraName} (${location})`
@@ -231,8 +238,8 @@ export async function upsertCameraFromServerPayload(
     fps: Number(measuredFps.toFixed(1)),
     bitrateKbps: existing?.bitrateKbps || 2048,
     status: payload.status === "offline" ? "OFFLINE" : "ONLINE",
-    streamUrl: existing?.streamUrl || `/api/v1/cameras/${cameraId}/stream`,
-    directStreamUrl: existing?.directStreamUrl || defaultStreamUrl,
+    streamUrl: `/api/v1/cameras/${cameraId}/stream`,
+    directStreamUrl: `/api/v1/cameras/${cameraId}/stream`,
     ptzEnabled: true,
     ptzState: existing?.ptzState || { zoom: 1.0, pan: 0, tilt: 0, focus: "AUTO" },
     boundingBoxes,

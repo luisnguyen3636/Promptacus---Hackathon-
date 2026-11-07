@@ -243,26 +243,32 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
     raw.event_id ||
     `EVT_${cameraId}_${frameIndex ?? Date.now()}`;
 
-  const fullImageBase64 =
+  const cleanImg = (val?: string | null): string | null => {
+    if (!val || typeof val !== 'string') return null;
+    if (val.includes('...')) return null;
+    return val;
+  };
+
+  const fullImageBase64 = cleanImg(
     item.fullImageBase64 ||
-    item.image_base64 ||
-    item.image ||
-    raw.image_base64 ||
-    raw.image ||
-    null;
+      item.image_base64 ||
+      item.image ||
+      raw.image_base64 ||
+      raw.image
+  );
 
-  const subjectCropBase64 =
+  const subjectCropBase64 = cleanImg(
     item.subjectCropBase64 ||
-    item.subject_crop_base64 ||
-    raw.subject_crop_base64 ||
-    subjects[0]?.crop_image_base64 ||
-    null;
+      item.subject_crop_base64 ||
+      raw.subject_crop_base64 ||
+      subjects[0]?.crop_image_base64
+  );
 
-  const handCropBase64 =
+  const handCropBase64 = cleanImg(
     item.handCropBase64 ||
-    item.hand_crop_base64 ||
-    raw.hand_crop_base64 ||
-    null;
+      item.hand_crop_base64 ||
+      raw.hand_crop_base64
+  );
 
   const imageUrl = item.imageUrl || item.image_url || raw.image_url;
   const handCropUrl = item.handCropUrl || item.hand_crop_url || raw.hand_crop_url;
@@ -273,15 +279,19 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
     raw.forensic_hash ||
     subjects[0]?.crop_image_sha256;
 
+  const rawSnapshots = item.cameraSnapshots;
   const cameraSnapshots =
-    item.cameraSnapshots ||
-    (fullImageBase64 || subjectCropBase64 || handCropBase64 || imageUrl
+    fullImageBase64 || subjectCropBase64 || handCropBase64
       ? {
-          preEventSnapshotUrl: subjectCropBase64 || handCropBase64 || fullImageBase64 || imageUrl,
-          eventPeakSnapshotUrl: fullImageBase64 || imageUrl || subjectCropBase64,
-          handCropSnapshotUrl: handCropBase64 || handCropUrl,
+          preEventSnapshotUrl: subjectCropBase64 || handCropBase64 || fullImageBase64 || undefined,
+          eventPeakSnapshotUrl: fullImageBase64 || subjectCropBase64 || undefined,
+          handCropSnapshotUrl: handCropBase64 || undefined,
         }
-      : null);
+      : rawSnapshots &&
+        !String(rawSnapshots.eventPeakSnapshotUrl || '').includes('...') &&
+        !String(rawSnapshots.eventPeakSnapshotUrl || '').startsWith('/api/v1/incidents/')
+      ? rawSnapshots
+      : null;
 
   const firstKin = subjects[0]?.kinematics;
   const kinematicsSummary = firstKin
