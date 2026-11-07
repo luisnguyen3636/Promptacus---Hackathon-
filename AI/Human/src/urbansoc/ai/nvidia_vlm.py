@@ -124,8 +124,12 @@ class NvidiaVisionClient:
         # Build prompt and schema constraints
         endpoint = f"{self.base_url}/chat/completions"
         system_prompt = (
-            "You are an expert Autonomous Urban Safety AI SOC Security Analyst.\n"
-            "Analyze the provided surveillance camera frame image with extreme accuracy.\n"
+            "You are an elite Autonomous Urban Safety & Forensics AI SOC Specialist.\n"
+            "Analyze the provided surveillance camera frame with deep situational awareness.\n"
+            "Do NOT merely describe superficial objects. You MUST evaluate:\n"
+            "1. True situational context and scenario classification (robbery, assault, mutual combat, defense, loitering).\n"
+            "2. Intent, objectives, and power dynamics of each actor (attacker vs victim, dominance, vulnerability).\n"
+            "3. Predictive escalation forecast for the next 5-10 seconds.\n"
             "You must output ONLY a valid JSON object matching the requested schema.\n"
             "Do NOT include any markdown code blocks, backticks, conversational preamble, or explanations outside the JSON."
         )
@@ -139,7 +143,7 @@ class NvidiaVisionClient:
                     f"- Timestamp: {now_iso}\n"
                     f"- Location: {location_str}\n"
                     f"- Local Rule Detector Hint: {action_hint or 'UNSPECIFIED'}\n\n"
-                    "Evaluate physical safety, combat/assault interactions, weapons, and fallen persons.\n"
+                    "Evaluate physical safety, combat/assault interactions, suspect intent, scenario context, and predicted escalation.\n"
                     "Output a strict JSON object with this EXACT structure:\n"
                     "{\n"
                     '  "severity": "low" | "medium" | "high" | "critical",\n'
@@ -147,16 +151,36 @@ class NvidiaVisionClient:
                     '  "action_type": "NORMAL" | "FIGHTING" | "ASSAULT" | "WEAPON_THREAT" | "FALLEN" | "LOITERING" | "PURSUIT" | "RESTRAINING" | "SURROUNDING" | "SUSPICIOUS",\n'
                     '  "confidence": <float between 0.0 and 1.0>,\n'
                     '  "threat_score": <float between 0.0 and 1.0>,\n'
-                    '  "description": "<one-sentence summary of observed scene>",\n'
-                    '  "reasoning": "<concise visual justification of why this severity was assigned>",\n'
+                    '  "situation_assessment": {\n'
+                    '    "scenario_type": "<e.g. ARMED_MUGGING | MUTUAL_FIGHT | TARGETED_ASSAULT | PEACEFUL_COMMUTE>",\n'
+                    '    "power_dynamics": "<e.g. 1 aggressor dominating 1 cornered victim>",\n'
+                    '    "environmental_context": "<e.g. Narrow space, poor escape route, isolated zone>",\n'
+                    '    "victim_vulnerability": "<e.g. HIGH (pinned to ground/wall) | MODERATE | NONE>"\n'
+                    '  },\n'
+                    '  "intent_prediction": {\n'
+                    '    "primary_intent": "<e.g. FORCIBLE_SUBJUGATION | BODILY_HARM | ASSET_THEFT | ESCAPE | NEUTRAL>",\n'
+                    '    "escalation_risk": "EXTREME" | "HIGH" | "MODERATE" | "LOW",\n'
+                    '    "predicted_next_action": "<detailed prediction of what will occur in next 5-10s without intervention>",\n'
+                    '    "time_to_critical_harm_estimate": "<e.g. < 10 seconds | imminent | low risk>"\n'
+                    '  },\n'
+                    '  "description": "<one-sentence comprehensive situational summary>",\n'
+                    '  "reasoning": "<concise visual justification of situational diagnosis and intent>",\n'
                     '  "actors": [\n'
-                    '    {"id": <int>, "role": "attacker" | "victim" | "bystander" | "individual", "action": "<action>", "posture": "<posture>"}\n'
-                    "  ],\n"
+                    '    {\n'
+                    '      "id": <int>,\n'
+                    '      "role": "attacker" | "victim" | "bystander" | "individual",\n'
+                    '      "action": "<action>",\n'
+                    '      "intent": "<individual inferred intent>",\n'
+                    '      "posture": "<posture description>",\n'
+                    '      "interacting_with": <int or null>\n'
+                    '    }\n'
+                    '  ],\n'
                     '  "visual_cues": {\n'
                     '    "weapons_visible": <true/false>,\n'
                     '    "physical_contact": <true/false>,\n'
-                    '    "fallen_person": <true/false>\n'
-                    "  },\n"
+                    '    "fallen_person": <true/false>,\n'
+                    '    "cornered_subject": <true/false>\n'
+                    '  },\n'
                     '  "recommended_action": "MONITOR" | "VERIFY" | "DISPATCH_SECURITY" | "CALL_EMERGENCY",\n'
                     '  "is_urgent": <true/false>,\n'
                     '  "camera_id": "' + camera_id + '",\n'
@@ -300,6 +324,42 @@ class NvidiaVisionClient:
         actors = data.get("actors", [])
         if not isinstance(actors, list):
             actors = []
+        # Ensure intent field is present in each actor
+        for a in actors:
+            if isinstance(a, dict) and "intent" not in a:
+                role = a.get("role", "individual")
+                if role == "attacker":
+                    a["intent"] = "subdue or inflict harm"
+                elif role == "victim":
+                    a["intent"] = "defend or escape"
+                else:
+                    a["intent"] = "neutral observation"
+
+        # Situation Assessment normalization
+        raw_sit = data.get("situation_assessment")
+        if not isinstance(raw_sit, dict):
+            raw_sit = {}
+        situation_assessment = {
+            "scenario_type": str(raw_sit.get("scenario_type") or f"SCENARIO_{action}"),
+            "power_dynamics": str(raw_sit.get("power_dynamics") or ("Asymmetrical combat confrontation" if action in ("FIGHTING", "ASSAULT", "WEAPON_THREAT") else "Balanced / Single subject")),
+            "environmental_context": str(raw_sit.get("environmental_context") or "Monitored urban sector"),
+            "victim_vulnerability": str(raw_sit.get("victim_vulnerability") or ("HIGH (Defensive posture / physical contact)" if action in ("FIGHTING", "FALLEN", "WEAPON_THREAT") else "LOW")),
+        }
+
+        # Intent Prediction & Escalation Forecast normalization
+        raw_intent = data.get("intent_prediction")
+        if not isinstance(raw_intent, dict):
+            raw_intent = {}
+        esc_risk = str(raw_intent.get("escalation_risk") or ("EXTREME" if raw_sev == "critical" else "HIGH" if raw_sev == "high" else "MODERATE" if raw_sev == "medium" else "LOW")).upper()
+        if esc_risk not in ("EXTREME", "HIGH", "MODERATE", "LOW"):
+            esc_risk = "EXTREME" if raw_sev == "critical" else "LOW"
+
+        intent_prediction = {
+            "primary_intent": str(raw_intent.get("primary_intent") or ("FORCIBLE_SUBJUGATION_OR_HARM" if action in ("FIGHTING", "ASSAULT", "WEAPON_THREAT") else "ROUTINE_TRANSIT")),
+            "escalation_risk": esc_risk,
+            "predicted_next_action": str(raw_intent.get("predicted_next_action") or ("Imminent risk of severe bodily trauma if conflict is not halted" if raw_sev in ("high", "critical") else "Situation expected to remain stable")),
+            "time_to_critical_harm_estimate": str(raw_intent.get("time_to_critical_harm_estimate") or ("< 10 seconds" if raw_sev in ("high", "critical") else "None")),
+        }
 
         visual_cues = data.get("visual_cues", {})
         if not isinstance(visual_cues, dict):
@@ -307,6 +367,7 @@ class NvidiaVisionClient:
                 "weapons_visible": False,
                 "physical_contact": False,
                 "fallen_person": False,
+                "cornered_subject": False,
             }
 
         rec_act = str(data.get("recommended_action", "MONITOR")).strip().upper()
@@ -318,6 +379,8 @@ class NvidiaVisionClient:
             "action_type": action,
             "confidence": round(conf, 2),
             "threat_score": round(threat, 2),
+            "situation_assessment": situation_assessment,
+            "intent_prediction": intent_prediction,
             "description": data.get("description") or f"Observed activity: {action}",
             "reasoning": data.get("reasoning") or f"Evaluation based on visual characteristics of {action}.",
             "actors": actors,
@@ -325,6 +388,7 @@ class NvidiaVisionClient:
                 "weapons_visible": bool(visual_cues.get("weapons_visible", False)),
                 "physical_contact": bool(visual_cues.get("physical_contact", False)),
                 "fallen_person": bool(visual_cues.get("fallen_person", False)),
+                "cornered_subject": bool(visual_cues.get("cornered_subject", False)),
             },
             "recommended_action": rec_act,
             "is_urgent": is_urgent,
@@ -415,19 +479,88 @@ class NvidiaVisionClient:
             "critical": "CALL_EMERGENCY",
         }
 
+        # Situation assessment mapping
+        scenario_types = {
+            "FIGHTING": "VIOLENT_PHYSICAL_ALTERCATION",
+            "ASSAULT": "UNILATERAL_AGGRESSION_ATTACK",
+            "WEAPON_THREAT": "ARMED_CONFRONTATION_HOSTILE_AIM",
+            "KNIFE_THREAT": "EDGED_WEAPON_LETHAL_ASSAULT",
+            "FALLEN": "INCAPACITATED_CASUALTY_ON_GROUND",
+            "PURSUIT": "FOOT_CHASE_HOSTILE_PURSUIT",
+            "LOITERING": "SUSPICIOUS_PROLONGED_RECONNAISSANCE",
+            "NORMAL": "PEACEFUL_ROUTINE_PEDESTRIAN_TRANSIT",
+        }
+        power_dynamics_map = {
+            "FIGHTING": "Active multi-subject clash with reciprocal aggression",
+            "ASSAULT": "Dominant aggressor overwhelming defensive victim",
+            "WEAPON_THREAT": "Subject commanding area with lethal weapon stance",
+            "KNIFE_THREAT": "Aggressor closing distance with concealed/drawn blade",
+            "FALLEN": "Victim immobilized; immediate medical vulnerability",
+            "PURSUIT": "Chaser rapidly closing distance on fleeing target",
+            "NORMAL": "Calm, non-threatening individual movement",
+        }
+        intent_map = {
+            "FIGHTING": "BODILY_HARM_AND_INCAPACITATION",
+            "ASSAULT": "VIOLENT_SUBJUGATION",
+            "WEAPON_THREAT": "LETHAL_FORCE_COERCION",
+            "KNIFE_THREAT": "CLOSE_QUARTERS_STABBING_OR_ROBBERY",
+            "FALLEN": "MEDICAL_EMERGENCY_REQUIRING_AID",
+            "PURSUIT": "INTERCEPTION_AND_TACKLE",
+            "NORMAL": "ROUTINE_TRANSIT",
+        }
+        predicted_actions = {
+            "FIGHTING": "Escalation to ground combat with severe blunt force trauma within 5-10s",
+            "ASSAULT": "Victim collapse or loss of consciousness imminent without immediate intervention",
+            "WEAPON_THREAT": "High risk of projectile discharge or lunging strike within 5s",
+            "KNIFE_THREAT": "Penetrating trauma imminent; urgent barrier intervention required",
+            "FALLEN": "Permanent trauma or asphyxiation risk if subject is unconscious",
+            "PURSUIT": "Physical tackle and aggressive takedown expected at current closing speed",
+            "NORMAL": "Continued safe transit along path",
+        }
+
+        situation_assessment = {
+            "scenario_type": scenario_types.get(action, f"INCIDENT_{action}"),
+            "power_dynamics": power_dynamics_map.get(action, "Single subject observation"),
+            "environmental_context": "Monitored urban security quadrant with high camera fidelity",
+            "victim_vulnerability": "CRITICAL" if action in ("FALLEN", "KNIFE_THREAT", "ASSAULT") else "HIGH" if action == "FIGHTING" else "LOW",
+        }
+
+        intent_prediction = {
+            "primary_intent": intent_map.get(action, "UNSPECIFIED"),
+            "escalation_risk": "EXTREME" if severity == "critical" else "HIGH" if severity == "high" else "MODERATE" if severity == "medium" else "LOW",
+            "predicted_next_action": predicted_actions.get(action, "Action trajectory stable"),
+            "time_to_critical_harm_estimate": "< 5 seconds" if severity == "critical" else "< 15 seconds" if severity == "high" else "None",
+        }
+
+        # Enrich actors with inferred intent
+        enriched_actors = []
+        for a in actors:
+            act_dict = dict(a)
+            role = act_dict.get("role", "individual")
+            if role == "attacker":
+                act_dict["intent"] = "deliver strikes and overpower target"
+            elif role == "victim":
+                act_dict["intent"] = "shield vital areas and create distance"
+            else:
+                act_dict["intent"] = "unimpaired observation"
+            enriched_actors.append(act_dict)
+
         return {
             "severity": severity,
             "timestamp": timestamp,
             "action_type": action,
             "confidence": 0.94,
             "threat_score": score,
+            "situation_assessment": situation_assessment,
+            "intent_prediction": intent_prediction,
             "description": desc,
             "reasoning": reason,
-            "actors": actors,
+            "actors": enriched_actors,
             "visual_cues": {
                 "weapons_visible": action in ("WEAPON_THREAT", "KNIFE_THREAT"),
                 "physical_contact": action in ("FIGHTING", "RESTRAINING"),
                 "fallen_person": action == "FALLEN",
+                "cornered_subject": action in ("FIGHTING", "ASSAULT"),
             },
             "recommended_action": rec_actions[severity],
             "is_urgent": severity in ("high", "critical"),

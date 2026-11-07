@@ -550,6 +550,8 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             response_data["action_type"] = vlm_res.get("action_type", primary_action)
             response_data["threat_score"] = vlm_res.get("threat_score", 0.0)
             response_data["confidence"] = vlm_res.get("confidence", 0.90)
+            response_data["situation_assessment"] = vlm_res.get("situation_assessment", {})
+            response_data["intent_prediction"] = vlm_res.get("intent_prediction", {})
             response_data["actors"] = vlm_res.get("actors", actors_hint)
             response_data["visual_cues"] = vlm_res.get("visual_cues", {})
             response_data["description"] = vlm_res.get("description", "")
@@ -618,13 +620,16 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
 
     def _send_json_response(self, status_code: int, data: Dict[str, Any]) -> None:
         """Send JSON response with appropriate HTTP headers."""
-        resp_bytes = json.dumps(data).encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(resp_bytes)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(resp_bytes)
+        try:
+            resp_bytes = json.dumps(data).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp_bytes)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(resp_bytes)
+        except (BrokenPipeError, ConnectionResetError, socket.error):
+            pass
 
     def log_message(self, format: str, *args: Any) -> None:
         """Suppress noisy frame ingestion logging unless in debug mode."""

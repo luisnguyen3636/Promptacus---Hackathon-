@@ -103,6 +103,9 @@ class TestReceiverHandler(SimpleHTTPRequestHandler):
         visual_cues = payload.get("visual_cues") or {}
         reasoning = payload.get("reasoning") or payload.get("description") or "N/A"
 
+        situation = payload.get("situation_assessment") or {}
+        intent_data = payload.get("intent_prediction") or {}
+
         # Determine color badge
         if severity == "CRITICAL":
             sev_color = RED + BOLD
@@ -120,6 +123,15 @@ class TestReceiverHandler(SimpleHTTPRequestHandler):
         print(f"• Camera ID:        {CYAN}{camera_id}{RESET} ({location_str})")
         print(f"• Severity:         {sev_color}[{severity}]{RESET} | Threat Score: {BOLD}{threat_score}{RESET}")
         print(f"• Action Detected:  {MAGENTA}{BOLD}{action}{RESET}")
+        if situation:
+            print(f"• Kịch bản (Scenario): {BOLD}{situation.get('scenario_type', 'N/A')}{RESET}")
+            print(f"• Tương quan vị thế:    {situation.get('power_dynamics', 'N/A')}")
+            print(f"• Yếu tố rủi ro nạn nhân: {situation.get('victim_vulnerability', 'N/A')}")
+        if intent_data:
+            esc_risk = intent_data.get('escalation_risk', 'LOW')
+            esc_color = RED if esc_risk in ('CRITICAL', 'EXTREME') else YELLOW if esc_risk == 'HIGH' else GREEN
+            print(f"• Ý đồ đối tượng:     {BOLD}{intent_data.get('primary_intent', 'N/A')}{RESET} | Rủi ro leo thang: {esc_color}[{esc_risk}]{RESET}")
+            print(f"• Dự báo 5-10s tới:   {CYAN}{intent_data.get('predicted_next_action', 'N/A')}{RESET}")
         print(f"• Reasoning:        {reasoning}")
 
         if isinstance(actors, list) and actors:
@@ -129,7 +141,8 @@ class TestReceiverHandler(SimpleHTTPRequestHandler):
                     a_id = a.get("id") or a.get("track_id", "?")
                     a_role = a.get("role", "individual")
                     a_act = a.get("action") or a.get("behavior", "")
-                    print(f"    - Track #{a_id} | Role: {BOLD}{a_role}{RESET} | Action: {a_act}")
+                    a_intent = a.get("intent", "unspecified")
+                    print(f"    - Track #{a_id} | Role: {BOLD}{a_role}{RESET} | Action: {a_act} | Intent: {a_intent}")
 
         if isinstance(visual_cues, dict) and visual_cues:
             print(f"• Visual Cues:      {visual_cues}")

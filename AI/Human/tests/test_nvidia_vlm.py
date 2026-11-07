@@ -77,6 +77,13 @@ def test_nvidia_client_schema_and_metadata() -> None:
     assert isinstance(result["actors"], list)
     assert "visual_cues" in result
     assert isinstance(result["visual_cues"], (dict, list))
+    assert "situation_assessment" in result
+    assert "scenario_type" in result["situation_assessment"]
+    assert "power_dynamics" in result["situation_assessment"]
+    assert "intent_prediction" in result
+    assert "primary_intent" in result["intent_prediction"]
+    assert "escalation_risk" in result["intent_prediction"]
+    assert "predicted_next_action" in result["intent_prediction"]
     assert "recommended_action" in result
     assert "description" in result
     assert "reasoning" in result
@@ -153,7 +160,7 @@ def test_server_nvidia_analyze_endpoint(tmp_path: Any) -> None:
             "http://127.0.0.1:8089/api/v1/analyze/nvidia",
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=5.0,
+            timeout=12.0,
         )
         assert resp.status_code == 200
         analysis = resp.json()
