@@ -1,6 +1,6 @@
 # TÀI LIỆU ĐẶC TẢ KỸ THUẬT (TECHNICAL SPECIFICATION)
-## URBAN SAFETY AI-SOC: HỆ THỐNG GIÁM SÁT ĐA PHƯƠNG THỨC NGHE - NHÌN & PHÁT HIỆN TIẾNG LA HÉT / NGUY HIỂM ÂM THANH (MULTIMODAL AUDIO-VISUAL SURVEILLANCE & ACOUSTIC DISTRESS DETECTION)
-**Mã đặc tả:** `SPEC-URBANSOC-AUDIO-03`  
+## URBAN SAFETY AI-SOC: HỆ THỐNG GỬI SỰ KIỆN POST WEBHOOK ĐẾN SERVER VỚI METADATA ĐẦY ĐỦ, ẢNH TOÀN CẢNH, ẢNH ĐỐI TƯỢNG VÀ TỌA ĐỘ CAMERA
+**Mã đặc tả:** `SPEC-URBANSOC-DISPATCH-04`  
 **Dự án:** Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety AI-SOC)  
 **Phương pháp luận:** Spec-Driven Development (SDD) & Strict Human-in-the-Loop (AGENTS.md)  
 **Tác giả:** AI Assistant (dưới quyền Lead Developer / Principal Architect)  
@@ -11,266 +11,251 @@
 ## 1. TỔNG QUAN YÊU CẦU & BỐI CẢNH NGHIỆP VỤ
 
 ### 1.1. Yêu cầu từ Principal Architect
-> "bạn có thể add thêm microphone để detect screaming không, có thể áp dụng thêm cái gì vào thì áp dụng"
-
-Hệ thống Urban Safety AI-SOC hiện tại đã sở hữu bộ nhận dạng thị giác 13 hành vi nguy hiểm (Pose & Spatial Kinematics). Tuy nhiên, trong môi trường đô thị thực tế:
-1. **Góc chết thị giác (Visual Blindspots):** Nạn nhân bị hành hung sau góc tường, gầm cầu vượt, trong bóng tối hoặc ngoài khung hình camera.
-2. **Nhiễu thị giác (Visual Ambiguity):** Hai người ôm nhau hoặc nhảy múa có thể gây phân vân với hành vi khống chế (`RESTRAINING`) hoặc ẩu đả (`FIGHTING`).
-3. **Phản ứng chậm trễ nếu thiếu âm thanh:** Tiếng la hét cầu cứu (`SCREAM`) hoặc tiếng súng (`GUNSHOT`) xảy ra trước khi hành vi bạo lực hoàn toàn lộ diện trên camera.
+> "mỗi khi detect 1 hành động gì đó hãy tiến hành gửi method post lên 1 server (server này tôi tự định nghĩa sau) toàn bộ những metadata cần thiết như timestamp, hình ảnh, hung khí, đối tượng, ảnh đối tượng, vị trí của camera (vị trí này được định nghĩa sau)"
 
 ### 1.2. Mục tiêu Kỹ thuật
-Bổ sung hệ thống **Giám sát Âm thanh Thời gian Thực (Real-Time Acoustic Threat Surveillance)** và **Động cơ Hợp nhất Đa phương thức Nghe - Nhìn (Multimodal Audio-Visual Threat Fusion Engine)**:
-1. **Thu nhận âm thanh đa kênh không khóa (Non-blocking Audio Ingestion):** Luồng Microphone độc lập, hỗ trợ tự động nhận diện phần cứng (ALSA `arecord` / `sounddevice`), file âm thanh kiểm thử (WAV), và bộ sinh âm thanh nhân tạo (Synthetic Mock) cho kiểm thử tự động.
-2. **Bộ phát hiện tiếng la hét & âm thanh nguy hại (Acoustic Threat Classifier):**
-   - **`SCREAM` (Tiếng la hét kinh hoàng / thét thất thanh):** Năng lượng tập trung ở dải tần số cao 1.5 kHz - 4.5 kHz, Spectral Centroid > 2000 Hz, RMS năng lượng cao vượt ngưỡng nền động, Zero-Crossing Rate (ZCR) cao, thời lượng duy trì $\ge 0.25\text{s}$.
-   - **`GUNSHOT` (Tiếng nổ súng / Xung kích cực đoan):** Xung năng lượng bộc phát cực nhanh (Attack Time $< 15\text{ms}$), tỷ số đỉnh/nền (Peak-to-Average Ratio / Crest Factor $> 14\text{ dB}$), kèm suy giảm hàm mũ (decay).
-   - **`AGGRESSIVE_SHOUT` (Tiếng quát tháo / Cãi vã bạo lực):** Dao động năng lượng dải trung 400 Hz - 2.5 kHz có nhịp điệu ngắt quãng và biên độ cao.
-   - **`GLASS_BREAK` (Tiếng kính vỡ / Đập phá tài sản):** Năng lượng tần số rất cao $> 4.5\text{ kHz}$ dạng tạp âm trắng (broadband noise).
-3. **Hợp nhất đa phương thức Nghe - Nhìn (Audio-Visual Fusion):**
-   - Kết hợp điểm đe dọa thị giác ($S_{\text{visual}}$) và âm thanh ($S_{\text{audio}}$).
-   - Leo thang mức đe dọa tức thì (`FAST-TRACK CRITICAL`) khi có sự đồng quy giữa tư thế thị giác và âm thanh hiểm họa (ví dụ: `HANDS_UP` + `SCREAM`, `FIGHTING` + `SCREAM`, `WEAPON_THREAT` + `GUNSHOT`).
-   - Cảnh báo âm thanh ngoài khung hình (`OFF_SCREEN_ACOUSTIC_DISTRESS`) khi camera chưa thấy đối tượng nhưng micro thu được tiếng kêu cứu.
-4. **Bộ đệm bằng chứng âm thanh (Audio Rolling Evidence Buffer):** Lưu giữ 5 giây âm thanh trước và sau sự kiện, tự động đóng gói kèm clip video khi gửi hồ sơ sự cố lên Vận hành viên SOC.
-5. **HUD hiển thị âm thanh & VU Meter thời gian thực:** Đồng hồ đo mức decibel/RMS và nhãn cảnh báo đỏ nhấp nháy trên màn hình trực quan.
+Xây dựng module **SOC Event Webhook Dispatcher** bất đồng bộ (Non-blocking Asynchronous Dispatcher) để gửi toàn bộ gói sự kiện phát hiện (Incident Event Package) bằng phương thức `HTTP POST` (JSON payload kèm Base64 images hoặc Multipart) lên máy chủ đích:
+1. **Dữ liệu định danh & Vị trí Camera (Camera & Geolocation Metadata):**
+   - Hỗ trợ cấu hình mềm dẻo thông qua CLI flag (`--webhook-url`, `--camera-id`, `--camera-name`, `--camera-lat`, `--camera-lon`, `--camera-address`), biến môi trường (`SOC_WEBHOOK_URL`, `SOC_CAMERA_CONFIG`), hoặc file cấu hình `configs/camera.json`.
+2. **Metadata Nhận dạng & Đe dọa (Detection & Threat Metadata):**
+   - `timestamp` (ISO 8601 kèm millisecond, múi giờ địa phương và Unix Epoch ms).
+   - `event_id` (Mã UUIDv4 duy nhất cho mỗi sự kiện).
+   - `primary_action` (Tên hành vi nguy hiểm kích hoạt: `WEAPON_THREAT`, `FIGHTING`, `SNATCHING`, `PURSUIT`, `RESTRAINING`, `SURROUNDING`, `INTRUSION`, `FALLEN`, ...).
+   - `threat_level` (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) & `threat_score` ($0.0 - 1.0$).
+   - `weapon` (Chi tiết hung khí: cờ `is_weapon_detected`, loại hung khí `weapon_type`, độ tin cậy `confidence`, căn cứ động học).
+3. **Dữ liệu Đối tượng & Cắt ảnh Đối tượng (Subjects & Crops):**
+   - Danh sách toàn bộ đối tượng liên quan (`subjects`): `track_id`, vai trò (`suspect`, `victim`, `participant`, `bystander`), `behavior`, bounding box `[x1, y1, x2, y2]`, tốc độ di chuyển, hướng di chuyển.
+   - **Ảnh cắt từng đối tượng (Subject Cropped Images):** Cắt vùng hộp bao đối tượng từ frame gốc (có padding an toàn $10\%$), nén JPEG chất lượng cao và mã hóa `base64`.
+4. **Ảnh Toàn cảnh Sự kiện (Full Frame Snapshot):**
+   - Ảnh chụp toàn cảnh thời điểm phát hiện có vẽ bounding box và khung xương tư thế (Annotated Snapshot), nén JPEG và mã hóa `base64`.
+5. **Cơ chế Hàng Đợi Bất Đồng Bộ (Non-blocking Queue Worker):**
+   - Việc gọi HTTP POST được thực thi trong một `Worker Thread` chuyên trách sử dụng hàng đợi `queue.Queue`.
+   - **Cam kết không nghẽn Pipeline (Zero FPS Impact):** Nếu server phản hồi chậm (2 - 5 giây) hoặc mất mạng, luồng đọc camera và suy luận AI vẫn duy trì 30 FPS mượt mà.
+6. **Bộ lọc Chống Spam Sự kiện (Event Throttling & Debounce):**
+   - Khi một hành vi diễn ra liên tục qua hàng trăm frame (ví dụ ẩu đả 5 giây = 150 frames), hệ thống áp dụng cơ chế Cooldown / Deduplication (mặc định: gửi ngay lập tức khi phát hiện mới hoặc khi leo thang mức độ đe dọa, sau đó áp dụng cooldown 3.0s cho cùng đối tượng) nhằm tránh làm quá tải server nhận.
 
 ---
 
 ## 2. KIẾN TRÚC HỆ THỐNG & SƠ ĐỒ LUỒNG DỮ LIỆU (DATA FLOW & MERMAID)
 
-### 2.1. Sơ đồ Kiến trúc Đa phương thức Nghe - Nhìn (Multimodal AI-SOC Architecture)
+### 2.1. Sơ đồ Luồng Gửi Webhook Không Khóa (Non-blocking Dispatch Pipeline)
 
 ```mermaid
 flowchart TD
-    subgraph SENSORS ["Tầng Thu Nhận Dữ Liệu (Layer 1: Sensors & Buffers)"]
-        CAM["Camera Stream (RTSP / Video File / Webcam)"]
-        MIC["Microphone / ALSA (arecord) / SoundDevice / WAV Mock"]
-        
-        V_BUF["Video Ring Buffer (5s Rolling Buffer)"]
-        A_BUF["Audio Ring Buffer (5s PCM 16kHz Rolling Buffer)"]
-        
-        CAM --> V_BUF
-        MIC --> A_BUF
+    subgraph INGESTION ["Luồng Xử Lý Video Thời Gian Thực (Main Pipeline - 30 FPS)"]
+        FRAME["Video Frame"] --> YOLO["YOLOv11 Pose & Tracking"]
+        YOLO --> RULES["Kinematics & Dangerous Action Rules"]
+        RULES --> STATE["Dynamic State Machine"]
     end
 
-    subgraph WORKERS ["Tầng Phân Tích Độc Lập (Layer 2: Async Analytics)"]
-        V_ANALYZE["Video Pipeline (YOLOv11 Pose + 13 Action Rules)"]
-        A_ANALYZE["Audio Pipeline (FFT / Spectral Centroid / ZCR / RMS Scream Detector)"]
-        
-        V_BUF --> V_ANALYZE
-        A_BUF --> A_ANALYZE
+    subgraph TRIGGER ["Bộ Lọc Kích Hoạt & Đóng Gói (Trigger & Package)"]
+        STATE --> CHECK{"Phát hiện hành vi mới<br/>hoặc Threat >= Ngưỡng?"}
+        CHECK -- Không --> CONTINUE["Tiếp tục xử lý frame tiếp theo"]
+        CHECK -- Có --> DEBOUNCE{"Kiểm tra Cooldown /<br/>State Transition"}
+        DEBOUNCE -- Đang cooldown --> CONTINUE
+        DEBOUNCE -- Được gửi --> EXTRACT["Trích xuất Metadata & Cắt ảnh"]
+        EXTRACT --> PACK["Đóng gói JSON Incident Payload<br/>(Full Base64 Frame + Subject Crops)"]
     end
 
-    subgraph FUSION ["Tầng Hợp Nhất & Đánh Giá Động (Layer 3: Fusion & State Machine)"]
-        V_RES["Visual Result: SOCFrameAnalysisResult"]
-        A_RES["Audio Result: AudioAnalysisResult"]
-        
-        FUSER["Multimodal Threat Fusion Engine"]
-        STATE_MACH["Dynamic Threat State Machine (LOW / MEDIUM / HIGH / CRITICAL)"]
-        
-        V_ANALYZE --> V_RES --> FUSER
-        A_ANALYZE --> A_RES --> FUSER
-        FUSER --> STATE_MACH
-    end
-
-    subgraph HITL ["Tầng Chốt Chặn Vận Hành Viên (Layer 4: Operational HITL)"]
-        HUD["Real-Time SOC HUD (Pose Skeleton + Audio VU Meter + Flashing Threat Banner)"]
-        AUDIT["Audit Logger (Structured JSONL + Incident Log)"]
-        OP_GATE{"Threat >= HIGH ?"}
-        OPERATOR["Human Operator (Confirm / Downgrade / Dismiss)"]
-        DISPATCH["Automated Dispatch (Video + Audio Evidence Bundle)"]
-
-        STATE_MACH --> HUD
-        STATE_MACH --> AUDIT
-        STATE_MACH --> OP_GATE
-        OP_GATE -- Yes --> OPERATOR
-        OPERATOR -- CONFIRM --> DISPATCH
+    subgraph DISPATCH_WORKER ["Tầng Gửi HTTP Chuyên Trách (Async Background Worker)"]
+        PACK --> QUEUE[("Dispatch Queue<br/>(Thread-safe FIFO)")]
+        QUEUE --> WORKER["Dispatcher Thread Worker"]
+        WORKER --> POST["HTTP POST Request<br/>(Timeout = 3.5s, Retry = 2)"]
+        POST --> REMOTE_SERVER["Target Webhook Server<br/>(User-defined Endpoint)"]
+        POST -- Thất bại / Lỗi mạng --> RETRY_BUFFER["Log Warning & Fallback Log<br/>(Không ảnh hưởng Main Thread)"]
     end
 ```
 
-### 2.2. Sơ đồ Máy Trạng Thái Đe Dọa Âm Thanh & Hợp Nhất (Audio-Visual State Machine)
+### 2.2. Máy Trạng Thái Bộ Lọc Cooldown Sự Kiện (Webhook Throttle State Machine)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> SILENT_AMBIENT : Khởi tạo bộ đệm âm thanh
+    [*] --> IDLE : Khởi tạo Camera Stream
 
-    SILENT_AMBIENT --> AMBIENT_LEARNING : Cập nhật ngưỡng ồn nền động (EMA)
-    AMBIENT_LEARNING --> SILENT_AMBIENT : Không có đột biến âm thanh
-
-    SILENT_AMBIENT --> ACOUSTIC_SPIKE : RMS vượt ngưỡng nền (>= 18 dB)
+    IDLE --> ACTION_TRIGGERED : Phát hiện hành vi (FIGHTING, WEAPON_THREAT, ...)
     
-    state ACOUSTIC_SPIKE {
-        [*] --> SPECTRAL_EVALUATION
-        SPECTRAL_EVALUATION --> SCREAM_CANDIDATE : Centroid 1.5k-4.5kHz & ZCR cao
-        SPECTRAL_EVALUATION --> GUNSHOT_CANDIDATE : Attack Time < 15ms & Crest > 14dB
-        SPECTRAL_EVALUATION --> SHOUT_CANDIDATE : Centroid 400Hz-2.5kHz & Âm lượng lớn
-        SPECTRAL_EVALUATION --> DISCARD_NOISE : Tiếng quạt / Tiếng xe cộ / Ồn trắng
+    ACTION_TRIGGERED --> DISPATCH_IMMEDIATE : Trạng thái mới (First Occurrence)
+    state DISPATCH_IMMEDIATE {
+        [*] --> CROP_SUBJECTS : Cắt ảnh đối tượng & Encode Base64
+        CROP_SUBJECTS --> ENCODE_FULL_FRAME : Encode Base64 toàn cảnh
+        ENCODE_FULL_FRAME --> ENQUEUE_POST : Đẩy vào hàng đợi Worker
     }
 
-    SCREAM_CANDIDATE --> AUDIO_CONFIRMED_SCREAM : Duy trì >= 250ms
-    GUNSHOT_CANDIDATE --> AUDIO_CONFIRMED_GUNSHOT : Đột biến tức thời 1-2 frames
-    SHOUT_CANDIDATE --> AUDIO_CONFIRMED_SHOUT : Dao động nhịp điệu
-
-    AUDIO_CONFIRMED_SCREAM --> MULTIMODAL_FUSION : Bắn sự kiện âm thanh
-    AUDIO_CONFIRMED_GUNSHOT --> MULTIMODAL_FUSION
-    AUDIO_CONFIRMED_SHOUT --> MULTIMODAL_FUSION
-
-    state MULTIMODAL_FUSION {
-        [*] --> CHECK_VISUAL_CORRELATION
-        CHECK_VISUAL_CORRELATION --> INSTANT_CRITICAL : Visual có FIGHTING, WEAPON_THREAT, HANDS_UP, FALLEN
-        CHECK_VISUAL_CORRELATION --> HIGH_OFFSCREEN : Visual bình thường (Tiếng hét ngoài tầm nhìn)
-        CHECK_VISUAL_CORRELATION --> ELEVATED_INVESTIGATION : Visual có RUNNING, PURSUIT
-    }
+    DISPATCH_IMMEDIATE --> COOLDOWN_ACTIVE : Đặt Cooldown Timer (3.0s)
+    
+    COOLDOWN_ACTIVE --> COOLDOWN_ACTIVE : Cùng hành vi trong thời gian cooldown (Bỏ qua POST)
+    COOLDOWN_ACTIVE --> ESCALATE_IMMEDIATE : Hành vi leo thang nguy cấp hơn (ví dụ HIGH -> CRITICAL)
+    ESCALATE_IMMEDIATE --> DISPATCH_IMMEDIATE
+    COOLDOWN_ACTIVE --> IDLE : Hết thời gian cooldown & Không còn hành vi
 ```
 
 ---
 
-## 3. CƠ CHẾ KỸ THUẬT PHÁT HIỆN TIẾNG LA HÉT (SCREAM DETECTION ALGORITHM)
+## 3. CẤU TRÚC JSON SCHEMA ĐẦU RA CỦA WEBHOOK (PAYLOAD SCHEMA CONTRACT)
 
-### 3.1. Đặc trưng Sinh học Âm thanh của Tiếng La Hét Con Người
-Tiếng la hét (Human Scream) khác biệt hoàn toàn với tiếng nói thường, tiếng cười hoặc tiếng còi xe nhờ các chỉ số vật lý âm thanh sau:
+Payload được gửi đi bằng phương thức `POST` với `Content-Type: application/json`:
 
-1. **Năng lượng Hiệu dụng (Root Mean Square - RMS & Decibel):**
-   - Biên độ âm thanh đột biến cao hơn độ ồn nền thích nghi (Adaptive Ambient Floor) ít nhất $18\text{ dB}$:
-     $$\text{RMS} = \sqrt{\frac{1}{N}\sum_{i=1}^{N} x_i^2}, \quad \text{dBFS} = 20 \log_{10}(\text{RMS} + \epsilon)$$
-2. **Trọng tâm Phổ Âm (Spectral Centroid - $f_c$):**
-   - Tiếng la hét con người có trọng tâm phổ dồn mạnh vào dải tần số **$1800\text{ Hz} - 4200\text{ Hz}$** (do dây thanh quản căng cực đại và cộng hưởng khoang họng):
-     $$f_c = \frac{\sum_{k=0}^{K-1} f_k |X(k)|}{\sum_{k=0}^{K-1} |X(k)|}$$
-   - *Ngược lại:* Giọng nói thông thường có $f_c \in [300, 1200]\text{ Hz}$. Tiếng động cơ xe cộ có $f_c < 600\text{ Hz}$.
-3. **Tỷ Lệ Năng Lượng Dải Hét (Scream Band Energy Ratio - SBER):**
-   - Tỷ số giữa năng lượng trong dải $[1500, 4500]\text{ Hz}$ so với tổng năng lượng phổ:
-     $$\text{SBER} = \frac{\sum_{f \in [1500, 4500]} |X(f)|^2}{\sum_{f} |X(f)|^2 + \epsilon} \ge 0.45$$
-4. **Tỷ Lệ Băng Qua Điểm Không (Zero Crossing Rate - ZCR):**
-   - Đo độ thô ráp và tần số biến thiên cao của sóng âm:
-     $$\text{ZCR} = \frac{1}{N-1} \sum_{i=1}^{N-1} \mathbb{I}(x_i \cdot x_{i+1} < 0)$$
-   - Tiếng hét có $\text{ZCR} \ge 0.12$.
-5. **Độ Bền Thời Gian (Temporal Duration Gate):**
-   - Tiếng hét phải duy trì tối thiểu **$250\text{ ms}$** để không bị kích hoạt nhầm bởi tiếng gõ bàn phím, tiếng vỗ tay hay tiếng đóng sầm cửa.
-
-### 3.2. Cơ chế Loại trừ Báo Động Giả (Anti-False-Positive Filtering)
-- **Tiếng còi xe / Còi báo động (Siren / Horn):** Có năng lượng cao nhưng phổ là các vạch điều hòa đơn âm rất hẹp (Spectral Flatness rất thấp).
-- **Tiếng đóng cửa / Đập bàn:** Xung diễn ra cực ngắn ($< 50\text{ ms}$) $\to$ Bị bộ lọc thời lượng $\ge 250\text{ ms}$ triệt tiêu.
-- **Tiếng cười đùa bình thường:** Tần số thấp hơn, thiếu độ thô ráp (Roughness) và SBER $< 0.35$.
-- **Thích nghi ồn nền (Adaptive Noise Floor):** Nền ồn được cập nhật liên tục bằng bộ lọc Exponential Moving Average (EMA) để tự thích ứng với môi trường yên tĩnh (văn phòng) lẫn môi trường ồn ào (đường phố).
+```json
+{
+  "event_id": "EVT-20261107-143000-a1b2c3d4",
+  "timestamp": "2026-11-07T14:30:15.234+07:00",
+  "timestamp_ms": 1794036615234,
+  "camera": {
+    "camera_id": "CAM_01",
+    "name": "Khu vực Cổng Chính - Phố Đi Bộ",
+    "zone_id": "ZONE_ALPHA_01",
+    "address": "Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh",
+    "latitude": 10.776889,
+    "longitude": 106.700806
+  },
+  "detection": {
+    "primary_action": "WEAPON_THREAT",
+    "threat_level": "CRITICAL",
+    "threat_score": 0.96,
+    "is_urgent": true,
+    "reasoning": "Detected tactical two-handed firearm pointing towards target (wrists converged, arm extended).",
+    "weapon": {
+      "is_weapon_detected": true,
+      "weapon_types": ["FIREARM_TACTICAL_GRIP"],
+      "confidence": 0.96,
+      "description": "Tactical two-handed aiming posture detected with high wrist convergence."
+    },
+    "subjects": [
+      {
+        "track_id": 1,
+        "role": "suspect",
+        "behavior": "WEAPON_THREAT",
+        "threat_level": "CRITICAL",
+        "threat_score": 0.96,
+        "bbox": [180, 110, 310, 440],
+        "speed": 0.42,
+        "confidence": 0.92,
+        "crop_image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ..."
+      },
+      {
+        "track_id": 2,
+        "role": "victim",
+        "behavior": "HANDS_UP",
+        "threat_level": "HIGH",
+        "threat_score": 0.78,
+        "bbox": [420, 130, 530, 450],
+        "speed": 0.10,
+        "confidence": 0.89,
+        "crop_image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ..."
+      }
+    ],
+    "full_image": {
+      "format": "jpeg",
+      "width": 640,
+      "height": 480,
+      "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ..."
+    },
+    "audio": {
+      "is_audio_active": true,
+      "audio_threat_detected": true,
+      "event_type": "SCREAM",
+      "confidence": 0.94,
+      "rms_db": -12.4
+    }
+  },
+  "audit": {
+    "pipeline_fps": 28.5,
+    "model_version": "YOLOv11-Pose-SOC-v2.0",
+    "dispatcher_queue_depth": 0
+  }
+}
+```
 
 ---
 
-## 4. BẢNG QUY TẮC HỢP NHẤT ĐA PHƯƠNG THỨC (MULTIMODAL FUSION MATRIX)
+## 4. GIAO DIỆN HÀM & CẤU TRÚC LỚP (INTERFACES & IMPLEMENTATION DESIGN)
 
-| Mã | Dấu hiệu Thị giác (Visual Pose) | Dấu hiệu Âm thanh (Acoustic Cue) | Threat Score Tổng | Threat Level | Hành động Hệ thống & SOC |
-| :-: | :--- | :--- | :---: | :---: | :--- |
-| **MM-01** | `FIGHTING` (Ẩu đả) | `SCREAM` (La hét) | **`1.00`** | **`CRITICAL`** | Đẩy cảnh báo đỏ khẩn cấp nhất, còi báo động HUD, tự động khóa video+audio buffer. |
-| **MM-02** | `HANDS_UP` (Giơ tay đầu hàng) | `SCREAM` / `GUNSHOT` | **`0.99`** | **`CRITICAL`** | Kịch bản cướp có vũ trang hoặc đe dọa con tin. Fast-track ngay lập tức. |
-| **MM-03** | `FALLEN` (Nạn nhân gục ngã) | `DISTRESS_CRY` / `SCREAM` | **`1.00`** | **`CRITICAL`** | Nạn nhân chấn thương nặng hoặc bị tấn công gục tại chỗ. Yêu cầu cứu thương khẩn cấp. |
-| **MM-04** | `WEAPON_THREAT` (Chĩa súng/dao) | `GUNSHOT` / `SCREAM` | **`1.00`** | **`CRITICAL`** | Kịch bản nổ súng hoặc đâm chém có thương vong. |
-| **MM-05** | `SNATCHING` (Cướp giật) | `SCREAM` | **`0.98`** | **`CRITICAL`** | Nạn nhân tri hô thất thanh sau khi bị cướp bứt tốc tháo chạy. |
-| **MM-06** | `PURSUIT` (Rượt đuổi) | `SCREAM` / `AGGRESSIVE_SHOUT` | **`0.95`** | **`CRITICAL`** | Đuổi bắt thù hằn, hung thủ truy sát nạn nhân. |
-| **MM-07** | `NORMAL` (Không phát hiện người) | `SCREAM` / `GUNSHOT` | **`0.78`** | **`HIGH`** | **Off-Screen Threat:** Sự cố xảy ra ngoài góc nhìn camera hoặc khu vực khuất. SOC điều hướng PTZ. |
-| **MM-08** | `LOITERING` / `CROUCHING` | `AGGRESSIVE_SHOUT` | **`0.80`** | **`HIGH`** | Nghi can rình rập và bắt đầu phát động đe dọa ngôn từ. |
-| **MM-09** | `NORMAL` | `AGGRESSIVE_SHOUT` | **`0.60`** | **`MEDIUM`** | Tranh cãi to tiếng nơi công cộng, theo dõi diễn biến. |
-| **MM-10** | Mọi hành vi nguy hiểm | Không có âm thanh (Silent) | Giữ nguyên điểm Video | Giữ nguyên điểm | Hệ thống chạy chế độ Video thuần túy (vẫn bảo đảm 100% chức năng hiện có). |
-
----
-
-## 5. THIẾT KẾ SCHEMA DỮ LIỆU & GIAO DIỆN HÀM (DATA SCHEMA & INTERFACES)
-
-### 5.1. Data Schemas (Python Dataclasses & Enums)
+### 4.1. Định nghĩa Data Schemas (`src/urbansoc/domain/webhook_models.py`)
 
 ```python
-from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
-import numpy as np
-
-class AudioThreatType(str, Enum):
-    NONE = "NONE"
-    SCREAM = "SCREAM"                   # Tiếng la hét, thét kinh hoàng
-    GUNSHOT = "GUNSHOT"                 # Tiếng súng nổ / tiếng nổ xung kích
-    AGGRESSIVE_SHOUT = "AGGRESSIVE_SHOUT" # Tiếng cãi vã, quát tháo hung bạo
-    DISTRESS_CRY = "DISTRESS_CRY"       # Tiếng rên rỉ, kêu cứu
-    GLASS_BREAK = "GLASS_BREAK"         # Tiếng kính vỡ / va chạm đập phá
 
 @dataclass
-class AudioAnalysisResult:
-    """Kết quả phân tích một khối âm thanh (Window ~ 0.25 - 0.5s)."""
-    timestamp: float                    # Thời điểm phân tích
-    event_type: AudioThreatType         # Loại sự kiện âm thanh
-    confidence: float                   # Độ tin cậy (0.0 - 1.0)
-    threat_score: float                 # Điểm đe dọa (0.0 - 1.0)
-    rms_db: float                       # Cường độ âm thanh (dBFS)
-    spectral_centroid_hz: float         # Trọng tâm phổ (Hz)
-    scream_band_ratio: float            # Tỷ lệ năng lượng dải hét (1.5kHz - 4.5kHz)
-    zero_crossing_rate: float           # Tỷ lệ ZCR
-    duration_sec: float                 # Thời lượng duy trì của tín hiệu
-    is_threat: bool                     # Cờ báo hiệu âm thanh nguy hiểm
-    reasoning: str                      # Giải trình nguyên nhân kích hoạt
-    waveform_sample: Optional[np.ndarray] = None # Khung mẫu sóng phục vụ hiển thị/chứng thực
+class CameraLocationConfig:
+    """Cấu hình định danh và vị trí địa lý của camera."""
+    camera_id: str = "CAM_01"
+    name: str = "Camera Giám Sát Trung Tâm"
+    zone_id: str = "ZONE_DEFAULT"
+    address: str = "Đang cập nhật vị trí"
+    latitude: float = 0.0
+    longitude: float = 0.0
 
 @dataclass
-class MultimodalThreatResult:
-    """Kết quả hợp nhất đa phương thức Thị giác + Âm thanh."""
-    timestamp: float
-    threat_level: str                   # LOW | MEDIUM | HIGH | CRITICAL
-    fused_threat_score: float           # Điểm hợp nhất cuối cùng (0.0 - 1.0)
-    visual_threat_type: str             # Tên hành vi thị giác nguy hiểm nhất
-    audio_threat_type: AudioThreatType  # Loại sự kiện âm thanh
-    visual_score: float                 # Điểm thị giác
-    audio_score: float                  # Điểm âm thanh
-    fusion_rule_applied: str            # Mã quy tắc hợp nhất (ví dụ: MM-01, MM-02)
-    reasoning: str                      # Lý giải hợp nhất cho Operator
-    is_urgent_dispatch: bool            # Yêu cầu kích hoạt chốt chặn HITL khẩn
-    evidence_audio_chunk: Optional[bytes] = None # Buffer âm thanh kèm theo
+class SubjectCropData:
+    """Dữ liệu chi tiết và ảnh cắt của từng đối tượng tham gia sự kiện."""
+    track_id: int
+    role: str                       # suspect | victim | participant | bystander
+    behavior: str
+    threat_level: str
+    threat_score: float
+    bbox: List[int]                 # [x1, y1, x2, y2]
+    speed: float
+    confidence: float
+    crop_image_base64: str          # data:image/jpeg;base64,...
+
+@dataclass
+class WebhookIncidentPayload:
+    """Gói dữ liệu hoàn chỉnh gửi qua HTTP POST."""
+    event_id: str
+    timestamp: str
+    timestamp_ms: int
+    camera: CameraLocationConfig
+    primary_action: str
+    threat_level: str
+    threat_score: float
+    is_urgent: bool
+    reasoning: str
+    weapon_info: Dict[str, Any]
+    subjects: List[SubjectCropData]
+    full_image_base64: str
+    audio_info: Dict[str, Any]
+    audit_metadata: Dict[str, Any]
 ```
 
-### 5.2. Chữ Ký Hàm Core Module `urbansoc.audio`
+### 4.2. Bộ Gửi Webhook Bất Đồng Bộ (`src/urbansoc/telemetry/webhook_dispatcher.py`)
 
-1. **`src/urbansoc/audio/microphone.py`:**
-   ```python
-   class AudioCaptureBackend:
-       """Quản lý thu nhận âm thanh đa nguồn (ALSA arecord, SoundDevice, WAV, Mock)."""
-       def __init__(self, sample_rate: int = 16000, chunk_duration_sec: float = 0.25, source_type: str = "auto", wav_path: Optional[str] = None): ...
-       def start(self) -> bool: ...
-       def read_chunk(self, timeout: float = 0.5) -> Optional[np.ndarray]: ...
-       def get_rolling_buffer(self, duration_sec: float = 5.0) -> bytes: ...
-       def stop(self) -> None: ...
-       @property
-       def is_active(self) -> bool: ...
-   ```
+```python
+class WebhookDispatcher:
+    """Quản lý hàng đợi và luồng nền gửi HTTP POST sự kiện đến server ngoài."""
+    def __init__(
+        self,
+        server_url: Optional[str] = None,
+        camera_config: Optional[CameraLocationConfig] = None,
+        min_threat_level: str = "LOW",  # Mức đe dọa tối thiểu để gửi POST (LOW = gửi mọi hành vi)
+        cooldown_seconds: float = 3.0,  # Thời gian chống gửi lặp cho cùng track
+        timeout: float = 3.5,
+        max_retries: int = 2,
+    ) -> None: ...
 
-2. **`src/urbansoc/audio/scream_detector.py`:**
-   ```python
-   class AcousticThreatDetector:
-       """Bộ phân tích phổ và phát hiện tiếng la hét, tiếng súng, tiếng quát tháo."""
-       def __init__(self, sample_rate: int = 16000, sensitivity: float = 0.85): ...
-       def process_chunk(self, audio_data: np.ndarray, timestamp: float) -> AudioAnalysisResult: ...
-       def update_ambient_floor(self, current_rms: float) -> None: ...
-       def reset(self) -> None: ...
-   ```
+    def dispatch_frame_event(
+        self,
+        frame: np.ndarray,
+        annotated_frame: np.ndarray,
+        analysis_result: SOCFrameAnalysisResult,
+        audio_result: Optional[AudioAnalysisResult] = None,
+    ) -> bool: ...
 
-3. **`src/urbansoc/audio/fusion.py`:**
-   ```python
-   class MultimodalThreatFuser:
-       """Động cơ hợp nhất Nghe - Nhìn và chuyển tiếp máy trạng thái."""
-       def __init__(self, audio_weight: float = 0.40): ...
-       def fuse(self, visual_result: SOCFrameAnalysisResult, audio_result: AudioAnalysisResult) -> MultimodalThreatResult: ...
-   ```
+    def shutdown(self) -> None: ...
+```
 
 ---
 
-## 6. RÀNG BUỘC KỸ THUẬT & CƠ CHẾ DỰ PHÒNG (FAIL-SAFE & PERFORMANCE CONSTRAINTS)
+## 5. RÀNG BUỘC KỸ THUẬT & AN TOÀN (CONSTRAINTS & FAIL-SAFE)
 
-1. **Độ Trễ Phản Hồi Âm Thanh (Audio Latency):**
-   - Kích thước khung âm thanh xử lý: 4096 mẫu tại 16 kHz ($256\text{ ms}$).
-   - Thời gian tính toán FFT & trích xuất đặc trưng trên CPU: $< 5\text{ ms}$ (sử dụng thư viện `numpy` vector hóa cao độ).
-   - Tổng độ trễ từ lúc âm thanh phát ra đến khi phát hiện: $\le 300\text{ ms}$.
-2. **Cơ chế Dự Phòng Đa Tầng (Graceful Multi-Backend Fallback):**
-   - Hệ thống tự động kiểm tra theo thứ tự ưu tiên:
-     1. `sounddevice` (nếu PortAudio có sẵn trên OS).
-     2. ALSA `arecord` subprocess trực tiếp (đã kiểm chứng hoạt động tốt trên môi trường Linux hiện tại).
-     3. Tệp âm thanh đầu vào (`--audio-file test_scream.wav`).
-     4. `SilentMockAudioCapture` (Nếu không có micro vật lý hoặc bị lỗi quyền thiết bị).
-   - **Cam kết không sập (Zero-Crash Guarantee):** Nếu micro bị rút ra hoặc không có thiết bị thu âm, hệ thống chỉ ghi nhận cảnh báo Warning vào log và tiếp tục vận hành luồng Video mượt mà, không bao giờ ngắt chương trình.
-3. **Tuân Thủ Tuyệt Đối Dual HITL (AGENTS.md CD-04):**
-   - Kể cả khi tiếng súng hoặc tiếng hét đạt độ tin cậy $100\%$ ($1.00$), hệ thống **tuyệt đối không gửi lệnh điều phối ra cơ quan chức năng ngoài xã hội** nếu chưa có lệnh `CONFIRM` từ Vận hành viên SOC. Âm thanh chỉ dùng để leo thang ưu tiên trên HUD và chuẩn bị gói bằng chứng video+audio.
+1. **Cam kết Không Chặn Luồng (Non-blocking Latency Guarantee):**
+   - Hàm `dispatch_frame_event` chỉ thực hiện encode và đẩy payload vào `queue.Queue` trong vòng $< 8\text{ ms}$.
+   - Luồng nền `DispatcherThread` thực thi lệnh `requests.post()` hoàn toàn tách biệt.
+2. **Cơ chế Chống Rò rỉ Bộ nhớ (Bounded Queue with Drop Policy):**
+   - Hàng đợi có giới hạn kích thước tối đa (`maxsize=50`). Nếu server mất kết nối trong thời gian dài và hàng đợi đầy, các sự kiện cũ nhất sẽ bị hủy bỏ (Drop oldest with warning log) để tránh tràn RAM của hệ thống SOC.
+3. **Tuân thủ Dual HITL (AGENTS.md CD-04):**
+   - Gói dữ liệu gửi đi đóng vai trò là luồng thông báo sự kiện / Webhook Telemetry.
+   - Các gói này luôn mang cờ `verification_status: "AI_AUTO_DETECTED_PENDING_SOC_CONFIRMATION"` để hệ thống server tiếp nhận nắm rõ đây là dữ liệu cảnh báo sớm từ AI, hỗ trợ Vận hành viên giám sát từ xa.
 
 ---
 
