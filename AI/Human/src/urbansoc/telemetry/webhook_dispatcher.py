@@ -1,8 +1,10 @@
-"""Asynchronous, non-blocking HTTP POST Webhook Dispatcher for SOC Incident Events."""
+"""Asynchronous, non-blocking HTTP POST Webhook Dispatcher with Anti-Noise Filtering and Forensic SHA-256."""
 
 import base64
+import hashlib
 import json
 import logging
+import math
 import queue
 import threading
 import time
@@ -15,7 +17,22 @@ import numpy as np
 
 from urbansoc.domain.enums import BehaviorType, ThreatLevel
 from urbansoc.domain.geometry import BBox
-from urbansoc.domain.schemas import HumanPoseTrack, SOCFrameAnalysisResult
+from urbansoc.domain.keypoints import (
+    LEFT_ANKLE,
+    LEFT_ELBOW,
+    LEFT_HIP,
+    LEFT_KNEE,
+    LEFT_SHOULDER,
+    LEFT_WRIST,
+    NOSE,
+    RIGHT_ANKLE,
+    RIGHT_ELBOW,
+    RIGHT_HIP,
+    RIGHT_KNEE,
+    RIGHT_SHOULDER,
+    RIGHT_WRIST,
+)
+from urbansoc.domain.schemas import HumanPoseTrack, KeypointCOCO, SOCFrameAnalysisResult
 from urbansoc.domain.webhook_models import (
     CameraLocationConfig,
     SubjectCropData,
@@ -34,21 +51,24 @@ except ImportError:
     import urllib.request
 
 
+def compute_forensic_sha256(raw_bytes: bytes, timestamp_ms: int) -> str:
+    """Compute cryptographic SHA-256 hash combining raw JPEG bytes and exact millisecond timestamp.
+
+    Forensic verification formula:
+        SHA256 = hashlib.sha256(raw_bytes + str(timestamp_ms).encode('utf-8')).hexdigest()
+    """
+    hasher = hashlib.sha256()
+    hasher.update(raw_bytes)
+    hasher.update(str(timestamp_ms).encode("utf-8"))
+    return hasher.hexdigest()
+
+
 def crop_subject_image(
     frame: np.ndarray,
     bbox: BBox,
     margin: float = 0.10,
 ) -> Optional[np.ndarray]:
-    """Safely crop a bounding box region with padding margin from an image.
-
-    Args:
-        frame: BGR numpy image array.
-        bbox: Bounding box [x1, y1, x2, y2].
-        margin: Fractional padding around the subject (default 10%).
-
-    Returns:
-        Cropped BGR image slice or None if invalid crop bounds.
-    """
+    """Safely crop a bounding box region with padding margin from an image."""
     if frame is None or frame.size == 0:
         return None
 
@@ -73,24 +93,132 @@ def crop_subject_image(
     return crop if crop.size > 0 else None
 
 
-def encode_image_to_base64(image: np.ndarray, quality: int = 80) -> str:
-    """Encode OpenCV BGR image to a JPEG Base64 data URL string."""
+def encode_image_and_hash(
+    image: np.ndarray,
+    timestamp_ms: int,
+    quality: int = 80,
+) -> Tuple[str, str, int]:
+    """Encode OpenCV BGR image to JPEG bytes, compute SHA-256 hash with timestamp, and return Base64.
+
+    Returns:
+        (base64_data_url, sha256_hash, image_size_bytes)
+    """
     if image is None or image.size == 0:
-        return ""
+        return "", "", 0
     try:
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), max(10, min(100, quality))]
         success, buffer = cv2.imencode(".jpg", image, encode_params)
         if not success:
-            return ""
-        b64_str = base64.b64encode(buffer).decode("utf-8")
-        return f"data:image/jpeg;base64,{b64_str}"
+            return "", "", 0
+        raw_bytes = buffer.tobytes()
+        sha256_hash = compute_forensic_sha256(raw_bytes, timestamp_ms)
+        b64_str = base64.b64encode(raw_bytes).decode("utf-8")
+        data_url = f"data:image/jpeg;base64,{b64_str}"
+        return data_url, sha256_hash, len(raw_bytes)
     except Exception as e:
-        logger.error("Failed to encode image to base64: %s", e)
-        return ""
+        logger.error("Failed to encode image and compute forensic hash: %s", e)
+        return "", "", 0
+
+
+def calculate_joint_angle(
+    pt_a: Tuple[float, float],
+    pt_vertex: Tuple[float, float],
+    pt_b: Tuple[float, float],
+) -> float:
+    """Compute the angle at pt_vertex in degrees [0, 180]."""
+    v1_x = pt_a[0] - pt_vertex[0]
+    v1_y = pt_a[1] - pt_vertex[1]
+    v2_x = pt_b[0] - pt_vertex[0]
+    v2_y = pt_b[1] - pt_vertex[1]
+
+    mag1 = math.hypot(v1_x, v1_y)
+    mag2 = math.hypot(v2_x, v2_y)
+    if mag1 < 1e-4 or mag2 < 1e-4:
+        return 0.0
+
+    dot = v1_x * v2_x + v1_y * v2_y
+    cos_val = max(-1.0, min(1.0, dot / (mag1 * mag2)))
+    return float(math.degrees(math.acos(cos_val)))
+
+
+def extract_subject_kinematics(track: HumanPoseTrack) -> Dict[str, float]:
+    """Extract biomechanical kinematic angles, distances, and aspect ratios from keypoints."""
+    bh = max(1.0, float(track.bbox.height))
+    bw = max(1.0, float(track.bbox.width))
+    aspect_ratio = bh / bw
+
+    kp_map = {kp.id: kp for kp in track.keypoints if kp.confidence >= 0.20}
+
+    # Spine Angle: vector from mid-hip to mid-shoulder against vertical
+    spine_angle = 0.0
+    if LEFT_SHOULDER in kp_map and RIGHT_SHOULDER in kp_map and LEFT_HIP in kp_map and RIGHT_HIP in kp_map:
+        mid_s_x = (kp_map[LEFT_SHOULDER].x + kp_map[RIGHT_SHOULDER].x) / 2.0
+        mid_s_y = (kp_map[LEFT_SHOULDER].y + kp_map[RIGHT_SHOULDER].y) / 2.0
+        mid_h_x = (kp_map[LEFT_HIP].x + kp_map[RIGHT_HIP].x) / 2.0
+        mid_h_y = (kp_map[LEFT_HIP].y + kp_map[RIGHT_HIP].y) / 2.0
+
+        dx = mid_s_x - mid_h_x
+        dy = mid_s_y - mid_h_y  # negative if shoulders are above hips
+        mag = math.hypot(dx, dy)
+        if mag > 1e-4:
+            # angle against upright vertical (dx=0, dy=-1)
+            cos_spine = max(-1.0, min(1.0, -dy / mag))
+            spine_angle = float(math.degrees(math.acos(cos_spine)))
+
+    # Left & Right Elbow angles
+    left_elbow_angle = 0.0
+    if LEFT_SHOULDER in kp_map and LEFT_ELBOW in kp_map and LEFT_WRIST in kp_map:
+        left_elbow_angle = calculate_joint_angle(
+            (kp_map[LEFT_SHOULDER].x, kp_map[LEFT_SHOULDER].y),
+            (kp_map[LEFT_ELBOW].x, kp_map[LEFT_ELBOW].y),
+            (kp_map[LEFT_WRIST].x, kp_map[LEFT_WRIST].y),
+        )
+
+    right_elbow_angle = 0.0
+    if RIGHT_SHOULDER in kp_map and RIGHT_ELBOW in kp_map and RIGHT_WRIST in kp_map:
+        right_elbow_angle = calculate_joint_angle(
+            (kp_map[RIGHT_SHOULDER].x, kp_map[RIGHT_SHOULDER].y),
+            (kp_map[RIGHT_ELBOW].x, kp_map[RIGHT_ELBOW].y),
+            (kp_map[RIGHT_WRIST].x, kp_map[RIGHT_WRIST].y),
+        )
+
+    # Arm extension ratios (distance from wrist to shoulder normalized by body height)
+    left_arm_extension = 0.0
+    if LEFT_SHOULDER in kp_map and LEFT_WRIST in kp_map:
+        left_arm_extension = float(math.hypot(
+            kp_map[LEFT_WRIST].x - kp_map[LEFT_SHOULDER].x,
+            kp_map[LEFT_WRIST].y - kp_map[LEFT_SHOULDER].y,
+        ) / bh)
+
+    right_arm_extension = 0.0
+    if RIGHT_SHOULDER in kp_map and RIGHT_WRIST in kp_map:
+        right_arm_extension = float(math.hypot(
+            kp_map[RIGHT_WRIST].x - kp_map[RIGHT_SHOULDER].x,
+            kp_map[RIGHT_WRIST].y - kp_map[RIGHT_SHOULDER].y,
+        ) / bh)
+
+    # Wrist Distance (for tactical weapon aiming posture)
+    wrist_distance = 0.0
+    if LEFT_WRIST in kp_map and RIGHT_WRIST in kp_map:
+        wrist_distance = float(math.hypot(
+            kp_map[LEFT_WRIST].x - kp_map[RIGHT_WRIST].x,
+            kp_map[LEFT_WRIST].y - kp_map[RIGHT_WRIST].y,
+        ))
+
+    return {
+        "spine_angle": round(spine_angle, 2),
+        "aspect_ratio": round(aspect_ratio, 2),
+        "left_elbow_angle": round(left_elbow_angle, 2),
+        "right_elbow_angle": round(right_elbow_angle, 2),
+        "left_arm_extension": round(left_arm_extension, 3),
+        "right_arm_extension": round(right_arm_extension, 3),
+        "wrist_distance": round(wrist_distance, 2),
+        "wrist_velocity": round(float(getattr(track, "wrist_velocity", 0.0)), 2),
+    }
 
 
 class EventThrottler:
-    """Manages cooldown and deduplication per track to prevent flooding target servers."""
+    """Manages anti-noise filtering, cooldown, and deduplication per track to prevent flooding target servers."""
 
     THREAT_RANK = {
         ThreatLevel.LOW: 1,
@@ -137,7 +265,7 @@ class EventThrottler:
             prev_rank = self.THREAT_RANK.get(prev["threat_level"], 1)
             curr_rank = self.THREAT_RANK.get(threat_level, 1)
 
-            # 1. Immediate dispatch if threat level escalated (e.g. LOW -> HIGH or HIGH -> CRITICAL)
+            # 1. Anti-noise bypass: Immediate dispatch if threat level escalated (e.g. LOW -> HIGH or HIGH -> CRITICAL)
             if curr_rank > prev_rank:
                 self._history[track_id] = {
                     "last_time": now,
@@ -146,7 +274,7 @@ class EventThrottler:
                 }
                 return True
 
-            # 2. Immediate dispatch if behavior transitioned to high-danger action
+            # 2. Anti-noise bypass: Immediate dispatch if behavior transitioned to a different dangerous action
             if behavior != prev["behavior"] and curr_rank >= 3:
                 self._history[track_id] = {
                     "last_time": now,
@@ -155,7 +283,7 @@ class EventThrottler:
                 }
                 return True
 
-            # 3. Time-based cooldown check
+            # 3. Time-based cooldown check (anti-spam filter)
             if now - prev["last_time"] >= active_cooldown:
                 self._history[track_id] = {
                     "last_time": now,
@@ -168,7 +296,7 @@ class EventThrottler:
 
 
 class WebhookDispatcher:
-    """Asynchronous, non-blocking HTTP POST dispatcher with thread-safe queue and auto-retry."""
+    """Asynchronous, non-blocking HTTP POST dispatcher with anti-noise filtering and forensic SHA-256."""
 
     def __init__(
         self,
@@ -180,6 +308,9 @@ class WebhookDispatcher:
         max_retries: int = 2,
         queue_maxsize: int = 50,
         image_quality: int = 80,
+        min_detection_conf: float = 0.35,
+        min_bbox_area: int = 1200,
+        filter_noise: bool = True,
     ) -> None:
         self.server_url = server_url.strip() if server_url else ""
         self.camera_config = camera_config if camera_config is not None else CameraLocationConfig()
@@ -188,6 +319,9 @@ class WebhookDispatcher:
         self.timeout = timeout
         self.max_retries = max_retries
         self.image_quality = image_quality
+        self.min_detection_conf = min_detection_conf
+        self.min_bbox_area = min_bbox_area
+        self.filter_noise = filter_noise
 
         self.throttler = EventThrottler(default_cooldown=cooldown_seconds)
         self.queue: queue.Queue = queue.Queue(maxsize=queue_maxsize)
@@ -197,6 +331,7 @@ class WebhookDispatcher:
         self.dispatched_count = 0
         self.failed_count = 0
         self.dropped_count = 0
+        self.filtered_noise_count = 0
         self.last_status_code: Optional[int] = None
         self.last_error_message: Optional[str] = None
 
@@ -208,11 +343,14 @@ class WebhookDispatcher:
         )
         self._worker_thread.start()
         logger.info(
-            "WebhookDispatcher started. Target URL: %s | Camera: %s (%s, %s)",
+            "WebhookDispatcher started. Target URL: %s | Camera: %s (Lat: %s, Lon: %s) | Anti-Noise: %s (min_conf: %.2f, min_area: %d)",
             self.server_url or "[DISABLED/LOCAL_LOG_ONLY]",
             self.camera_config.camera_id,
             self.camera_config.latitude,
             self.camera_config.longitude,
+            self.filter_noise,
+            self.min_detection_conf,
+            self.min_bbox_area,
         )
 
     @property
@@ -226,7 +364,7 @@ class WebhookDispatcher:
         analysis_result: SOCFrameAnalysisResult,
         audio_result: Optional[Any] = None,
     ) -> bool:
-        """Extract metadata, crop subjects, package full payload, and enqueue non-blocking.
+        """Extract metadata, filter noise, crop subjects, compute SHA-256, and enqueue non-blocking.
 
         Returns:
             True if an event was enqueued, False if filtered out or queue was full.
@@ -237,17 +375,32 @@ class WebhookDispatcher:
         if frame is None or frame.size == 0:
             return False
 
-        # Filter subjects according to min_threat_level
+        now = time.time()
+        now_dt = datetime.now()
+        timestamp_ms = int(now * 1000)
+        iso_timestamp = now_dt.isoformat()
+
+        # Anti-Noise Filter 1 & 2: Filter subjects by confidence, bounding box area, and threat level
         candidate_tracks: List[HumanPoseTrack] = []
         for track in analysis_result.humans:
+            # Check noise thresholds
+            if self.filter_noise:
+                if track.detection_conf < self.min_detection_conf:
+                    self.filtered_noise_count += 1
+                    continue
+                box_area = track.bbox.width * track.bbox.height
+                if box_area < self.min_bbox_area or track.bbox.width < 25 or track.bbox.height < 50:
+                    self.filtered_noise_count += 1
+                    continue
+
+            # Check threat level requirement
             if self._satisfies_min_threat(track.behavior.threat_level):
                 candidate_tracks.append(track)
 
         if not candidate_tracks:
             return False
 
-        now = time.time()
-        # Check throttler for candidates
+        # Anti-Noise Filter 3: Check throttler cooldown & deduplication
         dispatched_candidates: List[HumanPoseTrack] = []
         for track in candidate_tracks:
             b_name = track.behavior.primary_behavior.value
@@ -258,11 +411,25 @@ class WebhookDispatcher:
         if not dispatched_candidates:
             return False
 
-        # Prepare visual frame (annotated frame preferred for evidence)
+        # Prepare visual frame and compute forensic SHA-256
         target_visual_frame = annotated_frame if annotated_frame is not None else frame
-        full_image_b64 = encode_image_to_base64(target_visual_frame, quality=self.image_quality)
+        full_image_b64, full_image_hash, full_image_size = encode_image_and_hash(
+            target_visual_frame,
+            timestamp_ms=timestamp_ms,
+            quality=self.image_quality,
+        )
 
-        # Prepare cropped images for all candidate tracks
+        h_val, w_val = target_visual_frame.shape[:2]
+        full_image_data = {
+            "format": "jpeg",
+            "width": w_val,
+            "height": h_val,
+            "image_base64": full_image_b64,
+            "sha256_hash": full_image_hash,
+            "image_size_bytes": full_image_size,
+        }
+
+        # Prepare comprehensive subjects metadata and cropped images
         subject_crop_list: List[SubjectCropData] = []
         is_weapon_detected = False
         detected_weapon_types: List[str] = []
@@ -272,9 +439,21 @@ class WebhookDispatcher:
         highest_level = ThreatLevel.LOW
 
         for track in analysis_result.humans:
-            # Crop image for each track involved
+            # Skip noise outliers if filtering is enabled
+            if self.filter_noise:
+                if track.detection_conf < (self.min_detection_conf * 0.8):
+                    continue
+                box_area = track.bbox.width * track.bbox.height
+                if box_area < (self.min_bbox_area * 0.5):
+                    continue
+
+            # Crop image for each track involved and calculate SHA-256
             crop_img = crop_subject_image(frame, track.bbox, margin=0.10)
-            crop_b64 = encode_image_to_base64(crop_img, quality=self.image_quality) if crop_img is not None else ""
+            crop_b64, crop_sha256, crop_size = encode_image_and_hash(
+                crop_img,
+                timestamp_ms=timestamp_ms,
+                quality=self.image_quality,
+            )
 
             # Classify role
             b_enum = track.behavior.primary_behavior
@@ -290,17 +469,44 @@ class WebhookDispatcher:
                 detected_weapon_types.append("TACTICAL_WEAPON_POSTURE")
                 weapon_confidence = max(weapon_confidence, track.behavior.confidence)
 
-            # Subject crop record
+            # Extract detailed kinematics and 17 COCO keypoints
+            kinematics_data = extract_subject_kinematics(track)
+            serialized_keypoints = [
+                {
+                    "id": kp.id,
+                    "name": kp.name,
+                    "x": round(float(kp.x), 1),
+                    "y": round(float(kp.y), 1),
+                    "confidence": round(float(kp.confidence), 3),
+                }
+                for kp in track.keypoints
+            ]
+
+            bx = int(track.bbox.x1)
+            by = int(track.bbox.y1)
+            bw = max(1, int(track.bbox.width))
+            bh = max(1, int(track.bbox.height))
+
             subject_data = SubjectCropData(
                 track_id=track.track_id,
                 role=role,
                 behavior=b_enum.value,
                 threat_level=track.behavior.threat_level.value,
                 threat_score=track.behavior.threat_score,
-                bbox=[int(track.bbox.x1), int(track.bbox.y1), int(track.bbox.x2), int(track.bbox.y2)],
-                speed=float(getattr(track, "speed", 0.0)),
                 confidence=float(track.detection_conf),
+                bbox=[bx, by, int(track.bbox.x2), int(track.bbox.y2)],
+                bbox_width=bw,
+                bbox_height=bh,
+                bbox_aspect_ratio=round(bh / bw, 2),
+                bbox_area=bw * bh,
+                dwell_time_seconds=float(getattr(track, "dwell_time_seconds", 0.0)),
+                speed=float(getattr(track, "speed", 0.0)),
+                velocity_vector=[float(v) for v in getattr(track, "velocity_vector", (0.0, 0.0))],
+                kinematics=kinematics_data,
+                keypoints=serialized_keypoints,
                 crop_image_base64=crop_b64,
+                crop_image_sha256=crop_sha256,
+                crop_image_size_bytes=crop_size,
             )
             subject_crop_list.append(subject_data)
 
@@ -325,19 +531,7 @@ class WebhookDispatcher:
         else:
             audio_info = {"is_audio_active": False, "audio_threat_detected": False}
 
-        # Generate event identifiers and timestamps
-        now_dt = datetime.now()
-        iso_timestamp = now_dt.isoformat()
-        timestamp_ms = int(now * 1000)
         event_id = f"EVT_{now_dt.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-
-        h_val, w_val = target_visual_frame.shape[:2]
-        full_image_data = {
-            "format": "jpeg",
-            "width": w_val,
-            "height": h_val,
-            "image_base64": full_image_b64,
-        }
 
         payload = WebhookIncidentPayload(
             event_id=event_id,
@@ -356,6 +550,14 @@ class WebhookDispatcher:
             audit={
                 "frame_index": analysis_result.frame_index,
                 "human_count": analysis_result.human_count,
+                "hash_algorithm": "SHA-256 (RAW_JPEG_BYTES + TIMESTAMP_MS)",
+                "anti_noise_filtering": {
+                    "enabled": self.filter_noise,
+                    "min_conf": self.min_detection_conf,
+                    "min_bbox_area": self.min_bbox_area,
+                    "cooldown_seconds": self.cooldown_seconds,
+                    "filtered_noise_count": self.filtered_noise_count,
+                },
                 "verification_status": "AI_AUTO_DETECTED_PENDING_SOC_CONFIRMATION",
             },
         )
@@ -494,6 +696,6 @@ class WebhookDispatcher:
         if self._worker_thread.is_alive():
             self._worker_thread.join(timeout=timeout)
         logger.info(
-            "WebhookDispatcher stopped. Total Dispatched: %d | Failed: %d | Dropped: %d",
-            self.dispatched_count, self.failed_count, self.dropped_count,
+            "WebhookDispatcher stopped. Total Dispatched: %d | Failed: %d | Dropped: %d | Filtered Noise: %d",
+            self.dispatched_count, self.failed_count, self.dropped_count, self.filtered_noise_count,
         )

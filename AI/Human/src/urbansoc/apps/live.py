@@ -37,6 +37,9 @@ class CameraRecorder:
         camera_config: Optional[CameraLocationConfig] = None,
         webhook_min_threat: str = "ALL",
         webhook_cooldown: float = 3.0,
+        webhook_min_conf: float = 0.35,
+        webhook_min_bbox_area: int = 1200,
+        webhook_filter_noise: bool = True,
     ) -> None:
         self.camera_index = camera_index
         self.resolution = resolution
@@ -89,6 +92,9 @@ class CameraRecorder:
             camera_config=self.camera_config,
             min_threat_level=webhook_min_threat,
             cooldown_seconds=webhook_cooldown,
+            min_detection_conf=webhook_min_conf,
+            min_bbox_area=webhook_min_bbox_area,
+            filter_noise=webhook_filter_noise,
         )
 
         if self.record_full_session:

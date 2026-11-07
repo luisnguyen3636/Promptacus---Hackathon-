@@ -116,6 +116,24 @@ def create_parser() -> argparse.ArgumentParser:
         default=3.0,
         help="Cooldown in seconds between successive POSTs for the same track (default: 3.0)",
     )
+    parser.add_argument(
+        "--webhook-min-conf",
+        type=float,
+        default=0.35,
+        help="Anti-noise filter: minimum detection confidence to allow webhook push (default: 0.35)",
+    )
+    parser.add_argument(
+        "--webhook-min-bbox-area",
+        type=int,
+        default=1200,
+        help="Anti-noise filter: minimum bounding box pixel area to avoid distant noise (default: 1200)",
+    )
+    parser.add_argument(
+        "--webhook-no-filter-noise",
+        action="store_true",
+        default=False,
+        help="Disable anti-noise filtering (default: False)",
+    )
 
     return parser
 
@@ -171,6 +189,9 @@ def main(argv: Optional[list] = None) -> int:
             camera_config=camera_cfg,
             webhook_min_threat=args.webhook_min_threat,
             webhook_cooldown=args.webhook_cooldown,
+            webhook_min_conf=args.webhook_min_conf,
+            webhook_min_bbox_area=args.webhook_min_bbox_area,
+            webhook_filter_noise=(not args.webhook_no_filter_noise),
         )
         app.record_video()
     elif args.mode == "batch":
