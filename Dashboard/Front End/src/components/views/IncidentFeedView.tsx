@@ -1,5 +1,15 @@
 import React, { useState } from 'react';
-import { Search, Play, Clock, ShieldAlert, CheckCircle2, XCircle, Users, Activity } from 'lucide-react';
+import {
+  Search,
+  Play,
+  Clock,
+  ShieldAlert,
+  CheckCircle2,
+  XCircle,
+  Users,
+  Activity,
+  Fingerprint,
+} from 'lucide-react';
 import { IIncidentItem } from '../../types/soc.ts';
 
 interface IncidentFeedViewProps {
@@ -18,15 +28,17 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
   const filtered = incidents.filter((inc) => {
     const matchSeverity = filterSeverity === 'ALL' || inc.severity === filterSeverity;
     const matchStatus = filterStatus === 'ALL' || inc.status === filterStatus;
-    const q = searchQuery.toLowerCase();
+    const q = (searchQuery || '').toLowerCase();
     const matchSearch =
       !q ||
-      inc.title.toLowerCase().includes(q) ||
-      (inc.actionType && inc.actionType.toLowerCase().includes(q)) ||
-      (inc.location && inc.location.toLowerCase().includes(q)) ||
-      (inc.cameraId && inc.cameraId.toLowerCase().includes(q)) ||
-      (inc.description && inc.description.toLowerCase().includes(q)) ||
-      inc.id.toLowerCase().includes(q);
+      (inc.title || '').toLowerCase().includes(q) ||
+      (inc.actionType || '').toLowerCase().includes(q) ||
+      (inc.location || '').toLowerCase().includes(q) ||
+      (inc.cameraId || '').toLowerCase().includes(q) ||
+      (inc.cameraName || '').toLowerCase().includes(q) ||
+      (inc.description || '').toLowerCase().includes(q) ||
+      (inc.reasoning || '').toLowerCase().includes(q) ||
+      (inc.id || '').toLowerCase().includes(q);
     return matchSeverity && matchStatus && matchSearch;
   });
 
@@ -80,7 +92,7 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Tìm kiếm mã sự cố, action_type (FIGHTING...), camera_id, location..."
+            placeholder="Tìm kiếm event_id, primary_action (WEAPON_THREAT...), camera_id, location..."
             className="bg-transparent border-none outline-none text-xs text-white placeholder-slate-500 w-full font-mono"
           />
         </div>
@@ -166,7 +178,7 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
                     />
                     <div className="min-w-0">
                       <div className="font-bold text-sm text-white flex items-center gap-2 flex-wrap">
-                        <span className="truncate">{inc.actionType || inc.title}</span>
+                        <span className="truncate">{inc.title}</span>
                         <span className={`font-mono text-[10px] font-bold px-2 py-0.5 border ${badgeColor} shrink-0`}>
                           {inc.severity}
                         </span>
@@ -178,9 +190,14 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
                         <span className="font-mono text-[10px] font-bold px-2 py-0.5 bg-[#161E29] border border-[#2D3748] text-[#38BDF8] shrink-0">
                           SCORE: {scorePct}%
                         </span>
-                        {inc.recommendedAction && (
-                          <span className="font-mono text-[10px] font-bold px-2 py-0.5 bg-[#F59E0B]/15 border border-[#F59E0B] text-[#F59E0B] shrink-0">
-                            {inc.recommendedAction}
+                        {inc.aiVerified && (
+                          <span className="font-mono text-[10px] font-bold px-2 py-0.5 bg-[#112224] border border-[#10B981] text-[#10B981] shrink-0">
+                            AI VERIFIED
+                          </span>
+                        )}
+                        {inc.weaponInfo?.is_weapon_detected && (
+                          <span className="font-mono text-[10px] font-bold px-2 py-0.5 bg-[#7F1D1D]/40 border border-[#EF4444] text-[#FECACA] shrink-0">
+                            {(inc.weaponInfo.weapon_types || []).join(', ') || 'WEAPON'}
                           </span>
                         )}
                         {isConfirmed && (
@@ -202,18 +219,21 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
                         </span>
                         <span>&bull;</span>
                         <span>
-                          Vị trí: <span className="text-[#38BDF8]">{inc.location || inc.subTitle || 'N/A'}</span>
+                          Camera:{' '}
+                          <span className="text-slate-200 font-bold">
+                            {inc.cameraName || inc.cameraId} ({inc.cameraId})
+                          </span>
                         </span>
                         <span>&bull;</span>
                         <span>
-                          Camera: <span className="text-slate-200 font-bold">{inc.cameraId || 'N/A'}</span>
+                          Vị trí: <span className="text-[#38BDF8]">{inc.location || 'N/A'}</span>
                         </span>
-                        {inc.measuredFps !== undefined && (
+                        {inc.frameIndex !== undefined && (
                           <>
                             <span>&bull;</span>
                             <span className="inline-flex items-center gap-1 text-[#10B981]">
                               <Activity className="w-3 h-3" />
-                              {inc.measuredFps} FPS (Frame #{inc.frameIndex ?? 0})
+                              Frame #{inc.frameIndex}
                             </span>
                           </>
                         )}
@@ -224,6 +244,12 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
                               <Users className="w-3 h-3 text-[#38BDF8]" />
                               {inc.humanCount} người
                             </span>
+                          </>
+                        )}
+                        {inc.auditInfo?.ai_model && (
+                          <>
+                            <span>&bull;</span>
+                            <span className="text-[#06B6D4]">{inc.auditInfo.ai_model}</span>
                           </>
                         )}
                       </div>
@@ -239,57 +265,99 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
                   </button>
                 </div>
 
-                {/* Mô tả & Lập luận từ Server Payload */}
-                {(inc.description || inc.reasoning || inc.vlmAnalysis) && (
+                {/* Action Validation & Reasoning từ Server Payload */}
+                {(inc.actionValidation?.reasoning || inc.description || inc.reasoning) && (
                   <div className="bg-[#121822] p-3 border-l-2 border-[#10B981] text-xs text-slate-300 space-y-1 font-sans">
-                    {inc.description && (
+                    {inc.actionValidation?.reasoning && (
                       <div>
-                        <strong className="text-[#10B981] font-mono">MÔ TẢ SỰ CỐ: </strong>
-                        {inc.description}
+                        <strong className="text-[#10B981] font-mono">
+                          XÁC THỰC AI ({inc.actionValidation.validation_source || 'VLM'}):{' '}
+                        </strong>
+                        {inc.actionValidation.reasoning}
                       </div>
                     )}
-                    {(inc.reasoning || inc.vlmAnalysis) && (
+                    {inc.reasoning && inc.reasoning !== inc.actionValidation?.reasoning && (
                       <div>
                         <strong className="text-[#38BDF8] font-mono">LẬP LUẬN (REASONING): </strong>
-                        {inc.reasoning || inc.vlmAnalysis}
+                        {inc.reasoning}
+                      </div>
+                    )}
+                    {inc.weaponInfo?.description && (
+                      <div className="font-mono text-[11px] text-[#FECACA]">
+                        <strong className="text-[#EF4444]">VŨ KHÍ / TƯ THẾ: </strong>
+                        {inc.weaponInfo.description} ({(inc.weaponInfo.weapon_types || []).join(', ')})
                       </div>
                     )}
                   </div>
                 )}
 
-                {/* Danh sách Actors & Visual Cues */}
+                {/* Danh sách Subjects / Actors & Kinematics */}
                 {((inc.actors && inc.actors.length > 0) || inc.visualCues) && (
                   <div className="bg-[#121822] p-2.5 border border-[#1E2631] text-xs font-mono text-slate-300 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-slate-500">ACTORS:</span>
-                      {(inc.actors || []).map((a) => (
-                        <span
-                          key={a.id}
-                          className="px-2 py-0.5 bg-[#090D14] border border-[#1E2631] text-[11px]"
-                        >
-                          <strong className={a.role === 'attacker' ? 'text-[#EF4444]' : 'text-[#38BDF8]'}>
-                            #{a.id} {a.role.toUpperCase()}
-                          </strong>
-                          : {a.action} ({a.posture})
-                        </span>
-                      ))}
+                      <span className="text-slate-500">SUBJECTS:</span>
+                      {(inc.actors || []).map((a, idx) => {
+                        const roleStr = String(a?.role || 'suspect');
+                        return (
+                          <span
+                            key={a?.id ?? idx}
+                            className="px-2 py-0.5 bg-[#090D14] border border-[#1E2631] text-[11px]"
+                          >
+                            <strong
+                              className={
+                                roleStr === 'attacker' || roleStr === 'suspect'
+                                  ? 'text-[#EF4444]'
+                                  : 'text-[#38BDF8]'
+                              }
+                            >
+                              #{a?.id ?? idx + 1} {roleStr.toUpperCase()}
+                            </strong>
+                            : {a?.action || inc.actionType || 'DETECTED'}
+                            {a?.posture ? ` (${a.posture})` : ''}
+                          </span>
+                        );
+                      })}
                     </div>
 
-                    {inc.visualCues && (
-                      <div className="flex items-center gap-2 text-[10px]">
-                        <span className={inc.visualCues.physical_contact ? 'text-[#F59E0B] font-bold' : 'text-slate-500'}>
-                          VA CHẠM: {inc.visualCues.physical_contact ? 'CÓ' : 'KHÔNG'}
-                        </span>
-                        <span>|</span>
-                        <span className={inc.visualCues.weapons_visible ? 'text-[#EF4444] font-bold' : 'text-slate-500'}>
-                          VŨ KHÍ: {inc.visualCues.weapons_visible ? 'CÓ' : 'KHÔNG'}
-                        </span>
-                        <span>|</span>
-                        <span className={inc.visualCues.fallen_person ? 'text-[#EF4444] font-bold' : 'text-slate-500'}>
-                          NGÃ GỤC: {inc.visualCues.fallen_person ? 'CÓ' : 'KHÔNG'}
-                        </span>
+                    {inc.forensicSha256 && (
+                      <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                        <Fingerprint className="w-3 h-3 text-[#10B981]" />
+                        <span>SHA256: {inc.forensicSha256.slice(0, 16)}...</span>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Hình ảnh bằng chứng (Full Frame, Subject Crop, Hand Crop) */}
+                {(inc.fullImageBase64 || inc.subjectCropBase64 || inc.handCropBase64 || inc.cameraSnapshots) && (
+                  <div className="flex items-center gap-3 pt-1 border-t border-[#1E2631]/40 flex-wrap">
+                    <span className="font-mono text-[11px] text-slate-400">Ảnh Bằng Chứng:</span>
+                    <div className="flex gap-2">
+                      {(inc.fullImageBase64 || inc.cameraSnapshots?.eventPeakSnapshotUrl) && (
+                        <img
+                          src={inc.fullImageBase64 || inc.cameraSnapshots?.eventPeakSnapshotUrl}
+                          alt="Full Frame"
+                          title="Full Frame Image"
+                          className="w-[84px] h-[48px] object-cover border border-[#1E2631]"
+                        />
+                      )}
+                      {inc.subjectCropBase64 && (
+                        <img
+                          src={inc.subjectCropBase64}
+                          alt="Subject Crop"
+                          title="Subject Crop Image"
+                          className="w-[64px] h-[48px] object-cover border border-[#38BDF8]"
+                        />
+                      )}
+                      {inc.handCropBase64 && (
+                        <img
+                          src={inc.handCropBase64}
+                          alt="Hand Crop"
+                          title="Hand / Weapon Crop Image"
+                          className="w-[64px] h-[48px] object-cover border border-[#EF4444]"
+                        />
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

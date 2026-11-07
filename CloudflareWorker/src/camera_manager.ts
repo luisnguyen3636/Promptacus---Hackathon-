@@ -74,18 +74,28 @@ export async function upsertCameraFromServerPayload(
   env?: Env,
   clientIp = "127.0.0.1"
 ): Promise<ICameraDevice | null> {
-  const cameraId = payload.camera_id || payload.nvidia_vlm_analysis?.camera_id || payload.camera?.camera_id;
+  const cameraId =
+    payload.camera_id ||
+    payload.cameraId ||
+    payload.camera?.camera_id ||
+    payload.nvidia_vlm_analysis?.camera_id;
   if (!cameraId) return null;
 
   await loadCamerasFromKv(env);
   const existing = cameraRegistry.get(cameraId);
 
+  const cameraName =
+    payload.camera_name ||
+    payload.camera?.name ||
+    existing?.name;
+
   const location =
+    payload.camera?.address ||
     payload.location ||
     payload.nvidia_vlm_analysis?.location ||
-    payload.camera?.address ||
     existing?.location ||
-    "Khu Vực Giám Sát An Ninh";
+    cameraName ||
+    "Khu Vực Giám Sát Trung Tâm";
 
   const measuredFps =
     payload.measured_fps !== undefined
@@ -93,58 +103,130 @@ export async function upsertCameraFromServerPayload(
       : existing?.measuredFps ?? 30;
 
   const frameIndex =
-    payload.frame_index !== undefined
+    payload.audit?.frame_index !== undefined
+      ? Number(payload.audit.frame_index)
+      : payload.frame_index !== undefined
       ? Number(payload.frame_index)
       : existing?.frameIndex ?? 0;
 
-  const humanCount =
-    payload.human_count !== undefined
-      ? Number(payload.human_count)
-      : payload.actors?.length ?? existing?.humanCount ?? 0;
-
+  const subjects = payload.detection?.subjects || [];
   const rawActors = payload.actors || payload.nvidia_vlm_analysis?.actors || [];
-  const rawSeverity = (payload.severity || payload.nvidia_vlm_analysis?.severity || "low").toUpperCase();
 
-  const boundingBoxes: IAIBoundingBox[] = rawActors
-    .filter((actor) => Array.isArray(actor.bbox) && actor.bbox.length === 4)
-    .map((actor) => {
-      const [x1, y1, x2, y2] = actor.bbox!;
-      const imgW = Math.max(640, x2 + 20);
-      const imgH = Math.max(480, y2 + 20);
+  const humanCount =
+    payload.audit?.human_count !== undefined
+      ? Number(payload.audit.human_count)
+      : payload.human_count !== undefined
+      ? Number(payload.human_count)
+      : subjects.length > 0
+      ? subjects.length
+      : rawActors.length > 0
+      ? rawActors.length
+      : existing?.humanCount ?? 0;
 
-      const normX = Math.max(0, Math.min(1, x1 / imgW));
-      const normY = Math.max(0, Math.min(1, y1 / imgH));
-      const normW = Math.max(0.02, Math.min(1 - normX, (x2 - x1) / imgW));
-      const normH = Math.max(0.02, Math.min(1 - normY, (y2 - y1) / imgH));
+  const rawSeverity = String(
+    payload.severity ||
+      payload.threat_level ||
+      payload.detection?.threat_level ||
+      payload.nvidia_vlm_analysis?.severity ||
+      "LOW"
+  ).toUpperCase();
 
-      let boxSeverity: "NORMAL" | "HIGH" | "CRITICAL" = "NORMAL";
-      if (actor.role === "attacker" || rawSeverity === "CRITICAL") {
-        boxSeverity = "CRITICAL";
-      } else if (actor.role === "victim" || rawSeverity === "HIGH") {
-        boxSeverity = "HIGH";
-      }
+  let boundingBoxes: IAIBoundingBox[] = [];
 
-      return {
-        id: `actor_${cameraId}_${actor.id}_${frameIndex}`,
-        trackId: Number(actor.id) || 1,
-        label: `#${actor.id} ${String(actor.role || "actor").toUpperCase()}: ${String(actor.action || "").toUpperCase()}`,
-        subLabel: actor.posture || "",
-        severity: boxSeverity,
-        x: parseFloat(normX.toFixed(4)),
-        y: parseFloat(normY.toFixed(4)),
-        w: parseFloat(normW.toFixed(4)),
-        h: parseFloat(normH.toFixed(4)),
-        confidence: payload.confidence ?? 0.9
-      };
-    });
+  if (subjects.length > 0) {
+    boundingBoxes = subjects
+      .filter((sub) => Array.isArray(sub.bbox) && sub.bbox.length === 4)
+      .map((sub) => {
+        const [x1, y1, x2, y2] = sub.bbox;
+        const imgW = Math.max(640, x2 + 20);
+        const imgH = Math.max(480, y2 + 20);
+
+        const normX = Math.max(0, Math.min(1, x1 / imgW));
+        const normY = Math.max(0, Math.min(1, y1 / imgH));
+        const normW = Math.max(0.02, Math.min(1 - normX, (x2 - x1) / imgW));
+        const normH = Math.max(0.02, Math.min(1 - normY, (y2 - y1) / imgH));
+
+        const subSev = String(sub.threat_level || rawSeverity).toUpperCase();
+        let boxSeverity: "NORMAL" | "HIGH" | "CRITICAL" = "NORMAL";
+        if (subSev === "CRITICAL" || sub.role === "suspect") {
+          boxSeverity = "CRITICAL";
+        } else if (subSev === "HIGH") {
+          boxSeverity = "HIGH";
+        }
+
+        const kinStr = sub.kinematics
+          ? `Spine:${sub.kinematics.spine_angle ?? 0}° L-Elb:${sub.kinematics.left_elbow_angle ?? 0}° R-Elb:${sub.kinematics.right_elbow_angle ?? 0}°`
+          : `${String(sub.role || "suspect").toUpperCase()} (TRK-${sub.track_id})`;
+
+        return {
+          id: `sub_${cameraId}_${sub.track_id}_${frameIndex}`,
+          trackId: sub.track_id,
+          label: `#${sub.track_id} ${String(sub.role || "suspect").toUpperCase()}: ${sub.behavior} (${Math.round((sub.confidence ?? 0.95) * 100)}%)`,
+          subLabel: kinStr,
+          severity: boxSeverity,
+          x: parseFloat(normX.toFixed(4)),
+          y: parseFloat(normY.toFixed(4)),
+          w: parseFloat(normW.toFixed(4)),
+          h: parseFloat(normH.toFixed(4)),
+          confidence: sub.confidence ?? 0.95,
+          keypoints: sub.keypoints
+        };
+      });
+  } else if (rawActors.length > 0) {
+    boundingBoxes = rawActors
+      .filter((actor) => Array.isArray(actor.bbox) && actor.bbox.length === 4)
+      .map((actor) => {
+        const [x1, y1, x2, y2] = actor.bbox!;
+        const imgW = Math.max(640, x2 + 20);
+        const imgH = Math.max(480, y2 + 20);
+
+        const normX = Math.max(0, Math.min(1, x1 / imgW));
+        const normY = Math.max(0, Math.min(1, y1 / imgH));
+        const normW = Math.max(0.02, Math.min(1 - normX, (x2 - x1) / imgW));
+        const normH = Math.max(0.02, Math.min(1 - normY, (y2 - y1) / imgH));
+
+        let boxSeverity: "NORMAL" | "HIGH" | "CRITICAL" = "NORMAL";
+        if (actor.role === "attacker" || rawSeverity === "CRITICAL") {
+          boxSeverity = "CRITICAL";
+        } else if (actor.role === "victim" || rawSeverity === "HIGH") {
+          boxSeverity = "HIGH";
+        }
+
+        return {
+          id: `actor_${cameraId}_${actor.id}_${frameIndex}`,
+          trackId: Number(actor.id) || 1,
+          label: `#${actor.id} ${String(actor.role || "actor").toUpperCase()}: ${String(actor.action || "").toUpperCase()}`,
+          subLabel: actor.posture || "",
+          severity: boxSeverity,
+          x: parseFloat(normX.toFixed(4)),
+          y: parseFloat(normY.toFixed(4)),
+          w: parseFloat(normW.toFixed(4)),
+          h: parseFloat(normH.toFixed(4)),
+          confidence: payload.confidence ?? 0.9
+        };
+      });
+  }
 
   const defaultStreamUrl =
     env?.LIVE_CAMERA_STREAM_URL ||
     "https://means-brick-determined-send.trycloudflare.com/api/v1/cameras/LAPTOP_01/stream";
 
+  const snapshotBase64 =
+    payload.image_base64 ||
+    payload.image ||
+    payload.snapshot_url ||
+    payload.detection?.full_image?.image_base64 ||
+    existing?.lastSnapshotBase64;
+
+  const displayName = cameraName
+    ? `${cameraName} (${location})`
+    : location
+    ? `${cameraId} — ${location}`
+    : cameraId;
+
   const updatedCamera: ICameraDevice = {
     id: cameraId,
-    name: location ? `${cameraId} — ${location}` : cameraId,
+    name: displayName,
     ip: clientIp || existing?.ip || "127.0.0.1",
     fps: Number(measuredFps.toFixed(1)),
     bitrateKbps: existing?.bitrateKbps || 2048,
@@ -154,93 +236,20 @@ export async function upsertCameraFromServerPayload(
     ptzEnabled: true,
     ptzState: existing?.ptzState || { zoom: 1.0, pan: 0, tilt: 0, focus: "AUTO" },
     boundingBoxes,
+    zoneId: payload.camera?.zone_id || existing?.zoneId || "ZONE_DEFAULT",
     location,
     address: location,
     measuredFps: Number(measuredFps.toFixed(1)),
     frameIndex,
     humanCount,
+    latitude: payload.camera?.latitude ?? existing?.latitude,
+    longitude: payload.camera?.longitude ?? existing?.longitude,
     lastTimestamp: payload.timestamp || new Date().toISOString(),
-    lastSnapshotBase64: payload.image_base64 || payload.snapshot_url || existing?.lastSnapshotBase64
+    lastSnapshotBase64: snapshotBase64
   };
 
   cameraRegistry.set(cameraId, updatedCamera);
   await saveCamerasToKv(env);
-  return updatedCamera;
-}
-
-/**
- * Legacy helper for structured AI detection payload format
- */
-export function upsertCameraFromAiDetection(
-  cameraMeta: {
-    camera_id: string;
-    name: string;
-    zone_id?: string;
-    address?: string;
-    latitude?: number;
-    longitude?: number;
-  },
-  subjects: IAISubjectData[],
-  fullImageWidth = 640,
-  fullImageHeight = 480,
-  snapshotBase64?: string
-): ICameraDevice {
-  const cameraId = cameraMeta.camera_id;
-  const existing = cameraRegistry.get(cameraId);
-
-  const boundingBoxes: IAIBoundingBox[] = subjects.map((sub) => {
-    const [x1, y1, x2, y2] = sub.bbox;
-    const imgW = fullImageWidth > 0 ? fullImageWidth : 640;
-    const imgH = fullImageHeight > 0 ? fullImageHeight : 480;
-
-    const normX = Math.max(0, Math.min(1, x1 / imgW));
-    const normY = Math.max(0, Math.min(1, y1 / imgH));
-    const normW = Math.max(0.01, Math.min(1, (x2 - x1) / imgW));
-    const normH = Math.max(0.01, Math.min(1, (y2 - y1) / imgH));
-
-    let severity: "NORMAL" | "HIGH" | "CRITICAL" = "NORMAL";
-    if (sub.threat_level === "CRITICAL") severity = "CRITICAL";
-    else if (sub.threat_level === "HIGH") severity = "HIGH";
-
-    return {
-      id: `box_trk_${sub.track_id}_${Date.now()}`,
-      trackId: sub.track_id,
-      label: `${sub.behavior} ${Math.round(sub.confidence * 100)}%`,
-      subLabel: `${sub.role.toUpperCase()} (TRK-${sub.track_id})`,
-      severity,
-      x: parseFloat(normX.toFixed(4)),
-      y: parseFloat(normY.toFixed(4)),
-      w: parseFloat(normW.toFixed(4)),
-      h: parseFloat(normH.toFixed(4)),
-      confidence: sub.confidence,
-      keypoints: sub.keypoints
-    };
-  });
-
-  const location = cameraMeta.address || cameraMeta.name || existing?.location || cameraId;
-
-  const updatedCamera: ICameraDevice = {
-    id: cameraId,
-    name: cameraMeta.name || existing?.name || cameraId,
-    ip: existing?.ip || "127.0.0.1",
-    fps: existing?.fps || 30,
-    bitrateKbps: existing?.bitrateKbps || 2048,
-    status: "ONLINE",
-    streamUrl: snapshotBase64 || existing?.streamUrl || `/api/v1/cameras/${cameraId}/stream`,
-    ptzEnabled: true,
-    ptzState: existing?.ptzState || { zoom: 1.0, pan: 0, tilt: 0, focus: "AUTO" },
-    boundingBoxes,
-    zoneId: cameraMeta.zone_id || existing?.zoneId,
-    address: location,
-    location,
-    humanCount: subjects.length,
-    lastTimestamp: new Date().toISOString(),
-    latitude: cameraMeta.latitude ?? existing?.latitude,
-    longitude: cameraMeta.longitude ?? existing?.longitude,
-    lastSnapshotBase64: snapshotBase64 || existing?.lastSnapshotBase64
-  };
-
-  cameraRegistry.set(cameraId, updatedCamera);
   return updatedCamera;
 }
 

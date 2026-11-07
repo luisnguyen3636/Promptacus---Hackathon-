@@ -7,8 +7,9 @@
 import type {
   IIncidentItem,
   IIncidentPlaybackResponse,
-  IAIRealDetectionPayload,
   IServerIngestPayload,
+  IServerActor,
+  IServerVisualCues,
   Env
 } from "./types.ts";
 
@@ -20,6 +21,10 @@ export function getRecentIncidents(): IIncidentItem[] {
 
 export function setRecentIncidents(newIncidents: IIncidentItem[]): void {
   incidents = newIncidents;
+}
+
+export function getIncidentById(id: string): IIncidentItem | undefined {
+  return incidents.find((i) => i.id === id || i.eventId === id);
 }
 
 export function addIncident(item: IIncidentItem): void {
@@ -74,7 +79,8 @@ function normalizeSeverity(raw?: string): "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
 }
 
 /**
- * Ingests the server's continuous JSON payload directly into memory and Cloudflare KV.
+ * Unified Server JSON Ingestion -> Cloudflare KV
+ * Supports the full WEAPON_THREAT / YOLOv11-Pose + NVIDIA NIM VLM payload as well as actor/visual_cues payloads.
  */
 export async function ingestServerPayloadToKv(
   payload: IServerIngestPayload,
@@ -83,80 +89,200 @@ export async function ingestServerPayloadToKv(
 ): Promise<IIncidentItem> {
   await loadIncidentsFromKv(env);
 
-  if (payload.detection && payload.camera) {
-    const legacyItem = createIncidentFromAiDetection(payload as IAIRealDetectionPayload);
-    await saveIncidentsToKv(env, legacyItem);
-    return legacyItem;
-  }
-
   const vlm = payload.nvidia_vlm_analysis;
-  const cameraId = payload.camera_id || vlm?.camera_id || "LAPTOP_01";
+  const det = payload.detection;
+  const val = payload.action_validation;
+  const camMeta = payload.camera;
+  const audit = payload.audit;
+
+  const cameraId =
+    payload.camera_id ||
+    payload.cameraId ||
+    camMeta?.camera_id ||
+    vlm?.camera_id ||
+    "LAPTOP_01";
+
+  const cameraName =
+    payload.camera_name ||
+    camMeta?.name ||
+    cameraId;
+
   const location =
+    camMeta?.address ||
     payload.location ||
     vlm?.location ||
     payload.location_name ||
-    "Cổng Phía Đông - Khu Vực Giám Sát An Ninh";
-  const timestamp = payload.timestamp || vlm?.timestamp || new Date().toISOString();
-  const frameIndex = payload.frame_index !== undefined ? Number(payload.frame_index) : undefined;
-  const measuredFps = payload.measured_fps !== undefined ? Number(payload.measured_fps) : undefined;
-  const humanCount =
-    payload.human_count !== undefined
-      ? Number(payload.human_count)
-      : (payload.actors || vlm?.actors || []).length;
+    cameraName ||
+    "Khu vực Giám sát Trung tâm";
 
-  const actionType =
+  const timestamp = payload.timestamp || vlm?.timestamp || new Date().toISOString();
+  const timestampMs =
+    payload.timestamp_ms !== undefined
+      ? Number(payload.timestamp_ms)
+      : Date.parse(timestamp) || Date.now();
+
+  const frameIndex =
+    audit?.frame_index !== undefined
+      ? Number(audit.frame_index)
+      : payload.frame_index !== undefined
+      ? Number(payload.frame_index)
+      : undefined;
+
+  const measuredFps =
+    payload.measured_fps !== undefined ? Number(payload.measured_fps) : undefined;
+
+  const subjects = det?.subjects || [];
+  const rawActors = payload.actors || vlm?.actors || [];
+
+  const humanCount =
+    audit?.human_count !== undefined
+      ? Number(audit.human_count)
+      : payload.human_count !== undefined
+      ? Number(payload.human_count)
+      : subjects.length > 0
+      ? subjects.length
+      : rawActors.length;
+
+  const primaryAction =
+    payload.primary_action ||
+    det?.primary_action ||
+    val?.detected_action ||
     payload.action_type ||
     vlm?.action_type ||
-    payload.title ||
     "OBSERVED_EVENT";
 
-  const severity = normalizeSeverity(payload.severity || vlm?.severity);
+  const severity = normalizeSeverity(
+    payload.severity ||
+      payload.threat_level ||
+      det?.threat_level ||
+      val?.severity ||
+      vlm?.severity
+  );
 
   const threatScoreRaw =
     payload.threat_score !== undefined
       ? Number(payload.threat_score)
+      : det?.threat_score !== undefined
+      ? Number(det.threat_score)
+      : val?.threat_score !== undefined
+      ? Number(val.threat_score)
       : vlm?.threat_score !== undefined
       ? Number(vlm.threat_score)
       : severity === "CRITICAL"
-      ? 0.94
+      ? 0.95
       : severity === "HIGH"
       ? 0.78
       : 0.35;
 
+  const weaponInfo = payload.weapon_info || det?.weapon
+    ? {
+        is_weapon_detected: Boolean(
+          payload.weapon_info?.is_weapon_detected ?? det?.weapon?.is_weapon_detected
+        ),
+        weapon_types:
+          payload.weapon_info?.weapon_types ||
+          det?.weapon?.weapon_types ||
+          [],
+        confidence:
+          payload.weapon_info?.confidence ??
+          det?.weapon?.confidence ??
+          0.95,
+        description:
+          payload.weapon_info?.description ||
+          det?.weapon?.description ||
+          ""
+      }
+    : undefined;
+
   const confidence =
     payload.confidence !== undefined
       ? Number(payload.confidence)
+      : weaponInfo?.confidence !== undefined
+      ? Number(weaponInfo.confidence)
+      : subjects[0]?.confidence !== undefined
+      ? Number(subjects[0].confidence)
       : vlm?.confidence !== undefined
       ? Number(vlm.confidence)
-      : 0.9;
+      : 0.95;
 
   const isUrgent =
     payload.is_urgent !== undefined
       ? Boolean(payload.is_urgent)
+      : det?.is_urgent !== undefined
+      ? Boolean(det.is_urgent)
       : vlm?.is_urgent !== undefined
       ? Boolean(vlm.is_urgent)
       : severity === "CRITICAL";
 
+  const actionConfirmed = Boolean(
+    payload.action_confirmed ?? det?.action_confirmed ?? audit?.action_confirmed ?? val?.is_valid
+  );
+  const aiVerified = Boolean(
+    payload.ai_verified ?? det?.ai_verified ?? audit?.ai_verified ?? val?.is_valid
+  );
+
+  const valReasoning = val?.reasoning;
+  const rawReasoning = payload.reasoning || det?.reasoning || vlm?.reasoning;
+
   const description =
     payload.description ||
+    valReasoning ||
+    weaponInfo?.description ||
     vlm?.description ||
-    `Phát hiện hành vi ${actionType} tại ${location}`;
+    rawReasoning ||
+    `Phát hiện hành vi ${primaryAction} tại ${location}`;
 
-  const reasoning =
-    payload.reasoning ||
-    vlm?.reasoning ||
-    description;
+  const reasoning = rawReasoning || valReasoning || description;
+  const vlmAnalysis =
+    payload.vlmAnalysis ||
+    (valReasoning && rawReasoning && valReasoning !== rawReasoning
+      ? `${valReasoning} | ${rawReasoning}`
+      : valReasoning || rawReasoning || description);
+
+  const title =
+    payload.title ||
+    `Cảnh báo: ${primaryAction} (${severity})`;
 
   const recommendedAction =
     payload.recommended_action ||
     vlm?.recommended_action ||
     (isUrgent ? "DISPATCH_SECURITY" : "MONITOR");
 
-  const actors = payload.actors || vlm?.actors || [];
-  const visualCues = payload.visual_cues || vlm?.visual_cues || {
-    weapons_visible: false,
-    physical_contact: false,
-    fallen_person: false
+  // Synthesize actors from detection.subjects if actors is not explicitly provided
+  const actors: IServerActor[] =
+    rawActors.length > 0
+      ? rawActors.map((a, idx) => ({
+          id: a?.id ?? idx + 1,
+          role: String(a?.role || "suspect"),
+          action: String(a?.action || primaryAction),
+          posture: String(a?.posture || weaponInfo?.description || ""),
+          interacting_with: a?.interacting_with ?? null,
+          bbox: Array.isArray(a?.bbox) ? a.bbox : undefined
+        }))
+      : subjects.map((sub, idx) => {
+          const kin = sub?.kinematics;
+          const postureStr = kin
+            ? `Spine: ${kin.spine_angle ?? 0}°, L-Elbow: ${kin.left_elbow_angle ?? 0}°, R-Elbow: ${kin.right_elbow_angle ?? 0}°, L-ArmExt: ${kin.left_arm_extension ?? 0}, R-ArmExt: ${kin.right_arm_extension ?? 0} (Speed: ${sub?.speed ?? 0})`
+            : weaponInfo?.description || `Behavior: ${sub?.behavior || primaryAction}`;
+          return {
+            id: sub?.track_id ?? idx + 1,
+            role: String(sub?.role || "suspect"),
+            action: String(sub?.behavior || primaryAction),
+            posture: String(postureStr),
+            bbox: Array.isArray(sub?.bbox) ? sub.bbox : undefined
+          };
+        });
+
+  const visualCues: IServerVisualCues = payload.visual_cues || vlm?.visual_cues || {
+    weapons_visible: Boolean(
+      weaponInfo?.is_weapon_detected ||
+        primaryAction.includes("WEAPON") ||
+        (weaponInfo?.weapon_types && weaponInfo.weapon_types.length > 0)
+    ),
+    physical_contact: Boolean(
+      primaryAction.includes("FIGHT") || primaryAction.includes("ASSAULT")
+    ),
+    fallen_person: Boolean(primaryAction.includes("FALL"))
   };
 
   const incidentId =
@@ -165,43 +291,92 @@ export async function ingestServerPayloadToKv(
     payload.id ||
     `EVT_${cameraId}_${frameIndex !== undefined ? frameIndex : Date.now()}_${Date.now().toString().slice(-4)}`;
 
-  const snapshot = payload.snapshot_url || payload.image_base64 || payload.evidence_url || undefined;
+  const fullImageBase64 =
+    payload.image_base64 ||
+    payload.image ||
+    det?.full_image?.image_base64 ||
+    payload.snapshot_url ||
+    payload.evidence_url ||
+    undefined;
+
+  const subjectCropBase64 =
+    payload.subject_crop_base64 ||
+    subjects[0]?.crop_image_base64 ||
+    undefined;
+
+  const handCropBase64 = payload.hand_crop_base64 || undefined;
+
+  const forensicSha256 =
+    payload.forensic_hash ||
+    det?.full_image?.sha256_hash ||
+    subjects[0]?.crop_image_sha256 ||
+    undefined;
+
+  const imageUrl = payload.image_url || (fullImageBase64 ? `/api/v1/incidents/${incidentId}/image.jpg` : undefined);
+  const handCropUrl = payload.hand_crop_url || (handCropBase64 ? `/api/v1/incidents/${incidentId}/hand_crop.jpg` : undefined);
+
+  const peakSnapshot = fullImageBase64 || imageUrl;
+  const preSnapshot = subjectCropBase64 || handCropBase64 || peakSnapshot;
 
   const incident: IIncidentItem = {
     id: incidentId,
     eventId: incidentId,
-    title: `${actionType} — ${description}`,
-    subTitle: location,
+    title,
+    subTitle: `${cameraName} • ${location}`,
     sourceIp: clientIp || cameraId,
     category: "PHYSICAL_CAMERA",
     severity,
     timestamp,
+    timestampMs,
     cameraId,
+    cameraName,
     location,
     measuredFps,
     frameIndex,
     humanCount,
-    actionType,
+    actionType: primaryAction,
+    primaryAction,
+    threatLevel: normalizeSeverity(payload.threat_level || det?.threat_level || severity),
     threatScore: threatScoreRaw,
     confidence,
     isUrgent,
+    actionConfirmed,
+    aiVerified,
+    actionValidation: val,
+    weaponInfo,
     description,
     reasoning,
     recommendedAction,
     actors,
     visualCues,
     nvidiaVlmAnalysis: vlm,
-    cameraSnapshots: snapshot
-      ? {
-          preEventSnapshotUrl: snapshot,
-          eventPeakSnapshotUrl: snapshot
-        }
-      : null,
-    playbackUrl: snapshot || null,
+    cameraSnapshots:
+      peakSnapshot || preSnapshot || handCropBase64
+        ? {
+            preEventSnapshotUrl: preSnapshot,
+            eventPeakSnapshotUrl: peakSnapshot,
+            handCropSnapshotUrl: handCropBase64 || handCropUrl
+          }
+        : null,
+    playbackUrl: peakSnapshot || null,
     status: "PENDING_VERIFICATION", // Mandatory Operational HITL gate [CD-04]
-    vlmAnalysis: `${description} | Lý giải: ${reasoning}`,
+    vlmAnalysis,
     rawDetection: payload,
-    fullImageBase64: snapshot
+    forensicSha256,
+    subjects,
+    fullImageBase64,
+    subjectCropBase64,
+    handCropBase64,
+    imageUrl,
+    handCropUrl,
+    cameraMeta: camMeta || {
+      camera_id: cameraId,
+      name: cameraName,
+      zone_id: "ZONE_DEFAULT",
+      address: location
+    },
+    auditInfo: audit,
+    audioInfo: det?.audio
   };
 
   addIncident(incident);
@@ -209,53 +384,8 @@ export async function ingestServerPayloadToKv(
   return incident;
 }
 
-/**
- * Legacy helper for structured AI detection payload
- */
-export function createIncidentFromAiDetection(payload: IAIRealDetectionPayload): IIncidentItem {
-  const primarySubject = payload.detection.subjects?.[0];
-  const timestamp = payload.timestamp || new Date().toISOString();
-
-  const preSnapshot = primarySubject?.crop_image_base64 || payload.detection.full_image?.image_base64 || null;
-  const peakSnapshot = payload.detection.full_image?.image_base64 || null;
-
-  const incident: IIncidentItem = {
-    id: payload.event_id,
-    eventId: payload.event_id,
-    title: payload.detection.primary_action.replace(/_/g, " "),
-    subTitle: payload.camera.address || payload.camera.name || payload.camera.camera_id,
-    sourceIp: payload.camera.camera_id,
-    category: "PHYSICAL_CAMERA",
-    severity: payload.detection.threat_level,
-    timestamp,
-    cameraId: payload.camera.camera_id,
-    location: payload.camera.address || payload.camera.name,
-    actionType: payload.detection.primary_action,
-    threatScore: payload.detection.threat_score,
-    confidence: primarySubject?.confidence || 0.9,
-    isUrgent: payload.detection.is_urgent,
-    description: payload.detection.reasoning,
-    reasoning: payload.detection.reasoning,
-    recommendedAction: payload.detection.is_urgent ? "DISPATCH_SECURITY" : "MONITOR",
-    cameraSnapshots: {
-      preEventSnapshotUrl: preSnapshot || undefined,
-      eventPeakSnapshotUrl: peakSnapshot || undefined
-    },
-    playbackUrl: peakSnapshot,
-    status: "PENDING_VERIFICATION",
-    vlmAnalysis: payload.detection.reasoning,
-    rawDetection: payload,
-    forensicSha256: payload.detection.full_image?.sha256_hash,
-    subjects: payload.detection.subjects,
-    fullImageBase64: peakSnapshot || undefined
-  };
-
-  addIncident(incident);
-  return incident;
-}
-
 export function getIncidentPlayback(id: string): IIncidentPlaybackResponse | null {
-  const inc = incidents.find((i) => i.id === id);
+  const inc = incidents.find((i) => i.id === id || i.eventId === id);
   if (!inc) return null;
 
   return {
@@ -268,10 +398,10 @@ export function getIncidentPlayback(id: string): IIncidentPlaybackResponse | nul
       postEventSeconds: 10,
       totalDurationSeconds: 20
     },
-    vlmReasoning: inc.reasoning || inc.vlmAnalysis,
+    vlmReasoning: inc.vlmAnalysis || inc.reasoning,
     visualEvidence: {
-      preEventSnapshot: inc.cameraSnapshots?.preEventSnapshotUrl || null,
-      eventPeakSnapshot: inc.cameraSnapshots?.eventPeakSnapshotUrl || null,
+      preEventSnapshot: inc.subjectCropBase64 || inc.cameraSnapshots?.preEventSnapshotUrl || null,
+      eventPeakSnapshot: inc.fullImageBase64 || inc.cameraSnapshots?.eventPeakSnapshotUrl || null,
       streamPlaybackUrl: inc.playbackUrl || null
     },
     status: inc.status,
@@ -287,75 +417,10 @@ export async function updateIncidentStatus(
   env?: Env
 ): Promise<IIncidentItem | null> {
   await loadIncidentsFromKv(env);
-  const inc = incidents.find((i) => i.id === id);
+  const inc = incidents.find((i) => i.id === id || i.eventId === id);
   if (inc) {
     inc.status = newStatus;
     await saveIncidentsToKv(env, inc);
   }
   return inc || null;
-}
-
-export function ingestGenericIncident(payload: Record<string, any>, clientIp?: string): IIncidentItem {
-  if (payload.detection && payload.camera) {
-    return createIncidentFromAiDetection(payload as IAIRealDetectionPayload);
-  }
-
-  const vlm = payload.nvidia_vlm_analysis;
-  const cameraId = payload.camera_id || vlm?.camera_id || "LAPTOP_01";
-  const location = payload.location || vlm?.location || payload.location_name || "Khu Vực Giám Sát";
-  const actionType = payload.action_type || vlm?.action_type || payload.title || "OBSERVED_EVENT";
-  const severity = normalizeSeverity(payload.severity || vlm?.severity);
-  const description = payload.description || vlm?.description || actionType;
-  const reasoning = payload.reasoning || vlm?.reasoning || description;
-  const threatScore =
-    payload.threat_score !== undefined
-      ? Number(payload.threat_score)
-      : vlm?.threat_score !== undefined
-      ? Number(vlm.threat_score)
-      : 0.5;
-
-  const incidentId =
-    payload.event_id ||
-    payload.incident_id ||
-    payload.id ||
-    `EVT_${cameraId}_${payload.frame_index ?? Date.now()}`;
-
-  const incident: IIncidentItem = {
-    id: incidentId,
-    eventId: incidentId,
-    title: payload.action_type ? `${actionType} — ${description}` : description,
-    subTitle: location,
-    sourceIp: payload.source_ip || clientIp || cameraId,
-    category: "PHYSICAL_CAMERA",
-    severity,
-    timestamp: payload.timestamp || new Date().toISOString(),
-    cameraId,
-    location,
-    measuredFps: payload.measured_fps !== undefined ? Number(payload.measured_fps) : undefined,
-    frameIndex: payload.frame_index !== undefined ? Number(payload.frame_index) : undefined,
-    humanCount: payload.human_count !== undefined ? Number(payload.human_count) : undefined,
-    actionType,
-    threatScore,
-    confidence: payload.confidence !== undefined ? Number(payload.confidence) : undefined,
-    isUrgent: Boolean(payload.is_urgent ?? vlm?.is_urgent),
-    description,
-    reasoning,
-    recommendedAction: payload.recommended_action || vlm?.recommended_action || "DISPATCH_SECURITY",
-    actors: payload.actors || vlm?.actors || [],
-    visualCues: payload.visual_cues || vlm?.visual_cues,
-    nvidiaVlmAnalysis: vlm,
-    cameraSnapshots: payload.evidence_url
-      ? {
-          eventPeakSnapshotUrl: payload.evidence_url,
-          preEventSnapshotUrl: payload.evidence_url
-        }
-      : null,
-    playbackUrl: payload.evidence_url || null,
-    status: "PENDING_VERIFICATION",
-    vlmAnalysis: `${description} | ${reasoning}`,
-    rawDetection: payload
-  };
-
-  addIncident(incident);
-  return incident;
 }

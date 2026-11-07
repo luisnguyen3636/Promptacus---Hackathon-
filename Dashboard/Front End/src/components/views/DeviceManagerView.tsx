@@ -46,10 +46,10 @@ export const DeviceManagerView: React.FC<DeviceManagerViewProps> = ({
 
   const filteredCameras = cameras.filter((c) => {
     const matchesStatus = statusFilter === 'ALL' || c.status === statusFilter;
-    const q = searchQuery.toLowerCase();
+    const q = (searchQuery || '').toLowerCase();
     const matchesQuery =
       !q ||
-      c.id.toLowerCase().includes(q) ||
+      (c.id || '').toLowerCase().includes(q) ||
       (c.location || c.name || '').toLowerCase().includes(q) ||
       (c.ip || '').toLowerCase().includes(q);
     return matchesStatus && matchesQuery;
@@ -117,9 +117,9 @@ export const DeviceManagerView: React.FC<DeviceManagerViewProps> = ({
           <table className="w-full text-left font-mono text-xs min-w-[850px]">
             <thead className="bg-[#121822] text-[#64748B] border-b border-[#1E2631]">
               <tr>
-                <th className="p-3">CAMERA ID</th>
-                <th className="p-3">LOCATION (VỊ TRÍ GIÁM SÁT)</th>
-                <th className="p-3">MEASURED FPS</th>
+                <th className="p-3">CAMERA ID / NAME</th>
+                <th className="p-3">ZONE / ADDRESS / GPS</th>
+                <th className="p-3">FPS</th>
                 <th className="p-3">FRAME INDEX</th>
                 <th className="p-3">HUMAN COUNT</th>
                 <th className="p-3">LAST TIMESTAMP</th>
@@ -134,7 +134,7 @@ export const DeviceManagerView: React.FC<DeviceManagerViewProps> = ({
                     <Video className="w-6 h-6 text-slate-600 mx-auto mb-2" />
                     Chưa có thông tin camera nào được gửi từ Server. Khi Server gửi JSON kèm{' '}
                     <code className="text-slate-300">camera_id</code> và{' '}
-                    <code className="text-slate-300">location</code>, thiết bị sẽ tự động hiển thị tại đây.
+                    <code className="text-slate-300">camera</code>, thiết bị sẽ tự động hiển thị tại đây.
                   </td>
                 </tr>
               ) : (
@@ -142,9 +142,20 @@ export const DeviceManagerView: React.FC<DeviceManagerViewProps> = ({
                   const isOnline = c.status === 'ONLINE';
                   return (
                     <tr key={c.id} className="border-b border-[#1E2631] hover:bg-[#161E29]/50">
-                      <td className="p-3 font-bold text-[#38BDF8]">{c.id}</td>
-                      <td className="p-3 text-white font-semibold">
-                        {c.location || c.address || c.name}
+                      <td className="p-3">
+                        <div className="font-bold text-[#38BDF8]">{c.id}</div>
+                        <div className="text-[11px] text-slate-300">{c.name}</div>
+                      </td>
+                      <td className="p-3">
+                        <div className="text-white font-semibold">
+                          {c.location || c.address || c.name}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Zone: <span className="text-[#10B981]">{c.zoneId || 'ZONE_DEFAULT'}</span>
+                          {c.latitude !== undefined && c.longitude !== undefined
+                            ? ` • GPS: ${c.latitude}, ${c.longitude}`
+                            : ''}
+                        </div>
                       </td>
                       <td className="p-3 text-[#10B981] font-bold">
                         {c.measuredFps !== undefined ? `${c.measuredFps} FPS` : `${c.fps} FPS`}

@@ -26,8 +26,8 @@ Promptacus---Hackathon-/
 │
 ├── CloudflareWorker/                  # [CORE BACKEND & KV GATEWAY] Nền tảng hợp nhất Edge SOC
 │   ├── src/
-│   │   ├── index.ts                   # Router chính: Server JSON Ingest -> KV, Auth, Settings, Stream Proxy, HITL
-│   │   ├── types.ts                   # Data Models & Schemas (IServerIngestPayload, ICameraDevice, IIncidentItem, ISocSettings, IOperatorSession)
+│   │   ├── index.ts                   # Router chính: Server JSON Ingest -> KV, Forensic Image Endpoints, Auth, Settings, Stream Proxy, HITL
+│   │   ├── types.ts                   # Data Models & Schemas (IServerIngestPayload, IActionValidation, IWeaponInfo, IServerAuditInfo, ICameraDevice, IIncidentItem)
 │   │   ├── camera_manager.ts          # Quản lý danh mục camera thực tế từ Server JSON, lưu trữ vào KV (`kv_cameras`)
 │   │   ├── incident_manager.ts        # Lưu trữ sự cố trực tiếp từ Server JSON vào KV (`kv_recent_incidents`, `incident:<id>`)
 │   │   ├── hitl_dispatcher.ts         # Chốt chặn HITL [CD-04], đóng gói hồ sơ sự cố, ghi log kiểm toán [CD-05]

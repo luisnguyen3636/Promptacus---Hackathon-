@@ -1,128 +1,137 @@
-# ĐẶC TẢ KỸ THUẬT (SPECIFICATION DOCUMENT)
-## Refactor Toàn Diện: Pure Display Dashboard, Server JSON Ingestion vào Cloudflare KV, Xóa AI & Dữ Liệu Giả, Hoàn Thiện Authentication & Toàn Bộ Tab
-
-**Dự án:** Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety SOC)  
-**Giai đoạn:** BƯỚC 1: ĐẶC TẢ KỸ THUẬT (STAGE 1 — SPECIFICATION)  
-**Tuân thủ:** AGENTS.md (CD-01 đến CD-06, Strict SDD & Dual HITL)  
-**Ngày soạn thảo:** 2026-11-08  
+# SPEC — CẬP NHẬT SCHEMA JSON NHẬN TỪ SERVER & LƯU TRỮ CLOUDFLARE KV
+**Mã tài liệu:** `SPEC-SERVER-JSON-V2`  
+**Trạng thái:** `[SPEC AUTO-APPROVED]`
 
 ---
 
-### 1. MỤC TIÊU NGHIỆP VỤ & KIẾN TRÚC MỚI
+## 1. MỤC TIÊU
+Cập nhật toàn diện tầng tiếp nhận dữ liệu từ Server (Cloudflare Worker + KV Storage) và tầng hiển thị trên Dashboard (React 19) để tương thích 100% với cấu trúc JSON thực tế mới nhất từ Server gửi lên:
 
-1. **Loại bỏ hoàn toàn tính năng tự phân tích AI trên Worker & Frontend:**
-   - Website và Cloudflare Worker chỉ đóng vai trò **Dashboard hiển thị & điều phối tác chiến (Pure Display & HITL Dashboard)**.
-   - Gỡ bỏ mọi lệnh gọi mô hình AI nội bộ (Workers AI, DeepSeek API, Kinematics Engine tự suy luận).
-   - Server phân tích bên ngoài sẽ gửi JSON liên tục lên Worker. Worker tiếp nhận, chuẩn hóa và **lưu trữ trực tiếp vào Cloudflare KV (`INCIDENT_CACHE`)**, đồng thời phát realtime qua WebSocket và cung cấp qua REST API cho Dashboard.
-2. **Xóa toàn bộ dữ liệu giả (Zero Fake Data):**
-   - Khởi tạo mảng rỗng cho danh sách sự cố (`incidents = []`) và danh sách camera (`cameras = []`).
-   - Toàn bộ thông số trên Dashboard, Threat Intelligence, Incident Feed, Device Manager chỉ hiển thị dữ liệu thật do Server gửi lên và lưu trong KV.
-3. **Cập nhật giao diện theo yêu cầu:**
-   - **Tại Sidebar (Menu trái):** Xóa hộp thông tin trạng thái góc dưới (`SYSTEM ACTIVE / Threat DB / Engine: Online`). Xóa badge số giả trên menu.
-   - **Tại Tab SOC Dashboard:** Xóa nút `PHÒNG THỦ KHẨN CẤP` (Lockdown). Xóa khối `AiMetricsGrid` chứa số liệu AI giả. Hoàn thiện nút `XUẤT BÁO CÁO CA TRỰC` (tải file báo cáo JSON/CSV thật).
-   - **Hoàn thiện tính năng Authentication (Đăng nhập / Đăng xuất / Quản lý phiên Operator):** Hoàn thiện nút `Sign In` trên `TopHeader` với hộp thoại đăng nhập, xác thực qua API `/api/auth/login`, `/api/auth/logout`, `/api/auth/me` lưu phiên trên KV & `localStorage`, đồng bộ `operatorId` vào chốt chặn HITL và Settings.
-   - **Tab Device Manager:** Chỉ hiển thị thông tin thật của các camera được trích xuất từ payload JSON của Server gửi lên (bao gồm `camera_id`, `location`, `measured_fps`, `frame_index`, `human_count`, `timestamp`, `status`), kèm các thao tác thực tế (Ping kiểm tra kết nối, Làm mới, Xem luồng, Xóa lịch sử thiết bị).
-   - **Tab Threat Intelligence:** Tổng hợp dữ liệu tình báo thật từ các bản tin JSON của Server (thống kê theo `action_type`, `visual_cues`: `weapons_visible`, `physical_contact`, `fallen_person`, danh sách đối tượng `actors` `attacker`/`victim`, `nvidia_vlm_analysis`).
-   - **Tab Settings:** Hoạt động thực tế 100%, lưu và đồng bộ cấu hình với Cloudflare KV qua `GET /api/settings` và `POST /api/settings` (gồm cả cấu hình URL luồng video camera dự phòng, ngưỡng cảnh báo, thời lượng buffer, webhook điều phối).
-
----
-
-### 2. ĐẶC TẢ SCHEMA PAYLOAD TỪ SERVER GỬI LÊN
-
-#### 2.1. Input JSON Payload từ Server (`IServerIngestPayload`)
-```typescript
-export interface IServerActor {
-  id: number | string;
-  role: 'attacker' | 'victim' | 'bystander' | string;
-  action: string;
-  posture: string;
-  interacting_with?: number | string | null;
-  bbox?: [number, number, number, number]; // [x1, y1, x2, y2]
-}
-
-export interface IServerVisualCues {
-  weapons_visible: boolean;
-  physical_contact: boolean;
-  fallen_person: boolean;
-}
-
-export interface INvidiaVlmAnalysis {
-  severity: string;
-  timestamp: string;
-  action_type: string;
-  confidence: number;
-  threat_score: number;
-  description: string;
-  reasoning: string;
-  actors?: IServerActor[];
-  visual_cues?: IServerVisualCues;
-  recommended_action?: string;
-  is_urgent?: boolean;
-  camera_id?: string;
-  location?: string;
-  source?: string;
-}
-
-export interface IServerIngestPayload {
-  event_id?: string;
-  id?: string;
-  status: string;                       // e.g. "processed"
-  camera_id: string;                    // e.g. "LAPTOP_01"
-  location: string;                     // e.g. "Cổng Phía Đông - Khu Vực Giám Sát An Ninh"
-  timestamp: string;                    // e.g. "2026-11-08T00:16:35.412Z"
-  measured_fps: number;                 // e.g. 15.2
-  frame_index: number;                  // e.g. 142
-  human_count: number;                  // e.g. 2
-
-  severity: string;                     // e.g. "critical" | "high" | "medium" | "low"
-  action_type: string;                  // e.g. "FIGHTING"
-  threat_score: number;                 // e.g. 0.94 (0..1 or 0..100)
-  confidence: number;                   // e.g. 0.92 (0..1)
-  is_urgent: boolean;                   // e.g. true
-
-  description: string;
-  reasoning: string;
-  recommended_action: string;           // e.g. "DISPATCH_SECURITY"
-
-  actors?: IServerActor[];
-  visual_cues?: IServerVisualCues;
-  nvidia_vlm_analysis?: INvidiaVlmAnalysis;
-  snapshot_url?: string;
-  image_base64?: string;
+```json
+{
+  "event_id": "EVT_20261108_042450_f8a92b1c",
+  "timestamp": "2026-11-08T04:24:50.123456",
+  "timestamp_ms": 1794111890123,
+  "camera_id": "LAPTOP_01",
+  "camera_name": "Laptop Chief (DEVICE)",
+  "cameraId": "LAPTOP_01",
+  "title": "Cảnh báo: WEAPON_THREAT (CRITICAL)",
+  "severity": "CRITICAL",
+  "primary_action": "WEAPON_THREAT",
+  "threat_level": "CRITICAL",
+  "threat_score": 0.95,
+  "is_urgent": true,
+  "action_confirmed": true,
+  "ai_verified": true,
+  "action_validation": {
+    "is_valid": true,
+    "validation_source": "nvidia_nim_vlm_multimodal",
+    "detected_action": "WEAPON_THREAT",
+    "severity": "CRITICAL",
+    "threat_score": 0.95,
+    "benign_hypothesis_probability": 0.08,
+    "reasoning": "AI xác nhận hành vi nguy hiểm 'WEAPON_THREAT' trên hình ảnh đối tượng. Tư thế 2 tay chĩa thẳng về phía trước, phản xạ đối kháng rõ rệt."
+  },
+  "reasoning": "Detected action: WEAPON_THREAT. Subject aiming posture with 2-handed forward grip. Falsification passed with high tactical confidence.",
+  "vlmAnalysis": "Detected action: WEAPON_THREAT. Subject aiming posture with 2-handed forward grip. Falsification passed with high tactical confidence.",
+  "weapon_info": {
+    "is_weapon_detected": true,
+    "weapon_types": ["TACTICAL_WEAPON_POSTURE"],
+    "confidence": 0.95,
+    "description": "Tactical pointing or overhead strike stance detected"
+  },
+  "image": "data:image/jpeg;base64,...",
+  "image_base64": "data:image/jpeg;base64,...",
+  "subject_crop_base64": "data:image/jpeg;base64,...",
+  "hand_crop_base64": "data:image/jpeg;base64,...",
+  "forensic_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "image_url": "/api/v1/incidents/EVT_20261108_042450_f8a92b1c/image.jpg",
+  "hand_crop_url": "/api/v1/incidents/EVT_20261108_042450_f8a92b1c/hand_crop.jpg",
+  "camera": {
+    "camera_id": "LAPTOP_01",
+    "name": "Laptop Chief (DEVICE)",
+    "zone_id": "ZONE_DEFAULT",
+    "address": "Khu vực Giám sát Trung tâm",
+    "latitude": 10.776889,
+    "longitude": 106.700806
+  },
+  "detection": {
+    "action_confirmed": true,
+    "ai_verified": true,
+    "primary_action": "WEAPON_THREAT",
+    "threat_level": "CRITICAL",
+    "threat_score": 0.95,
+    "is_urgent": true,
+    "reasoning": "Detected action: WEAPON_THREAT. Subject aiming posture with 2-handed forward grip.",
+    "weapon": {
+      "is_weapon_detected": true,
+      "weapon_types": ["TACTICAL_WEAPON_POSTURE"],
+      "confidence": 0.95
+    },
+    "subjects": [
+      {
+        "track_id": 1,
+        "role": "suspect",
+        "behavior": "WEAPON_THREAT",
+        "threat_level": "CRITICAL",
+        "threat_score": 0.95,
+        "confidence": 0.95,
+        "bbox": [120, 80, 450, 420],
+        "speed": 0.35,
+        "velocity_vector": [0.05, -0.02],
+        "kinematics": {
+          "spine_angle": 12.5,
+          "left_elbow_angle": 168.0,
+          "right_elbow_angle": 172.0,
+          "left_arm_extension": 0.58,
+          "right_arm_extension": 0.61
+        },
+        "keypoints": [
+          {"id": 0, "name": "nose", "x": 280.0, "y": 110.0, "confidence": 0.92},
+          {"id": 9, "name": "left_wrist", "x": 380.0, "y": 210.0, "confidence": 0.88},
+          {"id": 10, "name": "right_wrist", "x": 385.0, "y": 215.0, "confidence": 0.89}
+        ],
+        "crop_image_base64": "data:image/jpeg;base64,...",
+        "crop_image_sha256": "3a7b9c1d...",
+        "crop_image_size_bytes": 14280
+      }
+    ],
+    "audio": {
+      "is_audio_active": false,
+      "audio_threat_detected": false
+    }
+  },
+  "audit": {
+    "frame_index": 145,
+    "human_count": 1,
+    "action_confirmed": true,
+    "ai_verified": true,
+    "ai_model": "YOLOv11-Pose + NVIDIA NIM Llama-3.2-90B Vision",
+    "hash_algorithm": "SHA-256 (RAW_JPEG_BYTES + TIMESTAMP_MS)",
+    "verification_status": "AUTO_DISPATCHED_TO_AI_MODEL"
+  }
 }
 ```
 
-#### 2.2. Luồng xử lý & Lưu trữ Cloudflare KV (`INCIDENT_CACHE`)
-```mermaid
-flowchart LR
-    S["External Server"] -->|"POST JSON liên tục<br/>(/api/incidents, /api/v1/webhook, ...)"| W["Cloudflare Worker"]
-    W -->|"Lưu trạng thái"| KV[("Cloudflare KV<br/>(INCIDENT_CACHE)")]
-    KV --- K1["kv_recent_incidents"]
-    KV --- K2["kv_cameras"]
-    KV --- K3["kv_settings"]
-    KV --- K4["kv_sessions"]
-    W -->|"WebSocket Broadcast"| UI["React SOC Dashboard"]
-    UI -->|"GET /api/soc/state, /api/get-incident"| W
-```
-
----
-
-### 3. ĐẶC TẢ CÁC ENDPOINT BACKEND (CLOUDFLARE WORKER)
-
-1. **`POST /api/incidents`, `POST /api/v1/incidents`, `POST /api/v1/webhook`, `POST /api/v1/ai/detection`, `POST /api/ingest`:**
-   - Nhận JSON `IServerIngestPayload` từ Server.
-   - Cập nhật thông tin camera (`camera_id`, `location`, `measured_fps`, `frame_index`, `human_count`, `timestamp`, chuẩn hóa `actors[].bbox` sang `boundingBoxes`). Lưu danh sách camera vào KV key `kv_cameras`.
-   - Tạo bản ghi sự cố với trạng thái khởi tạo bắt buộc `PENDING_VERIFICATION` (tuân thủ Operational HITL `[CD-04]`). Lưu danh sách sự cố vào KV key `kv_recent_incidents` và chi tiết vào `incident:<id>`.
-   - Phát sự kiện WebSocket `SERVER_PAYLOAD_UPDATE` / `NEW_INCIDENT` / `TELEMETRY_AND_AI_TICK` tới toàn bộ trình duyệt đang mở.
-2. **`GET /api/get-incident`, `GET /api/get-incidents`, `GET /api/incidents`, `GET /api/incidents/recent`:**
-   - Đọc trực tiếp từ KV `kv_recent_incidents` (fallback sang bộ nhớ đệm nếu KV chưa sẵn sàng).
-3. **`GET /api/devices/cameras`, `GET /api/cameras`:**
-   - Đọc danh sách camera thật từ KV `kv_cameras`.
-4. **`GET /api/soc/overview`:**
-   - Tính toán chỉ số từ dữ liệu thật của `kv_cameras` và `kv_recent_incidents`.
-5. **`POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`:**
-   - Xác thực tài khoản Vận hành viên SOC, cấp token phiên làm việc và lưu vào KV `kv_session:<token>`.
-6. **`GET /api/settings`, `POST /api/settings`:**
-   - Đọc và lưu cấu hình vận hành vào KV `kv_settings` (bao gồm `liveStreamUrl`, `criticalThreshold`, `preBufferSeconds`, `postBufferSeconds`, `dispatchWebhook`).
-7. **`POST /api/incidents/:id/verify`:**
-   - Chốt chặn HITL: Xác thực sự cố với `operatorId` của người trực đang đăng nhập, cập nhật trạng thái trong KV `kv_recent_incidents` và ghi audit log.
+## 2. ĐẶC TẢ XỬ LÝ & ÁNH XẠ DỮ LIỆU
+1. **Tầng Camera (`camera_manager.ts` -> KV `kv_cameras`):**
+   - Trích xuất `camera_id` từ `payload.camera_id || payload.cameraId || payload.camera?.camera_id`.
+   - Trích xuất `name` từ `payload.camera_name || payload.camera?.name`, `zoneId` từ `payload.camera?.zone_id`, `address`/`location` từ `payload.camera?.address || payload.location`, tọa độ GPS (`latitude`, `longitude`) từ `payload.camera`.
+   - Trích xuất `frameIndex` từ `payload.audit?.frame_index ?? payload.frame_index`, `humanCount` từ `payload.audit?.human_count ?? payload.human_count ?? payload.detection?.subjects?.length`.
+   - Chuyển đổi `payload.detection.subjects` (gồm `track_id`, `role`, `behavior`, `bbox`, `confidence`, `keypoints`, `kinematics`) thành `boundingBoxes` chuẩn hóa `[0.0 - 1.0]` kèm `keypoints` để hiển thị trực tiếp trên `CameraSlot`.
+2. **Tầng Sự Cố (`incident_manager.ts` -> KV `kv_recent_incidents` & `incident:<event_id>`):**
+   - Lưu đầy đủ các trường mới trong `IIncidentItem`:
+     - `eventId`, `timestamp`, `timestampMs`, `cameraId`, `cameraName`, `title`, `severity`, `primaryAction` / `actionType`, `threatLevel`, `threatScore`, `isUrgent`
+     - `actionConfirmed`, `aiVerified`, `actionValidation` (`validation_source`, `detected_action`, `benign_hypothesis_probability`, `reasoning`)
+     - `reasoning`, `vlmAnalysis` (kết hợp cả `action_validation.reasoning` và `reasoning` gốc)
+     - `weaponInfo` (`is_weapon_detected`, `weapon_types`, `confidence`, `description`)
+     - `imageBase64` (`payload.image || payload.image_base64`), `subjectCropBase64` (`payload.subject_crop_base64 || subjects[0]?.crop_image_base64`), `handCropBase64` (`payload.hand_crop_base64`), `forensicSha256` (`payload.forensic_hash`), `imageUrl`, `handCropUrl`
+     - `cameraMeta` (`zone_id`, `address`, `latitude`, `longitude`)
+     - `subjects` (kèm `kinematics`: `spine_angle`, `left_elbow_angle`, `right_elbow_angle`, `left_arm_extension`, `right_arm_extension`, `speed`, `velocity_vector`, `keypoints`, `crop_image_base64`)
+     - `audioInfo` (`is_audio_active`, `audio_threat_detected`)
+     - `auditInfo` (`frame_index`, `human_count`, `action_confirmed`, `ai_verified`, `ai_model`, `hash_algorithm`, `verification_status`)
+     - Tự động tổng hợp `actors` và `visualCues` từ `detection.subjects` và `weapon_info` để toàn bộ bảng thống kê trên `ThreatIntelligenceView` và `IncidentFeedView` hoạt động đồng nhất.
+3. **Endpoint Phục Vụ Ảnh Trực Tiếp từ KV:**
+   - Hỗ trợ `GET /api/v1/incidents/:id/image.jpg`, `GET /api/v1/incidents/:id/hand_crop.jpg`, `GET /api/v1/incidents/:id/subject_crop.jpg` giải mã Base64 từ sự cố trong KV và trả về `image/jpeg` chuẩn xác.
+4. **Chốt Chặn HITL (`[CD-04]`):**
+   - Mọi sự cố mới nhận từ Server (kể cả khi `audit.verification_status === "AUTO_DISPATCHED_TO_AI_MODEL"` và `ai_verified === true`) vẫn phải khởi tạo trạng thái vận hành `status: "PENDING_VERIFICATION"` để Vận hành viên SOC xác nhận trước khi phát lệnh điều phối tới cơ quan chức năng.

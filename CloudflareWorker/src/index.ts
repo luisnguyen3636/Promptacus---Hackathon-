@@ -607,14 +607,71 @@ export default {
     // -------------------------------------------------------------------------
     // 11. REST API: Rolling Buffer Playback (/api/incidents/:id/playback)
     // -------------------------------------------------------------------------
-    if (path.startsWith("/api/incidents/") && path.endsWith("/playback") && method === "GET") {
+    if (
+      (path.startsWith("/api/incidents/") || path.startsWith("/api/v1/incidents/")) &&
+      path.endsWith("/playback") &&
+      method === "GET"
+    ) {
       await loadIncidentsFromKv(env);
-      const incidentId = path.replace("/api/incidents/", "").replace("/playback", "").trim();
+      const incidentId = path
+        .replace("/api/v1/incidents/", "")
+        .replace("/api/incidents/", "")
+        .replace("/playback", "")
+        .trim();
       const playback = getIncidentPlayback(incidentId);
       if (!playback) {
         return errorResponse(`Incident '${incidentId}' not found in playback buffer`, 404);
       }
       return jsonResponse(playback);
+    }
+
+    // -------------------------------------------------------------------------
+    // 11.1. REST API: Serve Forensic Images from KV (/api/v1/incidents/:id/image.jpg, hand_crop.jpg, subject_crop.jpg)
+    // -------------------------------------------------------------------------
+    if (
+      (path.startsWith("/api/v1/incidents/") || path.startsWith("/api/incidents/")) &&
+      (path.endsWith("/image.jpg") || path.endsWith("/hand_crop.jpg") || path.endsWith("/subject_crop.jpg")) &&
+      method === "GET"
+    ) {
+      const incidents = await loadIncidentsFromKv(env);
+      const cleanPath = path.replace("/api/v1/incidents/", "").replace("/api/incidents/", "");
+      const parts = cleanPath.split("/");
+      const incidentId = parts[0];
+      const fileType = parts[1];
+      const inc = incidents.find((i) => i.id === incidentId || i.eventId === incidentId);
+      if (!inc) {
+        return errorResponse(`Incident '${incidentId}' not found in KV`, 404);
+      }
+
+      const rawB64 =
+        fileType === "hand_crop.jpg"
+          ? inc.handCropBase64 || inc.subjectCropBase64 || inc.fullImageBase64
+          : fileType === "subject_crop.jpg"
+          ? inc.subjectCropBase64 || inc.fullImageBase64
+          : inc.fullImageBase64 || inc.subjectCropBase64;
+
+      if (!rawB64) {
+        return errorResponse(`Image '${fileType}' not available for incident '${incidentId}'`, 404);
+      }
+
+      const stripped = rawB64.replace(/^data:image\/\w+;base64,/, "");
+      try {
+        const binaryStr = atob(stripped);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        return new Response(bytes, {
+          status: 200,
+          headers: {
+            ...cors,
+            "Content-Type": "image/jpeg",
+            "Cache-Control": "public, max-age=3600"
+          }
+        });
+      } catch {
+        return errorResponse("Invalid base64 image data in KV", 500);
+      }
     }
 
     // -------------------------------------------------------------------------

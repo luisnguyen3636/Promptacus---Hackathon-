@@ -142,3 +142,9 @@ Khi đang ở bất kỳ giai đoạn nào (đặc biệt là trong quá trình 
 ### 4.3. Quy tắc Xử lý Phản hồi RFC
 - Cơ chế **Auto-Approval**: Mọi đề xuất thay đổi, tối ưu kỹ thuật hoặc RFC do AI đệ trình được tự động chấp thuận (`AUTO-APPROVED`) để tiếp tục tiến hành triển khai mà không bị nghẽn tiến độ.
 - Trường hợp Lead Developer muốn ghi đè hoặc điều chỉnh thủ công, Developer có thể can thiệp bất kỳ lúc nào.
+
+---
+
+## 5. LƯU Ý KỸ THUẬT & CẤU TRÚC SERVER JSON V2 (CLOUDFLARE KV GATEWAY)
+- **Server JSON V2 (`WEAPON_THREAT` / Multimodal Schema):** Cloudflare Worker (`ingestServerPayloadToKv` & `upsertCameraFromServerPayload`) tiếp nhận và lưu trữ trực tiếp vào Cloudflare KV (`INCIDENT_CACHE`) toàn bộ cấu trúc JSON từ Server gồm: `event_id`, `timestamp`, `timestamp_ms`, `camera_id`, `camera_name`, `title`, `severity`, `primary_action`, `threat_level`, `threat_score`, `is_urgent`, `action_confirmed`, `ai_verified`, `action_validation` (`validation_source`, `detected_action`, `benign_hypothesis_probability`, `reasoning`), `reasoning`, `vlmAnalysis`, `weapon_info`, `image` / `image_base64`, `subject_crop_base64`, `hand_crop_base64`, `forensic_hash`, `image_url`, `hand_crop_url`, `camera` (`zone_id`, `address`, `latitude`, `longitude`), `detection.subjects` (`kinematics`, `keypoints`, `bbox`), và `audit` (`frame_index`, `human_count`, `ai_model`, `hash_algorithm`, `verification_status`).
+- **Binary Image Endpoints (`/api/v1/incidents/:id/image.jpg`, `/hand_crop.jpg`, `/subject_crop.jpg`):** Worker giải mã trực tiếp dữ liệu Base64 từ sự cố trong KV và trả về `Content-Type: image/jpeg` để mọi đường dẫn `image_url` và `hand_crop_url` trong JSON hoạt động tức thời.

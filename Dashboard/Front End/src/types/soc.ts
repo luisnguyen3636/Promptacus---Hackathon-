@@ -30,6 +30,83 @@ export interface ISocOverview {
   metrics: ISocMetrics;
 }
 
+export interface ISubjectKeypoint {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  confidence: number;
+}
+
+export interface ISubjectKinematics {
+  spine_angle?: number;
+  left_elbow_angle?: number;
+  right_elbow_angle?: number;
+  left_arm_extension?: number;
+  right_arm_extension?: number;
+  aspect_ratio?: number;
+  wrist_distance?: number;
+  wrist_velocity?: number;
+}
+
+export interface IDetectionSubject {
+  track_id: number;
+  role: string;
+  behavior: string;
+  threat_level: string;
+  threat_score: number;
+  confidence: number;
+  bbox: [number, number, number, number];
+  speed?: number;
+  velocity_vector?: [number, number];
+  kinematics?: ISubjectKinematics;
+  keypoints?: ISubjectKeypoint[];
+  crop_image_base64?: string;
+  crop_image_sha256?: string;
+  crop_image_size_bytes?: number;
+}
+
+export interface IActionValidation {
+  is_valid: boolean;
+  validation_source?: string;
+  detected_action?: string;
+  severity?: string;
+  threat_score?: number;
+  benign_hypothesis_probability?: number;
+  reasoning?: string;
+}
+
+export interface IWeaponInfo {
+  is_weapon_detected: boolean;
+  weapon_types?: string[];
+  confidence?: number;
+  description?: string;
+}
+
+export interface IServerCameraMeta {
+  camera_id: string;
+  name?: string;
+  zone_id?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+export interface IServerAuditInfo {
+  frame_index?: number;
+  human_count?: number;
+  action_confirmed?: boolean;
+  ai_verified?: boolean;
+  ai_model?: string;
+  hash_algorithm?: string;
+  verification_status?: string;
+}
+
+export interface IServerAudioInfo {
+  is_audio_active?: boolean;
+  audio_threat_detected?: boolean;
+}
+
 export interface IAiBoundingBox {
   id: string;
   label: string;
@@ -40,6 +117,7 @@ export interface IAiBoundingBox {
   y: number; // 0.0 - 1.0 (relative)
   w: number; // 0.0 - 1.0 (relative)
   h: number; // 0.0 - 1.0 (relative)
+  keypoints?: ISubjectKeypoint[];
 }
 
 export interface IServerActor {
@@ -91,17 +169,22 @@ export interface ICameraDevice {
     focus: string;
   };
   boundingBoxes: IAiBoundingBox[];
+  zoneId?: string;
   location?: string;
   address?: string;
   measuredFps?: number;
   frameIndex?: number;
   humanCount?: number;
+  latitude?: number;
+  longitude?: number;
   lastTimestamp?: string;
+  lastSnapshotBase64?: string;
 }
 
 export interface ICameraSnapshots {
-  preEventSnapshotUrl: string;
-  eventPeakSnapshotUrl: string;
+  preEventSnapshotUrl?: string;
+  eventPeakSnapshotUrl?: string;
+  handCropSnapshotUrl?: string;
 }
 
 export interface IIncidentItem {
@@ -113,15 +196,23 @@ export interface IIncidentItem {
   category: IncidentCategory;
   severity: IncidentSeverity;
   timestamp: string;
+  timestampMs?: number;
   cameraId?: string | null;
+  cameraName?: string;
   location?: string;
   measuredFps?: number;
   frameIndex?: number;
   humanCount?: number;
   actionType?: string;
+  primaryAction?: string;
+  threatLevel?: IncidentSeverity;
   threatScore?: number;
   confidence?: number;
   isUrgent?: boolean;
+  actionConfirmed?: boolean;
+  aiVerified?: boolean;
+  actionValidation?: IActionValidation;
+  weaponInfo?: IWeaponInfo;
   description?: string;
   reasoning?: string;
   recommendedAction?: string;
@@ -134,6 +225,18 @@ export interface IIncidentItem {
   rawResponse?: string;
   status: 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DOWNGRADED_MONITORING' | 'DISMISSED';
 
+  // Extended forensic & multimodal fields from Server JSON
+  forensicSha256?: string;
+  subjects?: IDetectionSubject[];
+  fullImageBase64?: string | null;
+  subjectCropBase64?: string | null;
+  handCropBase64?: string | null;
+  imageUrl?: string;
+  handCropUrl?: string;
+  cameraMeta?: IServerCameraMeta;
+  auditInfo?: IServerAuditInfo;
+  audioInfo?: IServerAudioInfo;
+
   // Legacy fields for backwards compatibility
   threatVerdict?: string;
   role?: string;
@@ -144,7 +247,6 @@ export interface IIncidentItem {
   keypointsCount?: number;
   modelUsed?: string;
   latencyMs?: number;
-  fullImageBase64?: string | null;
 }
 
 export interface ISocSettings {

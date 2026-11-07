@@ -1,13 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ISocOverview, ICameraDevice, IIncidentItem } from '../types/soc.ts';
+import { ISocOverview, ICameraDevice, IIncidentItem, IServerActor } from '../types/soc.ts';
 import { MOCK_OVERVIEW, MOCK_CAMERAS, MOCK_INCIDENTS } from '../data/mockData.ts';
 
 /**
  * Universal Mapper for Server JSON & Cloudflare KV Incident Objects
- * Maps all fields from the server's JSON format:
- * { status, camera_id, location, timestamp, measured_fps, frame_index, human_count,
- *   severity, action_type, threat_score, confidence, is_urgent, description,
- *   reasoning, recommended_action, actors, visual_cues, nvidia_vlm_analysis }
+ * Maps all fields from the server's WEAPON_THREAT / YOLOv11-Pose + NVIDIA NIM VLM JSON format
+ * as well as actor/visual_cues formats.
  */
 export function mapKvIncidentItem(item: any): IIncidentItem {
   if (!item) {
@@ -25,50 +23,80 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
 
   const raw = item.rawDetection || item;
   const vlm = item.nvidiaVlmAnalysis || item.nvidia_vlm_analysis || raw.nvidia_vlm_analysis;
-  const parsed = item.parsed_json || {};
-  const objDesc = parsed.object_description || item.object_description || {};
+  const det = item.detection || raw.detection;
+  const val = item.actionValidation || item.action_validation || raw.action_validation;
+  const camMeta = item.cameraMeta || item.camera || raw.camera;
+  const auditInfo = item.auditInfo || item.audit || raw.audit;
+  const audioInfo = item.audioInfo || det?.audio;
+  const weaponInfo = item.weaponInfo || item.weapon_info || raw.weapon_info || det?.weapon;
+  const subjects = item.subjects || det?.subjects || [];
 
   const cameraId =
     item.cameraId ||
     item.camera_id ||
+    camMeta?.camera_id ||
     vlm?.camera_id ||
     raw.camera_id ||
     'LAPTOP_01';
 
-  const location =
-    item.location ||
-    item.subTitle ||
-    raw.location ||
-    vlm?.location ||
-    item.location_name ||
+  const cameraName =
+    item.cameraName ||
+    item.camera_name ||
+    raw.camera_name ||
+    camMeta?.name ||
     cameraId;
 
-  const actionType =
+  const location =
+    item.location ||
+    camMeta?.address ||
+    raw.location ||
+    vlm?.location ||
+    item.subTitle ||
+    cameraName;
+
+  const primaryAction =
+    item.primaryAction ||
+    item.primary_action ||
+    raw.primary_action ||
+    det?.primary_action ||
+    val?.detected_action ||
     item.actionType ||
     item.action_type ||
     vlm?.action_type ||
-    objDesc.primary_action ||
-    item.title ||
     'OBSERVED_EVENT';
+
+  const valReasoning = val?.reasoning;
+  const rawReasoning = item.reasoning || raw.reasoning || det?.reasoning || vlm?.reasoning;
 
   const description =
     item.description ||
     raw.description ||
+    valReasoning ||
+    weaponInfo?.description ||
     vlm?.description ||
-    parsed.investigation_summary ||
+    rawReasoning ||
     item.title ||
-    actionType;
+    primaryAction;
 
-  const reasoning =
-    item.reasoning ||
-    raw.reasoning ||
-    vlm?.reasoning ||
+  const reasoning = rawReasoning || valReasoning || description;
+  const vlmAnalysis =
     item.vlmAnalysis ||
-    description;
+    raw.vlmAnalysis ||
+    (valReasoning && rawReasoning && valReasoning !== rawReasoning
+      ? `${valReasoning} | ${rawReasoning}`
+      : valReasoning || rawReasoning || description);
 
   const rawSeverity = String(
-    item.severity || raw.severity || vlm?.severity || parsed.severity || 'MEDIUM'
+    item.severity ||
+      raw.severity ||
+      item.threatLevel ||
+      raw.threat_level ||
+      det?.threat_level ||
+      val?.severity ||
+      vlm?.severity ||
+      'MEDIUM'
   ).toUpperCase();
+
   const severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' =
     ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(rawSeverity)
       ? (rawSeverity as any)
@@ -79,6 +107,10 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
       ? Number(item.threatScore)
       : item.threat_score !== undefined
       ? Number(item.threat_score)
+      : det?.threat_score !== undefined
+      ? Number(det.threat_score)
+      : val?.threat_score !== undefined
+      ? Number(val.threat_score)
       : vlm?.threat_score !== undefined
       ? Number(vlm.threat_score)
       : undefined;
@@ -86,6 +118,10 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
   const confidence =
     item.confidence !== undefined
       ? Number(item.confidence)
+      : weaponInfo?.confidence !== undefined
+      ? Number(weaponInfo.confidence)
+      : subjects[0]?.confidence !== undefined
+      ? Number(subjects[0].confidence)
       : vlm?.confidence !== undefined
       ? Number(vlm.confidence)
       : undefined;
@@ -95,9 +131,29 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
       ? Boolean(item.isUrgent)
       : item.is_urgent !== undefined
       ? Boolean(item.is_urgent)
+      : det?.is_urgent !== undefined
+      ? Boolean(det.is_urgent)
       : vlm?.is_urgent !== undefined
       ? Boolean(vlm.is_urgent)
       : severity === 'CRITICAL';
+
+  const actionConfirmed = Boolean(
+    item.actionConfirmed ??
+      item.action_confirmed ??
+      raw.action_confirmed ??
+      det?.action_confirmed ??
+      auditInfo?.action_confirmed ??
+      val?.is_valid
+  );
+
+  const aiVerified = Boolean(
+    item.aiVerified ??
+      item.ai_verified ??
+      raw.ai_verified ??
+      det?.ai_verified ??
+      auditInfo?.ai_verified ??
+      val?.is_valid
+  );
 
   const recommendedAction =
     item.recommendedAction ||
@@ -105,8 +161,53 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
     vlm?.recommended_action ||
     (isUrgent ? 'DISPATCH_SECURITY' : 'MONITOR');
 
-  const actors = item.actors || raw.actors || vlm?.actors || [];
-  const visualCues = item.visualCues || item.visual_cues || raw.visual_cues || vlm?.visual_cues;
+  const rawActors = Array.isArray(item.actors)
+    ? item.actors
+    : Array.isArray(raw.actors)
+    ? raw.actors
+    : Array.isArray(vlm?.actors)
+    ? vlm.actors
+    : [];
+
+  const actors: IServerActor[] =
+    rawActors.length > 0
+      ? rawActors.map((a: any, idx: number) => ({
+          id: a?.id ?? a?.track_id ?? idx + 1,
+          role: String(a?.role || 'suspect'),
+          action: String(a?.action || a?.behavior || primaryAction || 'OBSERVED'),
+          posture: String(a?.posture || weaponInfo?.description || ''),
+          interacting_with: a?.interacting_with ?? null,
+          bbox: Array.isArray(a?.bbox) ? a.bbox : undefined,
+        }))
+      : subjects.map((sub: any, idx: number) => {
+          const kin = sub?.kinematics;
+          const postureStr = kin
+            ? `Spine: ${kin.spine_angle ?? 0}°, L-Elbow: ${kin.left_elbow_angle ?? 0}°, R-Elbow: ${kin.right_elbow_angle ?? 0}°, L-ArmExt: ${kin.left_arm_extension ?? 0}, R-ArmExt: ${kin.right_arm_extension ?? 0} (Speed: ${sub?.speed ?? 0})`
+            : weaponInfo?.description || `Behavior: ${sub?.behavior || primaryAction}`;
+          return {
+            id: sub?.track_id ?? sub?.id ?? idx + 1,
+            role: String(sub?.role || 'suspect'),
+            action: String(sub?.behavior || sub?.action || primaryAction),
+            posture: String(postureStr),
+            bbox: Array.isArray(sub?.bbox) ? sub.bbox : undefined,
+          };
+        });
+
+  const visualCues =
+    item.visualCues ||
+    item.visual_cues ||
+    raw.visual_cues ||
+    vlm?.visual_cues || {
+      weapons_visible: Boolean(
+        weaponInfo?.is_weapon_detected ||
+          primaryAction.includes('WEAPON') ||
+          (weaponInfo?.weapon_types && weaponInfo.weapon_types.length > 0)
+      ),
+      physical_contact: Boolean(
+        primaryAction.includes('FIGHT') || primaryAction.includes('ASSAULT')
+      ),
+      fallen_person: Boolean(primaryAction.includes('FALL')),
+    };
 
   const measuredFps =
     item.measuredFps !== undefined
@@ -118,6 +219,8 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
   const frameIndex =
     item.frameIndex !== undefined
       ? Number(item.frameIndex)
+      : auditInfo?.frame_index !== undefined
+      ? Number(auditInfo.frame_index)
       : item.frame_index !== undefined
       ? Number(item.frame_index)
       : undefined;
@@ -125,60 +228,123 @@ export function mapKvIncidentItem(item: any): IIncidentItem {
   const humanCount =
     item.humanCount !== undefined
       ? Number(item.humanCount)
+      : auditInfo?.human_count !== undefined
+      ? Number(auditInfo.human_count)
       : item.human_count !== undefined
       ? Number(item.human_count)
+      : subjects.length > 0
+      ? subjects.length
       : actors.length;
 
   const eventId =
     item.id ||
     item.eventId ||
     item.event_id ||
+    raw.event_id ||
     `EVT_${cameraId}_${frameIndex ?? Date.now()}`;
 
-  const actorPostures = actors
-    .map((a: any) => `#${a.id} (${a.role}): ${a.action} - ${a.posture}`)
-    .join(' | ');
+  const fullImageBase64 =
+    item.fullImageBase64 ||
+    item.image_base64 ||
+    item.image ||
+    raw.image_base64 ||
+    raw.image ||
+    null;
 
-  const title = item.title || `${actionType} — ${description}`;
+  const subjectCropBase64 =
+    item.subjectCropBase64 ||
+    item.subject_crop_base64 ||
+    raw.subject_crop_base64 ||
+    subjects[0]?.crop_image_base64 ||
+    null;
+
+  const handCropBase64 =
+    item.handCropBase64 ||
+    item.hand_crop_base64 ||
+    raw.hand_crop_base64 ||
+    null;
+
+  const imageUrl = item.imageUrl || item.image_url || raw.image_url;
+  const handCropUrl = item.handCropUrl || item.hand_crop_url || raw.hand_crop_url;
+
+  const forensicSha256 =
+    item.forensicSha256 ||
+    item.forensic_hash ||
+    raw.forensic_hash ||
+    subjects[0]?.crop_image_sha256;
+
+  const cameraSnapshots =
+    item.cameraSnapshots ||
+    (fullImageBase64 || subjectCropBase64 || handCropBase64 || imageUrl
+      ? {
+          preEventSnapshotUrl: subjectCropBase64 || handCropBase64 || fullImageBase64 || imageUrl,
+          eventPeakSnapshotUrl: fullImageBase64 || imageUrl || subjectCropBase64,
+          handCropSnapshotUrl: handCropBase64 || handCropUrl,
+        }
+      : null);
+
+  const firstKin = subjects[0]?.kinematics;
+  const kinematicsSummary = firstKin
+    ? `Spine: ${firstKin.spine_angle ?? 0}° · L/R Elbow: ${firstKin.left_elbow_angle ?? 0}°/${firstKin.right_elbow_angle ?? 0}° · L/R Arm Ext: ${firstKin.left_arm_extension ?? 0}/${firstKin.right_arm_extension ?? 0}`
+    : undefined;
+
+  const title = item.title || raw.title || `Cảnh báo: ${primaryAction} (${severity})`;
 
   return {
     id: eventId,
     eventId,
     title,
-    subTitle: location,
+    subTitle: `${cameraName} • ${location}`,
     sourceIp: item.sourceIp || cameraId,
     category: 'PHYSICAL_CAMERA',
     severity,
-    timestamp: item.timestamp || vlm?.timestamp || new Date().toISOString(),
+    timestamp: item.timestamp || raw.timestamp || vlm?.timestamp || new Date().toISOString(),
+    timestampMs: item.timestampMs || item.timestamp_ms || raw.timestamp_ms,
     cameraId,
+    cameraName,
     location,
     measuredFps,
     frameIndex,
     humanCount,
-    actionType,
+    actionType: primaryAction,
+    primaryAction,
+    threatLevel: severity,
     threatScore,
     confidence,
     isUrgent,
+    actionConfirmed,
+    aiVerified,
+    actionValidation: val,
+    weaponInfo,
     description,
     reasoning,
     recommendedAction,
     actors,
     visualCues,
     nvidiaVlmAnalysis: vlm,
-    cameraSnapshots: item.cameraSnapshots || null,
-    playbackUrl: item.playbackUrl || null,
+    cameraSnapshots,
+    playbackUrl: item.playbackUrl || fullImageBase64 || imageUrl || null,
     status: item.status || item.operator_status || 'PENDING_VERIFICATION',
-    vlmAnalysis: reasoning || description,
+    vlmAnalysis,
     rawResponse: reasoning,
+    forensicSha256,
+    subjects,
+    fullImageBase64,
+    subjectCropBase64,
+    handCropBase64,
+    imageUrl,
+    handCropUrl,
+    cameraMeta: camMeta,
+    auditInfo,
+    audioInfo,
     threatVerdict: recommendedAction,
-    role: actors[0]?.role || objDesc.role,
-    postureDetails: actorPostures || objDesc.posture_details || description,
-    kinematicsSummary: visualCues
-      ? `Vũ khí: ${visualCues.weapons_visible ? 'CÓ' : 'Không'} · Va chạm vật lý: ${
-          visualCues.physical_contact ? 'CÓ' : 'Không'
-        } · Người ngã: ${visualCues.fallen_person ? 'CÓ' : 'Không'}`
-      : undefined,
-    fullImageBase64: item.fullImageBase64 || null,
+    role: subjects[0]?.role || actors[0]?.role,
+    postureDetails: weaponInfo?.description || actors[0]?.posture || description,
+    kinematicsSummary,
+    weaponDetected: weaponInfo?.weapon_types?.join(', ') || null,
+    weaponConfidence: weaponInfo?.confidence,
+    keypointsCount: subjects[0]?.keypoints?.length,
+    modelUsed: auditInfo?.ai_model || val?.validation_source,
   };
 }
 

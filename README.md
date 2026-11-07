@@ -47,66 +47,106 @@ Server gửi liên tục bản tin JSON qua phương thức `POST` tới một t
 ### Ví dụ Payload Chuẩn từ Server:
 ```json
 {
-  "status": "processed",
+  "event_id": "EVT_20261108_042450_f8a92b1c",
+  "timestamp": "2026-11-08T04:24:50.123456",
+  "timestamp_ms": 1794111890123,
   "camera_id": "LAPTOP_01",
-  "location": "Cổng Phía Đông - Khu Vực Giám Sát An Ninh",
-  "timestamp": "2026-11-08T00:16:35.412Z",
-  "measured_fps": 15.2,
-  "frame_index": 142,
-  "human_count": 2,
-  "severity": "critical",
-  "action_type": "FIGHTING",
-  "threat_score": 0.94,
-  "confidence": 0.92,
+  "camera_name": "Laptop Chief (DEVICE)",
+  "cameraId": "LAPTOP_01",
+  "title": "Cảnh báo: WEAPON_THREAT (CRITICAL)",
+  "severity": "CRITICAL",
+  "primary_action": "WEAPON_THREAT",
+  "threat_level": "CRITICAL",
+  "threat_score": 0.95,
   "is_urgent": true,
-  "description": "Phát hiện ẩu đả bạo lực: Người A có hành vi tấn công vật lý vào vùng đầu của Người B.",
-  "reasoning": "Đối tượng Track #1 trong tư thế vung tay đấm áp sát, Đối tượng Track #2 trong tư thế lùi lại tự vệ đỡ đòn. Xuất hiện va chạm vật lý trực diện giữa 2 người.",
-  "recommended_action": "DISPATCH_SECURITY",
-  "actors": [
-    {
-      "id": 1,
-      "role": "attacker",
-      "action": "punching",
-      "posture": "Tư thế đứng thẳng nghiêng người về phía trước, tay phải vung đấm",
-      "interacting_with": 2,
-      "bbox": [180, 95, 340, 480]
-    },
-    {
-      "id": 2,
-      "role": "victim",
-      "action": "defending",
-      "posture": "Hai tay giơ lên che mặt đỡ đòn, trọng tâm lùi về phía sau",
-      "interacting_with": 1,
-      "bbox": [320, 110, 470, 490]
-    }
-  ],
-  "visual_cues": {
-    "weapons_visible": false,
-    "physical_contact": true,
-    "fallen_person": false
+  "action_confirmed": true,
+  "ai_verified": true,
+  "action_validation": {
+    "is_valid": true,
+    "validation_source": "nvidia_nim_vlm_multimodal",
+    "detected_action": "WEAPON_THREAT",
+    "severity": "CRITICAL",
+    "threat_score": 0.95,
+    "benign_hypothesis_probability": 0.08,
+    "reasoning": "AI xác nhận hành vi nguy hiểm 'WEAPON_THREAT' trên hình ảnh đối tượng. Tư thế 2 tay chĩa thẳng về phía trước, phản xạ đối kháng rõ rệt."
   },
-  "nvidia_vlm_analysis": {
-    "severity": "critical",
-    "timestamp": "2026-11-08T00:16:35.412Z",
-    "action_type": "FIGHTING",
-    "confidence": 0.92,
-    "threat_score": 0.94,
-    "description": "Phát hiện ẩu đả bạo lực giữa hai cá nhân.",
-    "reasoning": "Hình ảnh ghi nhận cử động đấm và đỡ đòn cự ly gần ở khu vực trung tâm khung hình.",
-    "actors": [
-      { "id": 1, "role": "attacker", "action": "punching", "posture": "standing aggressive" },
-      { "id": 2, "role": "victim", "action": "defending", "posture": "blocking stance" }
-    ],
-    "visual_cues": {
-      "weapons_visible": false,
-      "physical_contact": true,
-      "fallen_person": false
-    },
-    "recommended_action": "DISPATCH_SECURITY",
-    "is_urgent": true,
+  "reasoning": "Detected action: WEAPON_THREAT. Subject aiming posture with 2-handed forward grip. Falsification passed with high tactical confidence.",
+  "vlmAnalysis": "Detected action: WEAPON_THREAT. Subject aiming posture with 2-handed forward grip. Falsification passed with high tactical confidence.",
+  "weapon_info": {
+    "is_weapon_detected": true,
+    "weapon_types": ["TACTICAL_WEAPON_POSTURE"],
+    "confidence": 0.95,
+    "description": "Tactical pointing or overhead strike stance detected"
+  },
+  "image": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
+  "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
+  "subject_crop_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
+  "hand_crop_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
+  "forensic_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "image_url": "/api/v1/incidents/EVT_20261108_042450_f8a92b1c/image.jpg",
+  "hand_crop_url": "/api/v1/incidents/EVT_20261108_042450_f8a92b1c/hand_crop.jpg",
+  "camera": {
     "camera_id": "LAPTOP_01",
-    "location": "Cổng Phía Đông - Khu Vực Giám Sát An Ninh",
-    "source": "nvidia_nim_vlm"
+    "name": "Laptop Chief (DEVICE)",
+    "zone_id": "ZONE_DEFAULT",
+    "address": "Khu vực Giám sát Trung tâm",
+    "latitude": 10.776889,
+    "longitude": 106.700806
+  },
+  "detection": {
+    "action_confirmed": true,
+    "ai_verified": true,
+    "primary_action": "WEAPON_THREAT",
+    "threat_level": "CRITICAL",
+    "threat_score": 0.95,
+    "is_urgent": true,
+    "reasoning": "Detected action: WEAPON_THREAT. Subject aiming posture with 2-handed forward grip.",
+    "weapon": {
+      "is_weapon_detected": true,
+      "weapon_types": ["TACTICAL_WEAPON_POSTURE"],
+      "confidence": 0.95
+    },
+    "subjects": [
+      {
+        "track_id": 1,
+        "role": "suspect",
+        "behavior": "WEAPON_THREAT",
+        "threat_level": "CRITICAL",
+        "threat_score": 0.95,
+        "confidence": 0.95,
+        "bbox": [120, 80, 450, 420],
+        "speed": 0.35,
+        "velocity_vector": [0.05, -0.02],
+        "kinematics": {
+          "spine_angle": 12.5,
+          "left_elbow_angle": 168.0,
+          "right_elbow_angle": 172.0,
+          "left_arm_extension": 0.58,
+          "right_arm_extension": 0.61
+        },
+        "keypoints": [
+          {"id": 0, "name": "nose", "x": 280.0, "y": 110.0, "confidence": 0.92},
+          {"id": 9, "name": "left_wrist", "x": 380.0, "y": 210.0, "confidence": 0.88},
+          {"id": 10, "name": "right_wrist", "x": 385.0, "y": 215.0, "confidence": 0.89}
+        ],
+        "crop_image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
+        "crop_image_sha256": "3a7b9c1d...",
+        "crop_image_size_bytes": 14280
+      }
+    ],
+    "audio": {
+      "is_audio_active": false,
+      "audio_threat_detected": false
+    }
+  },
+  "audit": {
+    "frame_index": 145,
+    "human_count": 1,
+    "action_confirmed": true,
+    "ai_verified": true,
+    "ai_model": "YOLOv11-Pose + NVIDIA NIM Llama-3.2-90B Vision",
+    "hash_algorithm": "SHA-256 (RAW_JPEG_BYTES + TIMESTAMP_MS)",
+    "verification_status": "AUTO_DISPATCHED_TO_AI_MODEL"
   }
 }
 ```

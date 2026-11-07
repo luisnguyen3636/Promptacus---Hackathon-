@@ -105,29 +105,113 @@ export interface INvidiaVlmAnalysis {
   source?: string;
 }
 
+export interface IActionValidation {
+  is_valid: boolean;
+  validation_source?: string;
+  detected_action?: string;
+  severity?: string;
+  threat_score?: number;
+  benign_hypothesis_probability?: number;
+  reasoning?: string;
+}
+
+export interface IWeaponInfo {
+  is_weapon_detected: boolean;
+  weapon_types?: string[];
+  confidence?: number;
+  description?: string;
+}
+
+export interface IServerCameraMeta {
+  camera_id: string;
+  name?: string;
+  zone_id?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+export interface IServerAuditInfo {
+  frame_index?: number;
+  human_count?: number;
+  action_confirmed?: boolean;
+  ai_verified?: boolean;
+  ai_model?: string;
+  hash_algorithm?: string;
+  verification_status?: string;
+  pipeline_version?: string;
+}
+
+export interface IServerAudioInfo {
+  is_audio_active?: boolean;
+  audio_threat_detected?: boolean;
+  screaming_detected?: boolean;
+  gunshot_detected?: boolean;
+  decibel_peak?: number;
+}
+
 export interface IServerIngestPayload {
   event_id?: string;
   id?: string;
   status?: string;
-  camera_id?: string;
-  location?: string;
   timestamp?: string;
+  timestamp_ms?: number;
+  camera_id?: string;
+  cameraId?: string;
+  camera_name?: string;
+  title?: string;
+  location?: string;
   measured_fps?: number;
   frame_index?: number;
   human_count?: number;
   severity?: string;
+  primary_action?: string;
   action_type?: string;
+  threat_level?: string;
   threat_score?: number;
   confidence?: number;
   is_urgent?: boolean;
+  action_confirmed?: boolean;
+  ai_verified?: boolean;
+  action_validation?: IActionValidation;
   description?: string;
   reasoning?: string;
+  vlmAnalysis?: string;
   recommended_action?: string;
+  weapon_info?: IWeaponInfo;
+  image?: string;
+  image_base64?: string;
+  subject_crop_base64?: string;
+  hand_crop_base64?: string;
+  forensic_hash?: string;
+  image_url?: string;
+  hand_crop_url?: string;
+  snapshot_url?: string;
+  camera?: IServerCameraMeta;
+  detection?: {
+    action_confirmed?: boolean;
+    ai_verified?: boolean;
+    primary_action?: string;
+    threat_level?: string;
+    threat_score?: number;
+    is_urgent?: boolean;
+    reasoning?: string;
+    weapon?: IWeaponInfo;
+    subjects?: IAISubjectData[];
+    audio?: IServerAudioInfo;
+    full_image?: {
+      format?: string;
+      width?: number;
+      height?: number;
+      image_base64?: string;
+      sha256_hash?: string;
+      image_size_bytes?: number;
+    };
+  };
+  audit?: IServerAuditInfo;
   actors?: IServerActor[];
   visual_cues?: IServerVisualCues;
   nvidia_vlm_analysis?: INvidiaVlmAnalysis;
-  snapshot_url?: string;
-  image_base64?: string;
   [key: string]: any;
 }
 
@@ -195,15 +279,23 @@ export interface IIncidentItem {
   category: "NETWORK" | "PHYSICAL_CAMERA";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   timestamp: string;
+  timestampMs?: number;
   cameraId?: string | null;
+  cameraName?: string;
   location?: string;
   measuredFps?: number;
   frameIndex?: number;
   humanCount?: number;
   actionType?: string;
+  primaryAction?: string;
+  threatLevel?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   threatScore?: number;
   confidence?: number;
   isUrgent?: boolean;
+  actionConfirmed?: boolean;
+  aiVerified?: boolean;
+  actionValidation?: IActionValidation;
+  weaponInfo?: IWeaponInfo;
   description?: string;
   reasoning?: string;
   recommendedAction?: string;
@@ -213,6 +305,7 @@ export interface IIncidentItem {
   cameraSnapshots?: {
     preEventSnapshotUrl?: string;
     eventPeakSnapshotUrl?: string;
+    handCropSnapshotUrl?: string;
   } | null;
   playbackUrl?: string | null;
   status: "PENDING_VERIFICATION" | "OPERATOR_CONFIRMED" | "DOWNGRADED_MONITORING" | "DISMISSED";
@@ -221,6 +314,13 @@ export interface IIncidentItem {
   forensicSha256?: string;
   subjects?: IAISubjectData[];
   fullImageBase64?: string;
+  subjectCropBase64?: string;
+  handCropBase64?: string;
+  imageUrl?: string;
+  handCropUrl?: string;
+  cameraMeta?: IServerCameraMeta;
+  auditInfo?: IServerAuditInfo;
+  audioInfo?: IServerAudioInfo;
 }
 
 export interface IIncidentPlaybackResponse {
@@ -478,35 +578,35 @@ export interface IAISubjectKeypoint {
 }
 
 export interface IAISubjectKinematics {
-  spine_angle: number;
-  aspect_ratio: number;
-  left_elbow_angle: number;
-  right_elbow_angle: number;
-  left_arm_extension: number;
-  right_arm_extension: number;
-  wrist_distance: number;
-  wrist_velocity: number;
+  spine_angle?: number;
+  aspect_ratio?: number;
+  left_elbow_angle?: number;
+  right_elbow_angle?: number;
+  left_arm_extension?: number;
+  right_arm_extension?: number;
+  wrist_distance?: number;
+  wrist_velocity?: number;
 }
 
 export interface IAISubjectData {
   track_id: number;
   role: "suspect" | "victim" | "participant" | "bystander" | string;
   behavior: string;
-  threat_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  threat_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" | string;
   threat_score: number;
   confidence: number;
   bbox: [number, number, number, number]; // [x1, y1, x2, y2]
-  bbox_geometry: {
+  bbox_geometry?: {
     width: number;
     height: number;
     aspect_ratio: number;
     area: number;
   };
-  dwell_time_seconds: number;
-  speed: number;
-  velocity_vector: [number, number];
-  kinematics: IAISubjectKinematics;
-  keypoints: IAISubjectKeypoint[];
+  dwell_time_seconds?: number;
+  speed?: number;
+  velocity_vector?: [number, number];
+  kinematics?: IAISubjectKinematics;
+  keypoints?: IAISubjectKeypoint[];
   crop_image_base64?: string;
   crop_image_sha256?: string;
   crop_image_size_bytes?: number;
