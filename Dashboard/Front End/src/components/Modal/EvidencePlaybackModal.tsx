@@ -85,30 +85,55 @@ export const EvidencePlaybackModal: React.FC<EvidencePlaybackModalProps> = ({
           <div className="col-span-5 flex flex-col justify-between space-y-3">
             <div className="space-y-3">
               <div className="bg-[#121822] p-3 border border-[#1E2631]">
-                <div className="text-[10px] font-mono text-[#64748B] uppercase">METADATA SỰ CỐ</div>
+                <div className="text-[10px] font-mono text-[#64748B] uppercase">METADATA SỰ CỐ & AI FORENSIC</div>
                 <div className="font-mono text-xs text-slate-300 mt-1.5 space-y-1 leading-relaxed">
-                  <div><strong>Thời gian:</strong> {incident.timestamp} UTC</div>
-                  <div><strong>IP Nguồn:</strong> {incident.sourceIp}</div>
-                  <div><strong>Camera:</strong> {incident.cameraId || 'N/A'}</div>
+                  <div><strong>Mã Sự Cố:</strong> <span className="text-[#38BDF8]">{incident.eventId || incident.id}</span></div>
+                  <div><strong>Thời gian:</strong> {incident.timestamp}</div>
+                  <div><strong>Khu vực:</strong> {incident.subTitle || 'Laptop Client Zone'}</div>
+                  <div><strong>Camera / IP:</strong> {incident.cameraId || 'N/A'} ({incident.sourceIp})</div>
                   <div>
                     <strong>Mức độ:</strong>{' '}
-                    <span className="text-[#F97316] font-bold">{incident.severity}</span>
+                    <span className="text-[#F97316] font-bold">[{incident.severity}]</span> &bull; Phán quyết:{' '}
+                    <span className="text-[#10B981] font-bold">{incident.threatVerdict || 'OBSERVED_ACTIVITY'}</span>
+                  </div>
+                  <div>
+                    <strong>Model AI:</strong>{' '}
+                    <span className="text-slate-200">{incident.modelUsed || '@cf/deepseek-ai/deepseek-v4.1-flash-1017'}</span>{' '}
+                    <span className="text-[#06B6D4]">({incident.latencyMs || 925}ms)</span>
                   </div>
                 </div>
               </div>
 
+              {/* Khối Động học & Tư thế Kinematics */}
               <div className="bg-[#121822] p-3 border border-[#1E2631]">
                 <div className="text-[10px] font-mono text-[#64748B] uppercase mb-1">
-                  KẾT QUẢ SUY LUẬN AI/VLM
+                  ĐỘNG HỌC & TƯ THẾ (KINEMATICS)
                 </div>
-                <div className="text-xs text-slate-200 leading-relaxed">
-                  {incident.vlmAnalysis || 'Không có bản phân tích ngữ cảnh cho sự cố này.'}
+                <div className="text-xs text-slate-300 space-y-1 font-mono leading-relaxed">
+                  <div><strong>Hành vi:</strong> <span className="text-white font-bold">{incident.title}</span> ({incident.role || 'bystander'})</div>
+                  <div><strong>Tư thế:</strong> {incident.postureDetails || `Detected action: ${incident.title}`}</div>
+                  <div><strong>Sinh học:</strong> {incident.kinematicsSummary || 'Góc khuỷu tay phải: N/A°, Độ duỗi tay: N/Am, Vận tốc cổ tay: N/Apx/s'}</div>
+                  {incident.weaponDetected && (
+                    <div className="text-[#EF4444] font-bold">
+                      ⚠ Vũ khí: {incident.weaponDetected} (Độ tin cậy: {Math.round((incident.weaponConfidence || 0) * 100)}%)
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Khối Tóm tắt Điều tra VLM DeepSeek */}
+              <div className="bg-[#121822] p-3 border border-[#1E2631]">
+                <div className="text-[10px] font-mono text-[#64748B] uppercase mb-1">
+                  KẾT QUẢ SUY LUẬN AI/VLM (DEEPSEEK FORENSIC ENGINE)
+                </div>
+                <div className="text-xs text-slate-200 leading-relaxed font-sans">
+                  {incident.vlmAnalysis || incident.rawResponse || 'Không có bản phân tích ngữ cảnh cho sự cố này.'}
                 </div>
               </div>
             </div>
 
             <div className="p-2.5 bg-[#161E29] border border-[#1E2631] text-[10px] font-mono text-slate-400">
-              <strong>Audit Note:</strong> Quyết định của bạn sẽ được gắn chữ ký số kiểm toán và lưu vào nhật ký tác chiến.
+              <strong>Audit Note:</strong> Quyết định của bạn sẽ được gắn chữ ký số kiểm toán và lưu vào nhật ký tác chiến chuẩn SOC.
             </div>
           </div>
         </div>

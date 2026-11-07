@@ -8,11 +8,37 @@ import { ICameraDevice, IAIBoundingBox, IAISubjectData } from "./types";
 // Dynamic Camera Fleet in Edge Memory
 const cameraRegistry = new Map<string, ICameraDevice>();
 
-export function getCameras(): ICameraDevice[] {
+export function ensureDefaultFleet(customStreamUrl?: string) {
+  if (!cameraRegistry.has("LAPTOP_01")) {
+    cameraRegistry.set("LAPTOP_01", {
+      id: "LAPTOP_01",
+      name: "LAPTOP_01 - Live Surveillance Stream",
+      ip: "127.0.0.1",
+      fps: 30,
+      bitrateKbps: 2048,
+      status: "ONLINE",
+      streamUrl: customStreamUrl || "/api/v1/cameras/LAPTOP_01/stream",
+      ptzEnabled: true,
+      ptzState: { zoom: 1.0, pan: 0, tilt: 0, focus: "AUTO" },
+      boundingBoxes: [],
+      zoneId: "ZONE_LAPTOP_CLIENT",
+      address: "Client Laptop Station 01"
+    });
+  } else if (customStreamUrl) {
+    const cam = cameraRegistry.get("LAPTOP_01")!;
+    if (!cam.streamUrl) {
+      cam.streamUrl = customStreamUrl;
+    }
+  }
+}
+
+export function getCameras(defaultStreamUrl?: string): ICameraDevice[] {
+  ensureDefaultFleet(defaultStreamUrl);
   return Array.from(cameraRegistry.values());
 }
 
-export function getCameraById(id: string): ICameraDevice | undefined {
+export function getCameraById(id: string, defaultStreamUrl?: string): ICameraDevice | undefined {
+  ensureDefaultFleet(defaultStreamUrl);
   return cameraRegistry.get(id);
 }
 

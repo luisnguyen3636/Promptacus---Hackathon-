@@ -50,8 +50,29 @@ export interface ICameraDevice {
   bitrateKbps: number;
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
   streamUrl: string;
+  directStreamUrl?: string;
   ptzEnabled: boolean;
+  ptzState?: {
+    zoom: number;
+    pan: number;
+    tilt: number;
+    focus: string;
+  };
   boundingBoxes: IAiBoundingBox[];
+}
+
+export interface ICompactAlertLog {
+  id: string;
+  eventId: string;
+  timestamp: string;
+  cameraId: string;
+  cameraName: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  behavior: string;
+  confidence?: number;
+  status: string;
+  reasoningSnippet: string;
+  rawIncident?: IIncidentItem;
 }
 
 export interface ICameraSnapshots {
@@ -59,8 +80,39 @@ export interface ICameraSnapshots {
   eventPeakSnapshotUrl: string;
 }
 
+export interface IDeepSeekObjectDescription {
+  primary_action: string;
+  role: 'suspect' | 'victim' | 'bystander' | string;
+  posture_details: string;
+  weapon_detected: string | null;
+  weapon_confidence: number;
+  kinematics_summary: string;
+  keypoints_count: number;
+}
+
+export interface IDeepSeekParsedJson {
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  threat_verdict: string;
+  investigation_summary: string;
+  object_description: IDeepSeekObjectDescription;
+}
+
+export interface IStandardKvIncidentOutput {
+  event_id: string;
+  raw_response: string;
+  parsed_json: IDeepSeekParsedJson;
+  model_used: string;
+  latency_ms: number;
+  timestamp: string;
+  id?: string;
+  camera_id?: string;
+  location_name?: string;
+  operator_status?: 'PENDING_VERIFICATION' | 'AWAITING_OPERATOR_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED';
+}
+
 export interface IIncidentItem {
   id: string;
+  eventId?: string;
   title: string;
   subTitle?: string;
   sourceIp: string;
@@ -71,7 +123,21 @@ export interface IIncidentItem {
   cameraSnapshots?: ICameraSnapshots | null;
   playbackUrl?: string | null;
   vlmAnalysis?: string;
+  rawResponse?: string;
   status: 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED';
+
+  // Rich metadata from parsed_json
+  threatVerdict?: string;
+  role?: string;
+  postureDetails?: string;
+  kinematicsSummary?: string;
+  weaponDetected?: string | null;
+  weaponConfidence?: number;
+  keypointsCount?: number;
+  modelUsed?: string;
+  latencyMs?: number;
+  parsedJson?: IDeepSeekParsedJson;
+  fullImageBase64?: string | null;
 }
 
 export interface IPtzCommandPayload {

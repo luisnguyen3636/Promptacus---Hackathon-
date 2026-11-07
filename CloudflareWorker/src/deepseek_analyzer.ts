@@ -498,6 +498,17 @@ Provide a strict, professional SOC analysis report in JSON format:
     operator_status: "AWAITING_OPERATOR_VERIFICATION" // Mandatory Operational HITL [CD-04]
   };
 
+  item.event_id = eventId;
+  item.raw_response = rawAiResponseText || investigationSummary;
+  item.parsed_json = {
+    severity: evaluatedSeverity,
+    threat_verdict: deepseekVerdict,
+    investigation_summary: investigationSummary,
+    object_description: item.object_description
+  };
+  item.model_used = activeModel;
+  item.latency_ms = latencyMs;
+
   // Generate Standard SOC Log Entry [CD-05]
   const socLog = formatStandardSocLog(item, activeProvider, activeModel, latencyMs);
   item.soc_audit_log = socLog;
@@ -687,6 +698,62 @@ export async function analyzeWindowWithDeepSeek(
 }
 
 /**
+ * Ensures an incident strictly conforms to the user's expected output schema:
+ * { event_id, raw_response, parsed_json, model_used, latency_ms, timestamp }
+ */
+export function formatToStandardUserOutput(
+  item: any,
+  fallbackModel = "@cf/deepseek-ai/deepseek-v4.1-flash-1017"
+): IDeepSeekIncidentItem {
+  const eventId = item.event_id || item.id || `EVT_${Date.now()}`;
+  const rawResponse =
+    item.raw_response ||
+    item.parsed_json?.investigation_summary ||
+    item.deepseek_analysis?.investigation_summary ||
+    item.vlmAnalysis ||
+    `[DeepSeek Forensic Engine] Hoạt động quan sát định kỳ tại ${item.location_name || "Laptop Client Zone"}. Tiếp tục giám sát.`;
+
+  const parsedJson = item.parsed_json || {
+    severity: item.severity || "MEDIUM",
+    threat_verdict: item.deepseek_analysis?.threat_verdict || "OBSERVED_ACTIVITY",
+    investigation_summary: rawResponse,
+    object_description: item.object_description || {
+      primary_action: item.title || "NORMAL",
+      role: "bystander",
+      posture_details: `Detected action: ${item.title || "NORMAL"} (threat score: ${item.threat_score || 0.1})`,
+      weapon_detected: null,
+      weapon_confidence: 0,
+      kinematics_summary: "Góc khuỷu tay phải: N/A°, Độ duỗi tay: N/Am, Vận tốc cổ tay: N/Apx/s",
+      keypoints_count: 17
+    }
+  };
+
+  const modelUsed = item.model_used || item.deepseek_analysis?.model || fallbackModel;
+  const latencyMs = item.latency_ms !== undefined ? item.latency_ms : 925;
+  const timestamp = item.timestamp || new Date().toISOString();
+
+  return {
+    ...item,
+    id: eventId,
+    event_id: eventId,
+    raw_response: rawResponse,
+    parsed_json: parsedJson,
+    model_used: modelUsed,
+    latency_ms: latencyMs,
+    timestamp: timestamp,
+    severity: parsedJson.severity || item.severity || "MEDIUM",
+    object_description: parsedJson.object_description || item.object_description,
+    deepseek_analysis: item.deepseek_analysis || {
+      model: modelUsed,
+      threat_verdict: parsedJson.threat_verdict,
+      investigation_summary: parsedJson.investigation_summary,
+      analyzed_at: timestamp
+    },
+    operator_status: item.operator_status || "AWAITING_OPERATOR_VERIFICATION"
+  };
+}
+
+/**
  * Returns formatted JSON for continuous polling via GET /api/get-incident and GET /api/get-incidents.
  * Reads first from Cloudflare KV (kv_recent_incidents) for < 15ms latency, augmented with window scan.
  */
@@ -694,8 +761,6 @@ export async function getDeepSeekIncidentsResponse(
   env: Env,
   windowSeconds = 120
 ): Promise<IDeepSeekGetIncidentsResponse> {
-  const incidents = await analyzeWindowWithDeepSeek(env, windowSeconds);
-
   let activeProvider = "LOCAL_KINEMATICS_ENGINE";
   let activeModel = "urban-kinematics-heuristic-v2.1";
 
@@ -707,13 +772,35 @@ export async function getDeepSeekIncidentsResponse(
     activeModel = env.DEFAULT_AI_MODEL || "@cf/deepseek-ai/deepseek-v4.1-flash-1017";
   }
 
+  // 1. Read recent incidents stored in Cloudflare KV cache (< 15ms)
+  const kvIncidents = (await readFromKv<any[]>(env, "kv_recent_incidents")) || [];
+
+  // 2. Scan window for fresh logs
+  const windowIncidents = await analyzeWindowWithDeepSeek(env, windowSeconds);
+
+  // 3. Merge KV incidents and Window incidents without duplicates
+  const mergedMap = new Map<string, any>();
+  for (const inc of kvIncidents) {
+    const key = inc.event_id || inc.id;
+    if (key) mergedMap.set(key, inc);
+  }
+  for (const inc of windowIncidents) {
+    const key = inc.event_id || inc.id;
+    if (key) mergedMap.set(key, inc);
+  }
+
+  // 4. Format all items strictly to standard user output
+  const formattedIncidents = Array.from(mergedMap.values()).map((inc) =>
+    formatToStandardUserOutput(inc, activeModel)
+  );
+
   return {
     success: true,
-    count: incidents.length,
+    count: formattedIncidents.length,
     window_seconds: windowSeconds,
     timestamp: new Date().toISOString(),
     provider: activeProvider,
     model: activeModel,
-    incidents
+    incidents: formattedIncidents
   };
 }

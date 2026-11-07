@@ -2,11 +2,8 @@ import React from 'react';
 import {
   Shield,
   LayoutDashboard,
-  Video,
-  Network,
   AlertTriangle,
   Activity,
-  Cpu,
   Server,
   Settings
 } from 'lucide-react';
@@ -22,10 +19,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const operations = [
     { name: 'SOC Dashboard', icon: LayoutDashboard },
-    { name: 'Live Video Wall', icon: Video },
     { name: 'Threat Intelligence', icon: AlertTriangle, badge: '5' },
     { name: 'Incident Feed', icon: Activity },
-    { name: 'AI Analyzer', icon: Cpu },
     { name: 'Device Manager', icon: Server },
   ];
 

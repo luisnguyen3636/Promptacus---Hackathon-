@@ -2,9 +2,15 @@
 
 interface Env {
 	INCIDENT_CACHE: KVNamespace;
-	ENVIRONMENT: "production";
+	ALLOWED_IPS: "127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,113.185.73.217";
+	ALLOWED_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8787,http://127.0.0.1:8787,113.185.73.217";
 	API_AUTH_TOKEN: "cfut_jPxaqoZw3Cc96sVNzk2etHcqZX26M8oxvOk0sdNhdfb6dbe5";
 	DEFAULT_AI_MODEL: "@cf/deepseek-ai/deepseek-v4.1-flash-1017";
+	DEEPSEEK_API_KEY: "cfut_E0eP5BeF1vz6ACdCoGXvsuzRlYsmhoeuaZxPSyasbb51e3f3";
+	DEEPSEEK_MODEL: "deepseek-chat";
+	DEEPSEEK_API_URL: "https://api.deepseek.com/chat/completions";
+	ENFORCE_IP_WHITELIST: "false";
+	ENVIRONMENT: "production";
 	FALLBACK_AI_MODEL: "@cf/meta/llama-3.2-11b-vision-instruct";
 	DB: D1Database;
 	AI: Ai;

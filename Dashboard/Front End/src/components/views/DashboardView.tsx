@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { KpiCards } from '../KpiCards.tsx';
 import { CameraMatrix } from '../CameraMatrix/CameraMatrix.tsx';
-import { ThreatScoreModule } from '../ThreatScore/ThreatScoreModule.tsx';
+import { AlertLogModule } from '../AlertLog/AlertLogModule.tsx';
 import { AiMetricsGrid } from '../AiMetricsGrid/AiMetricsGrid.tsx';
 import { RecentThreatsTable } from '../RecentThreats/RecentThreatsTable.tsx';
 import { ISocOverview, ICameraDevice, IIncidentItem } from '../../types/soc.ts';
@@ -26,6 +26,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const [isSirenMuted, setIsSirenMuted] = useState<boolean>(false);
   const [isLockdownActive, setIsLockdownActive] = useState<boolean>(false);
+  // State quản lý phóng to camera quan sát chi tiết
+  const [zoomedCameraId, setZoomedCameraId] = useState<string | null>(null);
 
   const handleToggleSiren = () => {
     setIsSirenMuted(!isSirenMuted);
@@ -43,6 +45,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         ? '[EMERGENCY ALERT] KÍCH HOẠT CHẾ ĐỘ PHÒNG THỦ KHẨN CẤP (LOCKDOWN)'
         : '[SOC NORMALIZED] Đã hủy chế độ phòng thủ khẩn cấp'
     );
+  };
+
+  const handleToggleZoom = (camId: string | null) => {
+    setZoomedCameraId(camId);
+    if (camId) {
+      onToast?.(`[CAMERA ZOOM] Đang quan sát cận cảnh camera: ${camId}. Alert Log chuyển thành menu phải (20% width).`);
+    } else {
+      onToast?.('[CAMERA ZOOM] Đã trở về ma trận 2x2 tiêu chuẩn.');
+    }
   };
 
   return (
@@ -97,19 +108,59 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Hàng 1: 4 Thẻ KPI Telemetry */}
       <KpiCards metrics={overview.metrics} />
 
-      {/* Hàng 2: Camera Matrix 2x2 (68%) & Threat Score (32%) */}
-      <section className="grid grid-cols-12 gap-4 min-w-0">
-        <div className="col-span-8 min-w-0">
-          <CameraMatrix cameras={cameras} onPtzCommand={onPtzCommand} />
-        </div>
-        <div className="col-span-4 min-w-0">
-          <ThreatScoreModule
-            score={overview.threatScore}
-            status={overview.status}
-            metrics={overview.metrics}
-          />
-        </div>
-      </section>
+      {/* Hàng 2: Camera Matrix & Alert Log Rút Gọn
+          - Khi ở chế độ 2x2 bình thường: col-span-8 (Camera) & col-span-4 (Alert Log)
+          - Khi phóng to quan sát: Camera chiếm 80% width (chia đều), Alert Log mở rộng thành right menu modal 20% width */}
+      {zoomedCameraId ? (
+        <section className="flex gap-4 min-w-0 transition-all duration-200">
+          {/* Khu vực Camera chiếm 80% width */}
+          <div className="w-[80%] min-w-0">
+            <CameraMatrix
+              cameras={cameras}
+              onPtzCommand={onPtzCommand}
+              zoomedCameraId={zoomedCameraId}
+              onToggleZoom={handleToggleZoom}
+            />
+          </div>
+
+          {/* Khu vực Alert Log mở rộng thành Right Menu Modal chiếm đúng 20% width */}
+          <div className="w-[20%] min-w-0">
+            <AlertLogModule
+              threatScore={overview.threatScore}
+              threatLevel={overview.threatLevel}
+              incidents={incidents}
+              metrics={overview.metrics}
+              onSelectPlayback={onSelectPlayback}
+              isExpanded={true}
+              onCloseExpanded={() => handleToggleZoom(null)}
+            />
+          </div>
+        </section>
+      ) : (
+        <section className="grid grid-cols-12 gap-4 min-w-0 transition-all duration-200">
+          {/* Lưới 2x2 tiêu chuẩn: 8 cột (68-70%) */}
+          <div className="col-span-8 min-w-0">
+            <CameraMatrix
+              cameras={cameras}
+              onPtzCommand={onPtzCommand}
+              zoomedCameraId={null}
+              onToggleZoom={handleToggleZoom}
+            />
+          </div>
+
+          {/* Alert Log Rút gọn tiêu chuẩn: 4 cột (30-32%) */}
+          <div className="col-span-4 min-w-0">
+            <AlertLogModule
+              threatScore={overview.threatScore}
+              threatLevel={overview.threatLevel}
+              incidents={incidents}
+              metrics={overview.metrics}
+              onSelectPlayback={onSelectPlayback}
+              isExpanded={false}
+            />
+          </div>
+        </section>
+      )}
 
       {/* Hàng 3: Thống Kê Hiệu Năng AI & Phân Bố Đối Tượng */}
       <div className="min-w-0">

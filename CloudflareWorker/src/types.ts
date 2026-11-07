@@ -13,6 +13,7 @@ export interface Env {
   API_AUTH_TOKEN?: string;
   DEFAULT_AI_MODEL?: string;
   FALLBACK_AI_MODEL?: string;
+  LIVE_CAMERA_STREAM_URL?: string; // Backup/Primary Live Stream URL for LAPTOP_01
   DEEPSEEK_API_KEY?: string;      // Direct DeepSeek REST API Key
   DEEPSEEK_API_URL?: string;      // Direct DeepSeek endpoint (default: https://api.deepseek.com/chat/completions)
   DEEPSEEK_MODEL?: string;        // Direct DeepSeek model (default: deepseek-chat)
@@ -247,6 +248,7 @@ export interface IDeepSeekDebugTrace {
 
 export interface IDeepSeekIncidentItem {
   id: string;
+  event_id?: string;
   timestamp: string;
   camera_id: string;
   location_name: string;
@@ -255,6 +257,10 @@ export interface IDeepSeekIncidentItem {
   evidence_timeline: IIncidentTimeline;
   timeline?: IIncidentTimeline;
   object_description: IIncidentObjectDescription;
+  raw_response?: string;
+  parsed_json?: any;
+  model_used?: string;
+  latency_ms?: number;
   deepseek_analysis: {
     model: string;
     threat_verdict: string;

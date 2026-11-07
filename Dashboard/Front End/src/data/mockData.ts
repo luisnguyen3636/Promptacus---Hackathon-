@@ -25,7 +25,21 @@ export const MOCK_OVERVIEW: ISocOverview = {
   }
 };
 
-export const MOCK_CAMERAS: ICameraDevice[] = [];
+export const MOCK_CAMERAS: ICameraDevice[] = [
+  {
+    id: "LAPTOP_01",
+    name: "LAPTOP_01 - Live Surveillance Stream",
+    ip: "127.0.0.1",
+    fps: 30,
+    bitrateKbps: 2048,
+    status: "ONLINE",
+    streamUrl: "/api/v1/cameras/LAPTOP_01/stream",
+    directStreamUrl: "https://means-brick-determined-send.trycloudflare.com/api/v1/cameras/LAPTOP_01/stream",
+    ptzEnabled: true,
+    ptzState: { zoom: 1.0, pan: 0, tilt: 0, focus: "AUTO" },
+    boundingBoxes: []
+  }
+];
 
 export const MOCK_INCIDENTS: IIncidentItem[] = [];
 

@@ -11,6 +11,10 @@ Promptacus---Hackathon-/
 ├── AGENTS.md                          # Quy tắc điều phối AI Agent (SDD, HITL, CD-01 -> CD-06)
 ├── README.md                          # Tài liệu giới thiệu, hướng dẫn cài đặt & vận hành hệ thống
 ├── PROJECT_STRUCTURE.md               # Sơ đồ và mô tả chi tiết toàn bộ cấu trúc dự án (Tài liệu này)
+├── SPEC_STREAM_ZOOM_ALERT_REFACTOR.md  # Đặc tả kỹ thuật tích hợp video stream Laptop, zoom matrix 2x2 & Alert Log 20% modal
+├── PLAN_STREAM_ZOOM_ALERT_REFACTOR.md  # Kế hoạch triển khai tích hợp video stream Laptop, zoom matrix 2x2 & Alert Log 20% modal
+├── SPEC_DASHBOARD_KV_REALTIME.md      # Đặc tả kỹ thuật đồng bộ realtime Dashboard với Cloudflare KV & chuẩn hóa DeepSeek Output
+├── PLAN_DASHBOARD_KV_REALTIME.md      # Kế hoạch triển khai đồng bộ realtime Dashboard với Cloudflare KV & chuẩn hóa DeepSeek Output
 ├── SPEC.md                            # Đặc tả kỹ thuật mức tổng thể hệ thống
 ├── PLAN.md                            # Kế hoạch triển khai mức tổng thể hệ thống
 ├── package.json                       # Root package.json điều phối build, dev và deploy
@@ -43,6 +47,7 @@ Promptacus---Hackathon-/
 │   ├── test_deepseek_pipeline.mjs     # Script kiểm thử tự động DeepSeek 2-phút & /api/get-incident (20 assertions)
 │   ├── test_integrated_ai_layer.mjs   # Script kiểm thử tự động Lớp AI Tích Hợp & Log Chuẩn SOC (26 assertions)
 │   ├── test_kv_pipeline.mjs           # Script kiểm thử tự động Cloudflare KV & Input/Output Trace (24 assertions)
+│   ├── test_dashboard_kv_realtime.mjs # Script kiểm thử tự động Dashboard KV Realtime & Exact Schema Rendering (24 assertions)
 │   ├── SPEC_KV_INCIDENT_PIPELINE.md   # Đặc tả kỹ thuật lưu trữ KV & DeepSeek Input/Output Trace
 │   ├── PLAN_KV_INCIDENT_PIPELINE.md   # Kế hoạch triển khai lưu trữ KV & DeepSeek Input/Output Trace
 │   ├── SPEC_INTEGRATED_AI_LAYER.md    # Đặc tả kỹ thuật lớp AI tích hợp tự động & DeepSeek API Key
@@ -74,20 +79,18 @@ Promptacus---Hackathon-/
 │   │   │       ├── KpiCards.tsx       # Khối hiển thị chỉ số quan trọng (Độ trễ, Camera online, Threat)
 │   │   │       ├── AiMetricsGrid/     # Cụm 8 thẻ chỉ số hiệu năng AI & phân bố đối tượng thời gian thực
 │   │   │       │   └── AiMetricsGrid.tsx # Inference Time, GPU Load, Accuracy, Active Tracks, Class Breakdown
-│   │   │       ├── CameraMatrix/      # Ma trận hiển thị luồng camera 2x2 có hỗ trợ vẽ Bounding Box AI
+│   │   │       ├── CameraMatrix/      # Ma trận hiển thị luồng camera 2x2, nút zoom 1x1, điều khiển PTZ & hỗ trợ phóng to 80%
+│   │   │       ├── AlertLog/          # Bảng Alert Log rút gọn cảnh báo sớm & mở rộng 20% right menu modal khi phóng to
+│   │   │       │   └── AlertLogModule.tsx # Module Alert Log tinh gọn thay thế ThreatScoreModule
 │   │   │       ├── Modal/
 │   │   │       │   └── EvidencePlaybackModal.tsx # Hộp thoại phát lại bằng chứng tư pháp & nút duyệt HITL
 │   │   │       ├── RecentThreats/     # Bảng danh sách sự cố thời gian thực
-│   │   │       ├── ThreatScoreGauge/  # Đồng hồ đo mức độ đe dọa đô thị (0 - 100)
-│   │   │       ├── TrafficChart/      # Biểu đồ lưu lượng mạng truyền thống (được thay thế bởi AiMetricsGrid trên Dashboard)
 │   │   │       └── views/             # Các Giao diện Tác chiến Chuyên biệt:
-│   │   │           ├── DashboardView.tsx           # View 1: Trung tâm chỉ huy tổng thể (nhúng AiMetricsGrid)
-│   │   │           ├── LiveVideoWallView.tsx       # View 2: Tường video CCTV mở rộng & điều khiển PTZ
-│   │   │           ├── ThreatIntelligenceView.tsx  # View 3: Phân tích tình báo rủi ro & bằng chứng
-│   │   │           ├── IncidentFeedView.tsx        # View 4: Quản lý chi tiết danh mục sự cố
-│   │   │           ├── AiAnalyzerView.tsx          # View 5: Giám sát hiệu năng mô hình AI & vệt track
-│   │   │           ├── DeviceManagerView.tsx       # View 6: Quản lý danh mục thiết bị phần cứng
-│   │   │           └── SettingsView.tsx            # View 7: Cấu hình ngưỡng cảnh báo & hệ thống
+│   │   │           ├── DashboardView.tsx           # View 1: Trung tâm chỉ huy tổng thể (nhúng AiMetricsGrid & AlertLogModule)
+│   │   │           ├── ThreatIntelligenceView.tsx  # View 2: Phân tích tình báo rủi ro & bằng chứng
+│   │   │           ├── IncidentFeedView.tsx        # View 3: Quản lý chi tiết danh mục sự cố
+│   │   │           ├── DeviceManagerView.tsx       # View 4: Quản lý danh mục thiết bị phần cứng & camera stream
+│   │   │           └── SettingsView.tsx            # View 5: Cấu hình ngưỡng cảnh báo & hệ thống
 │   │   ├── index.html                 # Template HTML chính
 │   │   ├── package.json               # Dependencies của React (Vite, Tailwind, Lucide, Chart.js)
 │   │   ├── vite.config.ts             # Cấu hình Vite build ra CloudflareWorker/dist
@@ -132,7 +135,7 @@ Promptacus---Hackathon-/
 
 ### 2.2. Phân hệ Dashboard Frontend (`Dashboard/Front End/`)
 - Giao diện tác chiến chuẩn quân sự/SOC dành riêng cho Vận hành viên (Human Operator).
-- **8 View Tác chiến Độc lập:** Cung cấp đầy đủ công cụ từ tường camera trực tiếp (Live Video Wall), điều khiển xoay/zoom PTZ, phân tích đồ thị mạng, tra cứu tình báo rủi ro đến cài đặt hệ thống.
+- **5 View Tác chiến Chuyên biệt:** Cung cấp đầy đủ công cụ từ Bảng điều khiển SOC Dashboard (Ma trận Camera 2x2, cơ chế phóng to 80/20, Alert Log rút gọn), điều khiển xoay/zoom PTZ, phân tích tình báo rủi ro (Threat Intelligence), quản lý sự cố (Incident Feed), quản lý thiết bị (Device Manager) đến cài đặt hệ thống (Settings).
 - **Hiển thị Bằng chứng Trực quan:** Trích xuất và phát lại bằng chứng từ Rolling Buffer gồm ảnh chụp trước sự kiện (pre-event) và đỉnh điểm sự cố (peak event), vẽ khung nhận diện đối tượng và khung xương 17 điểm khớp động học.
 - **Nút Xác thực HITL:** Cung cấp 3 nút bấm nghiệp vụ bắt buộc (`Xác nhận & Điều phối`, `Hạ mức theo dõi`, `Hủy cảnh báo giả`) để hoàn tất chốt chặn an toàn con người.
 

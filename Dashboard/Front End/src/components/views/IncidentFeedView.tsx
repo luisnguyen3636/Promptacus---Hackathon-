@@ -161,12 +161,17 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
                           ✕ DISMISSED FALSE POSITIVE
                         </span>
                       )}
-                      <span className="font-mono text-xs text-slate-500 shrink-0">[{inc.id}]</span>
+                      <span className="font-mono text-xs text-slate-500 shrink-0">[{inc.eventId || inc.id}]</span>
+                      {inc.modelUsed && (
+                        <span className="font-mono text-[10px] text-[#06B6D4] bg-[#06B6D4]/10 px-1.5 py-0.5 border border-[#06B6D4]/30 shrink-0">
+                          {inc.modelUsed} ({inc.latencyMs || 925}ms)
+                        </span>
+                      )}
                     </div>
 
                     <div className="text-xs text-slate-400 font-mono mt-1">
-                      Thời điểm: <span className="text-white font-bold">{inc.timestamp} UTC</span> &bull; IP Nguồn:{' '}
-                      <span className="text-[#3B82F6]">{inc.sourceIp}</span> &bull; Camera:{' '}
+                      Thời điểm: <span className="text-white font-bold">{inc.timestamp}</span> &bull; Khu vực:{' '}
+                      <span className="text-[#38BDF8]">{inc.subTitle || 'Laptop Client Zone'}</span> &bull; Camera:{' '}
                       <span className="text-slate-300">{inc.cameraId || 'N/A'}</span>
                     </div>
                   </div>
@@ -180,6 +185,20 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
                   <span>XEM LẠI BẰNG CHỨNG & DISPATCH</span>
                 </button>
               </div>
+
+              {/* Kinematics and Posture Details */}
+              {(inc.kinematicsSummary || inc.postureDetails) && (
+                <div className="bg-[#121822] p-2.5 border border-[#1E2631] text-xs font-mono text-slate-300 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div>
+                    <span className="text-[#64748B]">TƯ THẾ: </span>
+                    <span className="text-slate-200">{inc.postureDetails || `Detected action: ${inc.title}`}</span>
+                  </div>
+                  <div>
+                    <span className="text-[#64748B]">ĐỘNG HỌC: </span>
+                    <span className="text-[#38BDF8]">{inc.kinematicsSummary || 'N/A'}</span>
+                  </div>
+                </div>
+              )}
 
               {/* VLM Analysis Context */}
               {inc.vlmAnalysis && (

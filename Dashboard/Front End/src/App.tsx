@@ -5,12 +5,10 @@ import { EvidencePlaybackModal } from './components/Modal/EvidencePlaybackModal.
 import { useSocTelemetry } from './hooks/useSocTelemetry.ts';
 import { IIncidentItem } from './types/soc.ts';
 
-// 8 Giao diện Tác chiến Chuyên biệt
+// Các Giao diện Tác chiến Chuyên biệt
 import { DashboardView } from './components/views/DashboardView.tsx';
-import { LiveVideoWallView } from './components/views/LiveVideoWallView.tsx';
 import { ThreatIntelligenceView } from './components/views/ThreatIntelligenceView.tsx';
 import { IncidentFeedView } from './components/views/IncidentFeedView.tsx';
-import { AiAnalyzerView } from './components/views/AiAnalyzerView.tsx';
 import { DeviceManagerView } from './components/views/DeviceManagerView.tsx';
 import { SettingsView } from './components/views/SettingsView.tsx';
 
@@ -86,16 +84,9 @@ export const App: React.FC = () => {
     setActivePlaybackIncident(null);
   };
 
-  // Bộ định tuyến hiển thị 8 Tab Tác chiến
+  // Bộ định tuyến hiển thị các Tab Tác chiến
   const renderActiveView = () => {
     switch (activeTab) {
-      case 'Live Video Wall':
-        return (
-          <LiveVideoWallView
-            cameras={cameras}
-            onPtzCommand={handlePtzCommand}
-          />
-        );
       case 'Threat Intelligence':
         return (
           <ThreatIntelligenceView
@@ -107,12 +98,6 @@ export const App: React.FC = () => {
           <IncidentFeedView
             incidents={incidents}
             onSelectPlayback={(inc) => setActivePlaybackIncident(inc)}
-          />
-        );
-      case 'AI Analyzer':
-        return (
-          <AiAnalyzerView
-            cameras={cameras}
           />
         );
       case 'Device Manager':

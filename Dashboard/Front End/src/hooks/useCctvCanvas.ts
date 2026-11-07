@@ -3,7 +3,8 @@ import { ICameraDevice } from '../types/soc.ts';
 
 export function useCctvCanvas(
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
-  camera: ICameraDevice
+  camera: ICameraDevice,
+  hasActiveStream = false
 ) {
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -21,8 +22,10 @@ export function useCctvCanvas(
 
       ctx.clearRect(0, 0, width, height);
 
-      // 1. Nền đen CCTV hoặc Ảnh chụp thực tế từ AI
-      if (camera.streamUrl && camera.streamUrl.startsWith('data:image/')) {
+      // 1. Nền CCTV: Nếu có luồng video trực tiếp thì giữ nền trong suốt
+      if (hasActiveStream) {
+        // Nền trong suốt để hiển thị video stream bên dưới
+      } else if (camera.streamUrl && camera.streamUrl.startsWith('data:image/')) {
         const img = new Image();
         img.src = camera.streamUrl;
         if (img.complete && img.naturalWidth > 0) {
@@ -111,5 +114,5 @@ export function useCctvCanvas(
       }
       window.removeEventListener('resize', handleResize);
     };
-  }, [canvasRef, camera]);
+  }, [canvasRef, camera, hasActiveStream]);
 }

@@ -284,7 +284,83 @@ export default {
     // 6. REST API: Camera Fleet & Live Tracking (/api/devices/cameras, /api/cameras)
     // -------------------------------------------------------------------------
     if ((path === "/api/devices/cameras" || path === "/api/cameras") && method === "GET") {
-      return jsonResponse(getCameras());
+      return jsonResponse(getCameras(env.LIVE_CAMERA_STREAM_URL));
+    }
+
+    // -------------------------------------------------------------------------
+    // 6.1. REST API: Live Camera Video Stream Proxy (/api/v1/cameras/:id/stream & /api/cameras/:id/stream)
+    // Supports direct backup configuration via env.LIVE_CAMERA_STREAM_URL
+    // -------------------------------------------------------------------------
+    if (
+      (path.startsWith("/api/v1/cameras/") || path.startsWith("/api/cameras/")) &&
+      path.endsWith("/stream") &&
+      method === "GET"
+    ) {
+      const cameraId = path
+        .replace("/api/v1/cameras/", "")
+        .replace("/api/cameras/", "")
+        .replace("/stream", "")
+        .trim();
+
+      const defaultUrl = "https://means-brick-determined-send.trycloudflare.com/api/v1/cameras/LAPTOP_01/stream";
+      const targetStreamUrl = env.LIVE_CAMERA_STREAM_URL || defaultUrl;
+
+      try {
+        const streamResponse = await fetch(targetStreamUrl, {
+          headers: {
+            "User-Agent": "UrbanSafetySOC-Worker-Proxy/2.1",
+            "Accept": "*/*"
+          }
+        });
+
+        if (!streamResponse.ok || !streamResponse.body) {
+          return new Response(
+            JSON.stringify({
+              error: "CAMERA_STREAM_UNAVAILABLE",
+              cameraId,
+              targetStreamUrl,
+              status: streamResponse.status,
+              message: "Target camera stream unreachable or offline. Check LIVE_CAMERA_STREAM_URL in wrangler.toml."
+            }),
+            {
+              status: 502,
+              headers: {
+                ...cors,
+                "Content-Type": "application/json"
+              }
+            }
+          );
+        }
+
+        const contentType = streamResponse.headers.get("content-type") || "multipart/x-mixed-replace; boundary=frame";
+        return new Response(streamResponse.body, {
+          status: 200,
+          headers: {
+            ...cors,
+            "Content-Type": contentType,
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Connection": "keep-alive",
+            "X-Stream-Source": targetStreamUrl
+          }
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({
+            error: "CAMERA_STREAM_FETCH_ERROR",
+            cameraId,
+            targetStreamUrl,
+            message: err?.message || String(err),
+            backup_hint: "You can update LIVE_CAMERA_STREAM_URL in wrangler.toml vars."
+          }),
+          {
+            status: 503,
+            headers: {
+              ...cors,
+              "Content-Type": "application/json"
+            }
+          }
+        );
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -420,7 +496,11 @@ export default {
       method === "GET"
     ) {
       const windowSeconds = Number(url.searchParams.get("window") || 120);
+      const isSingle = url.searchParams.get("format") === "single" || url.searchParams.get("latest") === "true";
       const data = await getDeepSeekIncidentsResponse(env, windowSeconds);
+      if (isSingle && data.incidents.length > 0) {
+        return jsonResponse(data.incidents[0]);
+      }
       return jsonResponse(data);
     }
 

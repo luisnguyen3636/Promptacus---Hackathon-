@@ -22,13 +22,13 @@ Hệ thống được thiết kế chuyên biệt nhằm giải quyết bài to�
 - **📦 Đóng gói Bằng chứng Tư pháp Tự động (Automated Forensic Packaging):** Khi được xác nhận, hệ thống tự động xuất gói hồ sơ sự cố đầy đủ gồm tọa độ GPS, mã camera, tóm tắt phân tích hành vi AI, ảnh snapshot có khung nhận diện, ảnh crop đối tượng, mã băm SHA-256 chống giả mạo và định danh kiểm toán của Operator.
 - **🤖 Phân tích Tình báo DeepSeek Batching 2 Phút (DeepSeek 2-Min Pipeline):** Toàn bộ request POST gửi về hệ thống được tự động đưa vào bộ đệm trượt 2 phút (`window_seconds = 120`). Mô hình DeepSeek mặc định (`@cf/deepseek-ai/deepseek-v4.1-flash-1017`) phân tích log và ảnh Base64, đánh giá mức độ nghiêm trọng (`severity`), mô tả động học đối tượng (`object_description`) và dòng thời gian bằng chứng (`timeline`), lưu vào D1 và cung cấp qua endpoint `GET /api/get-incident`.
 - **🖥️ Giao diện Tác chiến SOC & Cụm Chỉ số AI Thời gian thực:**
-  1. *SOC Dashboard:* Bảng điều khiển tác chiến trung tâm, tích hợp cụm 8 thẻ chỉ số hiệu năng AI (Inference Time, GPU Cluster Load, Accuracy, Active Tracks) và phân bố lớp nhận diện (Class Person, Vehicle, Loitering, Intrusion/Breach).
-  2. *Live Video Wall:* Ma trận camera trực tiếp với khả năng điều khiển xoay/zoom PTZ.
-  3. *Threat Intelligence:* Phân tích tình báo đe dọa và lịch sử phân loại hành vi.
-  4. *Incident Feed:* Nhật ký sự cố chi tiết kèm bộ lọc đa tiêu chí và modal bằng chứng tư pháp.
-  5. *AI Analyzer:* Theo dõi độ tin cậy mô hình, vệt di chuyển (active tracks) và khung xương.
-  6. *Device Manager:* Quản lý danh mục camera và trạng thái kết nối.
-  7. *Settings:* Tùy chỉnh ngưỡng đe dọa, cấu hình còi báo động và phân quyền vận hành.
+  1. *SOC Dashboard:* Bảng điều khiển tác chiến trung tâm tích hợp Ma trận Camera trực tiếp (Live Camera Matrix 2x2), cơ chế quan sát cận cảnh thông minh (80% Camera Area / 20% Right Alert Menu Modal), Bảng Alert Log rút gọn cảnh báo sớm và cụm 8 thẻ chỉ số hiệu năng AI.
+  2. *Threat Intelligence:* Phân tích tình báo đe dọa, thống kê phân loại hành vi và chặn IP khả nghi.
+  3. *Incident Feed:* Nhật ký sự cố chi tiết kèm bộ lọc đa tiêu chí, tra cứu mã sự cố và modal bằng chứng tư pháp.
+  4. *Device Manager:* Quản lý danh mục camera, kiểm tra trạng thái luồng video và khởi động lại thiết bị.
+  5. *Settings:* Tùy chỉnh ngưỡng cảnh báo, cấu hình còi báo động và phân quyền vận hành.
+- **📹 Tích Hợp Luồng Video Camera Trực Tiếp & Backup Edge Proxy:** Hỗ trợ nhận luồng video thời gian thực từ camera Laptop (`LAPTOP_01`). Để đảm bảo tính bền bỉ khi địa chỉ Cloudflare Tunnel thay đổi, Cloudflare Worker hỗ trợ cấu hình biến `LIVE_CAMERA_STREAM_URL` trong `wrangler.toml` và cung cấp route proxy `GET /api/v1/cameras/:id/stream` truyền phát trực tiếp dữ liệu video kèm CORS headers đầy đủ.
+- **🔍 Khắc Phục Zoom Matrix 2x2 & Bố Cục 80/20 Khi Quan Sát:** Cho phép người trực click phóng to bất kỳ camera nào để quan sát cận cảnh (hỗ trợ zoom kỹ thuật số 1.0x - 3.5x qua thanh công cụ PTZ). Khi phóng to, khối camera chiếm đúng 80% chiều rộng màn hình, trong khi bảng Alert Log tự động mở rộng thành Right Menu Modal chiếm đúng 20% chiều rộng còn lại. Phím tắt `Escape` hoặc nút `2x2 Grid` đưa màn hình trở về lưới 2x2 tức thì.
 
 ---
 
@@ -203,10 +203,40 @@ Khi có API Key, hệ thống tự động ưu tiên gọi trực tiếp `https:
 Hệ thống sử dụng Cloudflare KV (`INCIDENT_CACHE`) để ghi nhận cả Input và Output của DeepSeek, phục vụ debug tức thì và tối ưu tốc độ phản hồi Dashboard:
 - `raw_incident:<event_id>`: Bản ghi thô từ edge camera/client.
 - `deepseek:input:<event_id>`: Prompt, kinematics và payload đầu vào gửi DeepSeek.
-- `deepseek:output:<event_id>`: Raw completion và JSON đã parse đầu ra kèm thời gian phản hồi (latency ms).
+- `deepseek:output:<event_id>`: Raw completion và JSON đã parse đầu ra kèm thời gian phản hồi (latency ms) tuân thủ định dạng chuẩn DeepSeek.
 - `deepseek:trace:<event_id>`: Debug trace hợp nhất xem cả Input & Output trong 1 truy vấn duy nhất.
 - `kv_recent_incidents`: Bộ đệm các sự cố mới nhất trong KV giúp Dashboard fetch với độ trễ `< 15ms`.
 - `GET /api/kv/trace/:id` (Alias: `/api/deepseek/trace/:id`, `/api/v1/debug/trace/:id`): Endpoint tra cứu chi tiết Input & Output của một sự cố theo ID.
+
+### 7.1. Cấu Trúc Đầu Ra Chuẩn Hóa DeepSeek KV & Realtime Dashboard
+Toàn bộ sự cố lưu trong KV và cung cấp qua `/api/get-incident` / `/api/get-incidents` đều được chuẩn hóa 100% khớp theo định dạng:
+```json
+{
+  "event_id": "EVT_20261107_213746_3e304691",
+  "raw_response": "[DeepSeek Forensic Engine] Hoạt động quan sát định kỳ tại Laptop Client Zone. Tiếp tục giám sát.",
+  "parsed_json": {
+    "severity": "MEDIUM",
+    "threat_verdict": "OBSERVED_ACTIVITY",
+    "investigation_summary": "[DeepSeek Forensic Engine] Hoạt động quan sát định kỳ tại Laptop Client Zone. Tiếp tục giám sát.",
+    "object_description": {
+      "primary_action": "NORMAL",
+      "role": "bystander",
+      "posture_details": "Detected action: NORMAL (threat score: 0.10)",
+      "weapon_detected": null,
+      "weapon_confidence": 0,
+      "kinematics_summary": "Góc khuỷu tay phải: N/A°, Độ duỗi tay: N/Am, Vận tốc cổ tay: N/Apx/s",
+      "keypoints_count": 17
+    }
+  },
+  "model_used": "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
+  "latency_ms": 925,
+  "timestamp": "2026-11-07T14:37:50.049Z"
+}
+```
+Dashboard kết nối Realtime 2 kênh đồng bộ:
+1. **WebSocket (`/ws/live-stream`):** Nhận gói tin `NEW_INCIDENT` ngay khi Worker phân tích AI xong và cập nhật tức thì vào bảng điều khiển.
+2. **REST Polling Tối ưu 1000ms:** Polling liên tục tới `/api/get-incident`, truy xuất thẳng vào bộ đệm `kv_recent_incidents` từ Cloudflare KV với độ trễ `< 15ms`.
+3. **Render Toàn diện:** Hiển thị chi tiết động học (`kinematics_summary`: góc khuỷu tay, độ duỗi, vận tốc), tư thế (`posture_details`), model và độ trễ trên `RecentThreatsTable`, `EvidencePlaybackModal`, `IncidentFeedView` và `AiAnalyzerView`. Mọi sự cố đều khóa mặc định ở trạng thái `AWAITING_OPERATOR_VERIFICATION` / `PENDING_VERIFICATION` theo đúng quy định Operational HITL [CD-04].
 
 ### 8. Chốt chặn Xác thực Vận hành viên (Operational HITL Gate)
 - `POST /api/incidents/:id/verify`: API bắt buộc Vận hành viên phê duyệt trước khi phát lệnh điều phối.
@@ -234,6 +264,15 @@ Hệ thống tích hợp cổng bảo mật kép (`CloudflareWorker/src/security
 - `ALLOWED_ORIGINS`: Danh sách các domain trình duyệt được phép kết nối (Hỗ trợ wildcard, VD: `https://*.pages.dev,https://*.workers.dev`).
 - `ALLOWED_IPS`: Danh sách IP / Subnet CIDR được phép truy cập (Mặc định cho phép loopback `127.0.0.1`, `::1` và mạng LAN riêng `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
 - `ENFORCE_IP_WHITELIST`: Đặt `"true"` trên production để chặn cứng toàn bộ IP ngoài whitelist với mã lỗi `403 Forbidden` và tự động ghi log `SECURITY_IP_BLOCKED` vào Cloudflare D1.
+
+### 12. Luồng Video Trực Tiếp Camera Laptop & Proxy Edge (Live Stream Proxy & Backup URL)
+Hệ thống hỗ trợ phát trực tiếp luồng video từ camera laptop (`LAPTOP_01`):
+- **Endpoint Proxy Edge:** `GET /api/v1/cameras/:id/stream` (hoặc `GET /api/cameras/:id/stream`).
+- **Cấu hình Backup URL:** Biến `LIVE_CAMERA_STREAM_URL` trong `wrangler.toml` [vars]:
+  ```toml
+  LIVE_CAMERA_STREAM_URL = "https://means-brick-determined-send.trycloudflare.com/api/v1/cameras/LAPTOP_01/stream"
+  ```
+  Khi đường hầm Cloudflare Tunnel được cấp phát lại, người vận hành chỉ cần cập nhật biến này trong `wrangler.toml` hoặc qua Dashboard Cloudflare Workers mà không cần build lại frontend. Proxy Edge tự động chuyển tiếp luồng dữ liệu kèm đầy đủ CORS headers, hỗ trợ fallback mượt mà khi upstream gặp sự cố mạng.
 
 ---
 

@@ -10,15 +10,31 @@ interface ThreatRowProps {
 export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) => {
   // 1. Status Square Color
   const isMedium = incident.severity === 'MEDIUM';
-  const sqColor = isMedium ? 'bg-[#EAB308]' : 'bg-[#F97316]';
+  const isLow = incident.severity === 'LOW';
+  const isCritical = incident.severity === 'CRITICAL';
+  const isHigh = incident.severity === 'HIGH';
+
+  let sqColor = 'bg-[#10B981]';
+  if (isCritical) sqColor = 'bg-[#DC2626]';
+  else if (isHigh) sqColor = 'bg-[#F97316]';
+  else if (isMedium) sqColor = 'bg-[#EAB308]';
 
   // 6. Badge Style
-  let badgeStyle = 'border-[#EAB308] text-[#EAB308] bg-[#EAB308]/10';
-  if (incident.severity === 'CRITICAL') {
+  let badgeStyle = 'border-[#10B981] text-[#10B981] bg-[#10B981]/10';
+  if (isCritical) {
     badgeStyle = 'border-[#DC2626] text-[#DC2626] bg-[#DC2626]/15';
-  } else if (incident.severity === 'HIGH') {
+  } else if (isHigh) {
     badgeStyle = 'border-[#F97316] text-[#F97316] bg-[#F97316]/10';
+  } else if (isMedium) {
+    badgeStyle = 'border-[#EAB308] text-[#EAB308] bg-[#EAB308]/10';
   }
+
+  const displayTime =
+    incident.timestamp && incident.timestamp.includes('T')
+      ? incident.timestamp.split('T')[1].substring(0, 8)
+      : incident.timestamp || '--:--:--';
+
+  const secondaryDesc = incident.postureDetails || incident.subTitle || incident.category;
 
   return (
     <div className="grid grid-cols-[20px_55px_minmax(140px,1fr)_120px_120px_90px_105px] items-center gap-2.5 px-3 py-2 border-b border-[#1E2631] hover:bg-[#161E29]/60 transition-colors select-none min-w-[650px]">
@@ -28,21 +44,23 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
       </div>
 
       {/* 2. Time */}
-      <div className="font-mono text-slate-400 text-xs min-w-0 truncate">{incident.timestamp}</div>
+      <div className="font-mono text-slate-400 text-xs min-w-0 truncate" title={incident.timestamp}>
+        {displayTime}
+      </div>
 
       {/* 3. Event Title (Fix tràn chữ bằng truncate + title tooltip) */}
       <div className="min-w-0 overflow-hidden pr-2">
         <div
           className="font-bold text-slate-100 text-xs truncate"
-          title={incident.title}
+          title={`[${incident.eventId || incident.id}] ${incident.title}`}
         >
           {incident.title}
         </div>
         <div
           className="text-[10px] text-slate-500 font-mono truncate"
-          title={incident.subTitle || incident.category}
+          title={secondaryDesc}
         >
-          {incident.subTitle || incident.category}
+          {secondaryDesc}
         </div>
       </div>
 
