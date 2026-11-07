@@ -1209,8 +1209,8 @@ class InferenceServer:
             print(f"• Webhook Forward:    {self.webhook_url}")
         print("=" * 78)
         print(f"👉 Để khởi động camera client gửi video về server:")
-        print(f"   ./start_client.sh")
-        print(f"   hoặc: python3 client.py --server-url http://{local_ip}:{self.port} --camera 0 --camera-id LAPTOP_01\n")
+        print(f"   ./start.sh")
+        print(f"   hoặc: ./start.sh client --camera 0 --camera-id LAPTOP_01\n")
 
         if blocking:
             try:
