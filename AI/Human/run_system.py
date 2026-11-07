@@ -68,11 +68,17 @@ def main() -> int:
     server_script = os.path.join(root_dir, "server.py")
     client_script = os.path.join(root_dir, "client.py")
 
+    sys_src = os.path.join(root_dir, "src")
+    if sys_src not in sys.path:
+        sys.path.insert(0, sys_src)
+    from urbansoc.config import HARDCODED_MODEL_URL
+
     print("=" * 72)
     print("🌐 URBAN SAFETY AI-SOC: ALL-IN-ONE AUTOMATED RUNNER")
     print("=" * 72)
     print(f"• Python Environment: {python_bin}")
     print(f"• Server Listening:   http://0.0.0.0:{args.port}")
+    print(f"• Incident Target:    {HARDCODED_MODEL_URL} (Auto-Dispatched to AI Model)")
     print(f"• Client Camera:      {args.camera} ({'HEADLESS' if args.headless else 'INTERACTIVE GUI HUD'})")
     if args.test_action:
         print(f"• Simulated Action:   {args.test_action}")

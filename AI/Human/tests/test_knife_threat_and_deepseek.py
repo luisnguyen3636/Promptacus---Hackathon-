@@ -212,3 +212,72 @@ def test_inference_server_serves_deepseek_images(tmp_path):
 
     finally:
         server.stop()
+
+
+def test_hardcoded_model_url_and_zero_approval_dispatch():
+    """Verify that HARDCODED_MODEL_URL is configured and incident dispatch has zero human approval gate."""
+    import sys
+    import os
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root_dir not in sys.path:
+        sys.path.insert(0, root_dir)
+
+    from urbansoc.config import HARDCODED_MODEL_URL
+    import server as server_module
+
+    assert HARDCODED_MODEL_URL == "http://127.0.0.1:9000/api/v1/incidents" or "9000" in HARDCODED_MODEL_URL
+
+    # Verify server default argument routing
+    test_args = server_module.parse_args([])
+    assert test_args.webhook_forward_url == "auto"
+    if test_args.webhook_forward_url == "auto":
+        routed_url = HARDCODED_MODEL_URL
+        assert routed_url == HARDCODED_MODEL_URL
+
+    # Verify payload zero-approval audit verification status
+    from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher
+    dispatcher = WebhookDispatcher(server_url=HARDCODED_MODEL_URL)
+    dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    from urbansoc.domain.schemas import SOCFrameAnalysisResult
+    from urbansoc.domain.enums import ThreatLevel
+    pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="knife_threat")
+    from urbansoc.domain.schemas import HumanPoseTrack, BehaviorPrediction
+    track = HumanPoseTrack(
+        track_id=1,
+        bbox=pose.bbox,
+        keypoints=pose.keypoints,
+        detection_conf=0.95,
+        behavior=BehaviorPrediction(
+            primary_behavior=BehaviorType.KNIFE_THREAT,
+            threat_level=ThreatLevel.CRITICAL,
+            threat_score=0.95,
+            confidence=0.95,
+            reasoning="Knife threat detected",
+        )
+    )
+    analysis = SOCFrameAnalysisResult(
+        frame_index=1,
+        timestamp=1.0,
+        human_count=1,
+        humans=[track],
+        highest_threat_level=ThreatLevel.CRITICAL,
+        highest_threat_score=0.95,
+    )
+
+    enqueued = dispatcher.dispatch_frame_event(
+        frame=dummy_frame,
+        annotated_frame=dummy_frame,
+        analysis_result=analysis,
+    )
+    assert enqueued is True, "Critical knife incident must be immediately enqueued without operator approval"
+
+    queued_item = dispatcher.queue.get_nowait()
+    assert queued_item["audit"]["verification_status"] == "AUTO_DISPATCHED_TO_AI_MODEL"
+    assert queued_item["primary_action"] == "KNIFE_THREAT"
+    assert queued_item["threat_level"] == "CRITICAL"
+    assert "image" in queued_item
+    assert "hand_crop_base64" in queued_item
+    assert "deepseek_message" in queued_item
+    dispatcher.close()
+

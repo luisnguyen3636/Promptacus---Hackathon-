@@ -666,7 +666,7 @@ class WebhookDispatcher:
                     "cooldown_seconds": self.cooldown_seconds,
                     "filtered_noise_count": self.filtered_noise_count,
                 },
-                "verification_status": "AI_AUTO_DETECTED_PENDING_SOC_CONFIRMATION",
+                "verification_status": "AUTO_DISPATCHED_TO_AI_MODEL",
             },
         )
 
@@ -808,3 +808,7 @@ class WebhookDispatcher:
             "WebhookDispatcher stopped. Total Dispatched: %d | Failed: %d | Dropped: %d | Filtered Noise: %d",
             self.dispatched_count, self.failed_count, self.dropped_count, self.filtered_noise_count,
         )
+
+    def close(self, timeout: float = 2.0) -> None:
+        """Alias for shutdown."""
+        self.shutdown(timeout=timeout)

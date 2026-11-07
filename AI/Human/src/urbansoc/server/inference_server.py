@@ -693,6 +693,8 @@ class InferenceServer:
         print(f"• Frame Ingestion:  POST http://{local_ip}:{self.port}/api/v1/ingest/frame")
         print(f"• Model Weights:    {self.model_weights} (Device: {self.detector.device})")
         print(f"• Output Directory: {self.output_dir}/")
+        if self.webhook_url:
+            print(f"• Webhook Forward:  {self.webhook_url} (Auto-Dispatched to AI Model)")
         print("=" * 76)
         print(f"👉 Để kết nối Laptop khác, chạy trên laptop đó:")
         print(f"   python3 client.py --server-url http://{local_ip}:{self.port} --camera 0 --camera-id LAPTOP_01\n")
