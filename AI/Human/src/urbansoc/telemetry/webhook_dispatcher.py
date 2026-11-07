@@ -1,6 +1,7 @@
 """Asynchronous, non-blocking HTTP POST Webhook Dispatcher with Anti-Noise Filtering and Forensic SHA-256."""
 
 import base64
+from collections import deque
 import hashlib
 import json
 import logging
@@ -10,7 +11,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -218,7 +219,7 @@ def extract_subject_kinematics(track: HumanPoseTrack) -> Dict[str, float]:
 
 
 class EventThrottler:
-    """Manages anti-noise filtering, cooldown, and deduplication per track to prevent flooding target servers."""
+    """Manages anti-noise filtering, rate limiting, cooldown, and deduplication per track to prevent flooding target servers."""
 
     THREAT_RANK = {
         ThreatLevel.LOW: 1,
@@ -227,11 +228,28 @@ class EventThrottler:
         ThreatLevel.CRITICAL: 4,
     }
 
-    def __init__(self, default_cooldown: float = 3.0) -> None:
+    def __init__(
+        self,
+        default_cooldown: float = 25.0,
+        max_requests_per_minute: int = 3,
+    ) -> None:
         self.default_cooldown = default_cooldown
+        self.max_requests_per_minute = max_requests_per_minute
         # track_id -> {"last_time": float, "threat_level": ThreatLevel, "behavior": str}
         self._history: Dict[int, Dict[str, Any]] = {}
+        # track_id -> deque of timestamps within last 60 seconds
+        self._sliding_windows: Dict[int, Deque[float]] = {}
         self._lock = threading.Lock()
+
+    def _check_and_record_rate_limit(self, track_id: int, now: float) -> bool:
+        """Check if sliding 60-second window permits a new request; if so, record timestamp."""
+        window = self._sliding_windows.setdefault(track_id, deque())
+        while window and (now - window[0]) > 60.0:
+            window.popleft()
+        if len(window) >= self.max_requests_per_minute:
+            return False  # Rate limit exceeded!
+        window.append(now)
+        return True
 
     def should_dispatch(
         self,
@@ -252,8 +270,12 @@ class EventThrottler:
             ]
             for tid in stale_keys:
                 del self._history[tid]
+                if tid in self._sliding_windows:
+                    del self._sliding_windows[tid]
 
             if track_id not in self._history:
+                if not self._check_and_record_rate_limit(track_id, now):
+                    return False
                 self._history[track_id] = {
                     "last_time": now,
                     "threat_level": threat_level,
@@ -267,6 +289,8 @@ class EventThrottler:
 
             # 1. Anti-noise bypass: Immediate dispatch if threat level escalated (e.g. LOW -> HIGH or HIGH -> CRITICAL)
             if curr_rank > prev_rank:
+                if not self._check_and_record_rate_limit(track_id, now):
+                    return False
                 self._history[track_id] = {
                     "last_time": now,
                     "threat_level": threat_level,
@@ -276,6 +300,8 @@ class EventThrottler:
 
             # 2. Anti-noise bypass: Immediate dispatch if behavior transitioned to a different dangerous action
             if behavior != prev["behavior"] and curr_rank >= 3:
+                if not self._check_and_record_rate_limit(track_id, now):
+                    return False
                 self._history[track_id] = {
                     "last_time": now,
                     "threat_level": threat_level,
@@ -285,6 +311,8 @@ class EventThrottler:
 
             # 3. Time-based cooldown check (anti-spam filter)
             if now - prev["last_time"] >= active_cooldown:
+                if not self._check_and_record_rate_limit(track_id, now):
+                    return False
                 self._history[track_id] = {
                     "last_time": now,
                     "threat_level": threat_level,
@@ -303,7 +331,8 @@ class WebhookDispatcher:
         server_url: Optional[str] = None,
         camera_config: Optional[CameraLocationConfig] = None,
         min_threat_level: str = "ALL",
-        cooldown_seconds: float = 3.0,
+        cooldown_seconds: float = 25.0,
+        max_requests_per_minute: int = 3,
         timeout: float = 3.5,
         max_retries: int = 2,
         queue_maxsize: int = 50,
@@ -316,6 +345,7 @@ class WebhookDispatcher:
         self.camera_config = camera_config if camera_config is not None else CameraLocationConfig()
         self.min_threat_level = min_threat_level.upper()
         self.cooldown_seconds = cooldown_seconds
+        self.max_requests_per_minute = max_requests_per_minute
         self.timeout = timeout
         self.max_retries = max_retries
         self.image_quality = image_quality
@@ -323,7 +353,10 @@ class WebhookDispatcher:
         self.min_bbox_area = min_bbox_area
         self.filter_noise = filter_noise
 
-        self.throttler = EventThrottler(default_cooldown=cooldown_seconds)
+        self.throttler = EventThrottler(
+            default_cooldown=cooldown_seconds,
+            max_requests_per_minute=max_requests_per_minute,
+        )
         self.queue: queue.Queue = queue.Queue(maxsize=queue_maxsize)
         self._stop_event = threading.Event()
 

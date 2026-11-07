@@ -100,21 +100,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--webhook-forward-url",
         type=str,
-        default=None,
-        help="Optional external webhook URL to forward detected incidents",
+        default="auto",
+        help="Target webhook URL to forward detected incidents (default: 'auto' loops back to internal /api/v1/incidents)",
     )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    webhook_url = args.webhook_forward_url
+    if webhook_url == "auto":
+        webhook_url = f"http://127.0.0.1:{args.port}/api/v1/incidents"
+    elif webhook_url and webhook_url.lower() in ("none", "disabled", "false", "off"):
+        webhook_url = None
+
     server = InferenceServer(
         host=args.host,
         port=args.port,
         model_weights=args.weights,
         device=args.device,
         output_dir=args.output_dir,
-        webhook_url=args.webhook_forward_url,
+        webhook_url=webhook_url,
     )
     server.start(blocking=True)
     return 0

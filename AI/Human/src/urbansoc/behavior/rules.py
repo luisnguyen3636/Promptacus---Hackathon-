@@ -221,14 +221,49 @@ def evaluate_single_track_behavior(
     norm_speed = compute_normalized_speed(pose, history)
     kp_map = {kp.id: kp for kp in pose.keypoints if kp.confidence >= conf_thresh}
 
+    # Biometric Gate: Check if head is clearly positioned upright above shoulders
+    head_y_candidates = [
+        kp_map[kid].y for kid in [NOSE, LEFT_EYE, RIGHT_EYE] if kid in kp_map
+    ]
+    shoulder_y_candidates = [
+        kp_map[kid].y for kid in [LEFT_SHOULDER, RIGHT_SHOULDER] if kid in kp_map
+    ]
+    is_head_upright = False
+    if head_y_candidates and shoulder_y_candidates:
+        min_head_y = min(head_y_candidates)
+        min_shoulder_y = min(shoulder_y_candidates)
+        # In image coordinates, y increases downward. Head above shoulders means min_head_y < min_shoulder_y
+        if min_head_y < (min_shoulder_y - 8.0):
+            is_head_upright = True
+
     # Rule 1: FALLEN
-    if spine_angle >= fall_angle_threshold or aspect_ratio < fall_aspect_ratio_thresh:
+    # A subject is FALLEN only if:
+    # 1. Torso inclination spine_angle >= fall_angle_threshold (valid when both shoulders and hips are tracked), OR
+    # 2. Aspect ratio is horizontal (H/W < fall_aspect_ratio_thresh) AND head is NOT upright (collapsed forward/down or lying horizontally), OR
+    # 3. Head is level with or below shoulders (collapsed onto surface or ground) with compressed posture.
+    is_fallen = False
+    fall_reason = ""
+
+    if spine_angle >= fall_angle_threshold:
+        is_fallen = True
+        fall_reason = f"Torso angle {spine_angle:.0f}° (>= {fall_angle_threshold:.0f}°) horizontal tilt"
+    elif aspect_ratio < fall_aspect_ratio_thresh and not is_head_upright:
+        is_fallen = True
+        fall_reason = f"Horizontal prone posture H/W {aspect_ratio:.2f} (< {fall_aspect_ratio_thresh:.2f}) with non-upright head"
+    elif head_y_candidates and shoulder_y_candidates and not is_head_upright and aspect_ratio < 1.10:
+        min_head_y = min(head_y_candidates)
+        min_shoulder_y = min(shoulder_y_candidates)
+        if min_head_y >= (min_shoulder_y - 5.0):
+            is_fallen = True
+            fall_reason = "Head level with or collapsed below shoulder plane"
+
+    if is_fallen:
         pred = BehaviorPrediction(
             primary_behavior=BehaviorType.FALLEN,
             confidence=0.95,
             threat_level=ThreatLevel.CRITICAL,
             threat_score=0.98,
-            reasoning=f"Torso angle {spine_angle:.0f}° (>= {fall_angle_threshold:.0f}°) or H/W {aspect_ratio:.2f} horizontal",
+            reasoning=fall_reason,
         )
         return pred, norm_speed, aspect_ratio
 
@@ -243,9 +278,6 @@ def evaluate_single_track_behavior(
         return intrusion_pred, norm_speed, aspect_ratio
 
     # Rule 4: HANDS_UP
-    head_y_candidates = [
-        kp_map[kid].y for kid in [NOSE, LEFT_EYE, RIGHT_EYE] if kid in kp_map
-    ]
     if head_y_candidates:
         head_y = min(head_y_candidates)
         if (
@@ -293,16 +325,27 @@ def evaluate_single_track_behavior(
     loiter_disp_limit = max(120.0, float(pose.bbox.width) * 2.5)
 
     if dwell_time >= loiter_time_threshold and len(history) >= 20 and net_disp < loiter_disp_limit:
-        threat_level = ThreatLevel.HIGH if dwell_time > 20.0 else ThreatLevel.MEDIUM
-        threat_score = 0.72 if dwell_time > 20.0 else 0.52
-        pred = BehaviorPrediction(
-            primary_behavior=BehaviorType.LOITERING,
-            confidence=0.82,
-            threat_level=threat_level,
-            threat_score=threat_score,
-            reasoning=f"Lingering in local area for {dwell_time:.1f}s (disp: {net_disp:.0f}px)",
-        )
-        return pred, norm_speed, aspect_ratio
+        # If subject has upright normal posture at desk/station, loitering is normal seated activity, NOT High/Critical
+        if is_head_upright and aspect_ratio < 1.4:
+            pred = BehaviorPrediction(
+                primary_behavior=BehaviorType.NORMAL,
+                confidence=0.92,
+                threat_level=ThreatLevel.LOW,
+                threat_score=0.10,
+                reasoning=f"Normal stationary upright desk presence ({dwell_time:.1f}s)",
+            )
+            return pred, norm_speed, aspect_ratio
+        else:
+            threat_level = ThreatLevel.HIGH if dwell_time > 20.0 else ThreatLevel.MEDIUM
+            threat_score = 0.72 if dwell_time > 20.0 else 0.52
+            pred = BehaviorPrediction(
+                primary_behavior=BehaviorType.LOITERING,
+                confidence=0.82,
+                threat_level=threat_level,
+                threat_score=threat_score,
+                reasoning=f"Lingering in local area for {dwell_time:.1f}s (disp: {net_disp:.0f}px)",
+            )
+            return pred, norm_speed, aspect_ratio
 
     # Rule 8: NORMAL (Default)
     pred = BehaviorPrediction(
