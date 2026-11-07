@@ -134,6 +134,34 @@ class TestReceiverHandler(SimpleHTTPRequestHandler):
             sub = eval_subs[0]
             if sub.get("false_positive_suppressed"):
                 print(f"• Triệt tiêu lỗi:    {YELLOW}[FALSE POSITIVE SUPPRESSED] {sub.get('suppression_explanation')}{RESET}")
+
+            # 5-Gate Falsification Audit Display
+            audit = sub.get("anti_false_positive_audit") or payload.get("anti_false_positive_audit")
+            if audit:
+                print(f"\n🛡️ {BOLD}[KIỂM ĐỊNH PHÁP Y 5 CỔNG - 5-GATE FALSIFICATION AUDIT]:{RESET}")
+                g1 = audit.get("gate_1_ground_plane_depth", {})
+                g2 = audit.get("gate_2_pose_jerk_filter", {})
+                g3 = audit.get("gate_3_action_reaction_coupling", {})
+                g4 = audit.get("gate_4_posture_and_context", {})
+                g5 = audit.get("gate_5_adversarial_benign_hypothesis", {})
+
+                def _badge(st: str) -> str:
+                    if st == "PASSED":
+                        return f"{GREEN}[PASSED]{RESET}"
+                    if st == "REJECTED":
+                        return f"{RED}{BOLD}[REJECTED]{RESET}"
+                    return f"{CYAN}[N/A]{RESET}"
+
+                print(f"   • Cổng 1 (Hình học 3D):        {_badge(g1.get('status', ''))} {g1.get('detail')}")
+                print(f"   • Cổng 2 (Khớp xương/Jerk):    {_badge(g2.get('status', ''))} {g2.get('detail')}")
+                print(f"   • Cổng 3 (Tương tác nạn nhân): {_badge(g3.get('status', ''))} {g3.get('detail')}")
+                print(f"   • Cổng 4 (Tư thế & Ngữ cảnh):  {_badge(g4.get('status', ''))} {g4.get('detail')}")
+                p_benign = int(g5.get("benign_hypothesis_probability", 0.0) * 100)
+                perm = f"{GREEN}Cho phép leo thang{RESET}" if g5.get("escalation_permitted") else f"{RED}CHẶN LEO THANG{RESET}"
+                print(f"   • Cổng 5 (Giả thuyết vô tội):  P_benign={BOLD}{p_benign}%{RESET} ({perm})")
+                print(f"     ➔ {YELLOW}\"{g5.get('strongest_benign_explanation')}\"{RESET}")
+                print(f"   • Kết luận Pháp y: {BOLD}{audit.get('falsification_summary')}{RESET}")
+
             bs_data = sub.get("multi_camera_blind_spot_reasoning", {})
             if bs_data and bs_data.get("is_triggered"):
                 tactical = bs_data.get("subject_tactical_profile", {})

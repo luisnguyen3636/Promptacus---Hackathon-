@@ -98,8 +98,18 @@ class IncidentMemoryEngine:
 
         for rule in self.rules:
             rule_cam = str(rule.get("camera_name", "")).strip().lower()
-            # Partial or exact camera name matching
-            if rule_cam not in clean_cam_name and clean_cam_name not in rule_cam:
+            # Substring or camera ID token matching (e.g. CAM_01)
+            cam_matched = (rule_cam in clean_cam_name) or (clean_cam_name in rule_cam)
+            if not cam_matched:
+                rule_cam_tokens = re.findall(r"cam[_\-\s]*\d+", rule_cam)
+                clean_cam_tokens = re.findall(r"cam[_\-\s]*\d+", clean_cam_name)
+                if rule_cam_tokens and clean_cam_tokens:
+                    tok1 = re.sub(r"[\s\-]", "_", rule_cam_tokens[0])
+                    tok2 = re.sub(r"[\s\-]", "_", clean_cam_tokens[0])
+                    if tok1 == tok2:
+                        cam_matched = True
+
+            if not cam_matched:
                 continue
 
             rule_label = str(rule.get("target_label", "")).strip().upper()

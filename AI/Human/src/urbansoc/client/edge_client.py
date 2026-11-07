@@ -203,8 +203,37 @@ class EdgeCameraClient:
             logger.warning("Failed to register with server (%s): %s", url, e)
             return False
 
-    def send_frame(self, frame_bgr: np.ndarray, timestamp_ms: int, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
+    def send_frame(
+        self,
+        frame_bgr: np.ndarray,
+        timestamp_ms: int,
+        timeout: float = 2.0,
+        max_retries: int = 1,
+        retry_delay_sec: float = 3.0,
+    ) -> Optional[Dict[str, Any]]:
         """Encode raw frame to JPEG binary and send via HTTP POST to intermediate server."""
+        return self.stream_frame_post(
+            frame_bgr=frame_bgr,
+            timestamp_ms=timestamp_ms,
+            timeout=timeout,
+            endpoint_path="/api/v1/ingest/frame",
+            max_retries=max_retries,
+            retry_delay_sec=retry_delay_sec,
+        )
+
+    def stream_frame_post(
+        self,
+        frame_bgr: np.ndarray,
+        timestamp_ms: int,
+        timeout: float = 2.0,
+        endpoint_path: Optional[str] = None,
+        max_retries: int = 4,
+        retry_delay_sec: float = 3.0,
+    ) -> Optional[Dict[str, Any]]:
+        """Directly stream video frame to the SOC server/dashboard via HTTP POST method.
+
+        Supports automated retry policy (up to max_retries attempts spaced by retry_delay_sec).
+        """
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]
         success, encoded_jpeg = cv2.imencode(".jpg", frame_bgr, encode_params)
         if not success:
@@ -212,7 +241,8 @@ class EdgeCameraClient:
             return None
 
         raw_bytes = encoded_jpeg.tobytes()
-        url = f"{self.server_url}/api/v1/ingest/frame"
+        path = endpoint_path or f"/api/v1/cameras/{self.camera_id}/stream"
+        url = f"{self.server_url}{path}"
         headers = {
             "Content-Type": "image/jpeg",
             "X-Camera-ID": self.camera_id,
@@ -223,10 +253,32 @@ class EdgeCameraClient:
         if self.test_action:
             headers["X-Test-Action"] = str(self.test_action)
 
-        resp = requests.post(url, data=raw_bytes, headers=headers, timeout=timeout)
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning("Server responded with HTTP %d: %s", resp.status_code, resp.text)
+        for attempt in range(1, max_retries + 1):
+            try:
+                resp = requests.post(url, data=raw_bytes, headers=headers, timeout=timeout)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    self.latest_server_result = data
+                    return data
+                logger.warning(
+                    "Server responded with HTTP %d (attempt %d/%d): %s",
+                    resp.status_code,
+                    attempt,
+                    max_retries,
+                    resp.text,
+                )
+            except Exception as e:
+                logger.warning(
+                    "HTTP POST stream frame failed on attempt %d/%d (%s): %s",
+                    attempt,
+                    max_retries,
+                    url,
+                    e,
+                )
+
+            if attempt < max_retries and retry_delay_sec > 0:
+                time.sleep(retry_delay_sec)
+
         return None
 
     def _draw_client_hud(self, frame: np.ndarray, current_fps: float) -> np.ndarray:

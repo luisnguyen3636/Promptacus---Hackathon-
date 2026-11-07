@@ -47,6 +47,7 @@ def test_always_vlm_and_receiver_dispatch(tmp_path: Any) -> None:
         enable_tunnel=False,
         webhook_url=f"http://127.0.0.1:{receiver_port}/api/v1/test/receive",
         always_vlm=True,
+        mock_vlm=True,
     )
     ai_server.start(blocking=False)
     time.sleep(0.4)

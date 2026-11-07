@@ -130,6 +130,7 @@ def test_server_nvidia_analyze_endpoint(tmp_path: Any) -> None:
         output_dir=output_dir,
         enable_tunnel=False,
         webhook_url=None,
+        mock_vlm=True,
     )
     server.start(blocking=False)
     time.sleep(0.3)

@@ -18,7 +18,9 @@ import numpy as np
 from urbansoc.ai.nvidia_vlm import NvidiaVisionClient
 from urbansoc.detection.yolo_pose import YOLOPoseDetector
 from urbansoc.domain.webhook_models import CameraLocationConfig
+from urbansoc.evidence.keeper import EvidenceKeeper
 from urbansoc.server.camera_context import CameraContext, CameraContextManager
+from urbansoc.server.dashboard_html import DASHBOARD_HTML
 from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher, compute_forensic_sha256
 
 logger = logging.getLogger("urbansoc.server.inference_server")
@@ -75,9 +77,31 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             self._handle_get_incident_image(clean_path)
             return
 
-        # 3. Root API information (Camera server endpoints & status)
-        if clean_path in ("", "/", "/dashboard"):
-            self._handle_get_root_info()
+        # 2c. Real-time Dashboard State and SSE Events API
+        if clean_path == "/api/v1/dashboard/state":
+            self._handle_get_dashboard_state()
+            return
+
+        if clean_path == "/api/v1/dashboard/events":
+            self._handle_get_dashboard_events()
+            return
+
+        # 2d. Cryptographic Evidence Verification API (/api/v1/evidence/{event_id}/verify)
+        if clean_path.startswith("/api/v1/evidence/") and clean_path.endswith("/verify"):
+            self._handle_verify_evidence(clean_path)
+            return
+
+        # 3. SOC Interactive Web Dashboard & Root Info
+        if clean_path == "/dashboard":
+            self._handle_serve_dashboard()
+            return
+
+        if clean_path in ("", "/"):
+            accept = self.headers.get("Accept", "")
+            if "text/html" in accept and "application/json" not in accept and "format=json" not in self.path:
+                self._handle_serve_dashboard()
+            else:
+                self._handle_get_root_info()
             return
 
         # Fallback to standard file serving
@@ -91,12 +115,25 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             self._handle_register_camera()
             return
 
-        if clean_path == "/api/v1/ingest/frame":
+        # Support streaming directly via HTTP POST /api/v1/cameras/{camera_id}/stream
+        if clean_path.startswith("/api/v1/cameras/") and clean_path.endswith("/stream"):
+            parts = clean_path.split("/")
+            if len(parts) >= 5:
+                self.headers["X-Camera-ID"] = parts[4]
+            self._handle_ingest_frame()
+            return
+
+        if clean_path in ("/api/v1/ingest/frame", "/api/v1/stream/push"):
             self._handle_ingest_frame()
             return
 
         if clean_path in ("/api/v1/analyze/nvidia", "/api/v1/analyze"):
             self._handle_nvidia_analyze()
+            return
+
+        # Operational HITL Operator Action Endpoint
+        if clean_path == "/api/v1/operator/action":
+            self._handle_operator_action()
             return
 
         # Incident webhook reception endpoint (compatible with server.py)
@@ -292,6 +329,127 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             },
         }
         self._send_json_response(200, info)
+
+    def _handle_serve_dashboard(self) -> None:
+        """Serve rich modern responsive SOC Dashboard HTML page."""
+        raw_html = DASHBOARD_HTML.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw_html)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(raw_html)
+
+    def _handle_get_dashboard_state(self) -> None:
+        """Serve real-time dashboard state JSON."""
+        all_cams = self.soc.context_manager.get_all_contexts()
+        cams_info = [
+            {
+                "camera_id": cid,
+                "name": ctx.config.name,
+                "status": "ONLINE" if ctx.is_active else "OFFLINE",
+                "measured_fps": round(ctx.measured_fps, 1),
+                "stream_url": f"/api/v1/cameras/{cid}/stream",
+                "snapshot_url": f"/api/v1/cameras/{cid}/snapshot",
+            }
+            for cid, ctx in all_cams.items()
+        ]
+        with self.soc.state_lock:
+            latest_inc = self.soc.latest_events[-1] if self.soc.latest_events else None
+            logs = list(self.soc.recent_logs[:30])
+
+        self._send_json_response(200, {
+            "status": "online",
+            "active_cameras": len(cams_info),
+            "cameras": cams_info,
+            "latest_incident": latest_inc,
+            "recent_logs": logs,
+        })
+
+    def _handle_get_dashboard_events(self) -> None:
+        """Serve Server-Sent Events (SSE) stream for near real-time dashboard updates."""
+        import queue
+        q = queue.Queue(maxsize=50)
+        with self.soc.state_lock:
+            self.soc.sse_queues.append(q)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        init_msg = f"data: {json.dumps({'type': 'init', 'message': 'Connected to SOC Live Stream'})}\n\n".encode("utf-8")
+        self.wfile.write(init_msg)
+        self.wfile.flush()
+
+        try:
+            for _ in range(60):
+                try:
+                    data = q.get(timeout=1.5)
+                    chunk = f"data: {json.dumps({'type': 'incident', 'payload': data}, ensure_ascii=False)}\n\n".encode("utf-8")
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, socket.error):
+            pass
+        finally:
+            with self.soc.state_lock:
+                if q in self.soc.sse_queues:
+                    self.soc.sse_queues.remove(q)
+
+    def _handle_verify_evidence(self, clean_path: str) -> None:
+        """Handle /api/v1/evidence/{event_id}/verify."""
+        parts = clean_path.split("/")
+        if len(parts) >= 5:
+            event_id = parts[4]
+            try:
+                pkg = self.soc.evidence_keeper.package_incident_evidence(event_id)
+                self._send_json_response(200, pkg)
+            except KeyError:
+                self._send_json_response(404, {"status": "error", "message": f"Evidence record '{event_id}' not found."})
+            except Exception as e:
+                self._send_json_response(500, {"status": "error", "message": str(e)})
+        else:
+            self._send_json_response(400, {"status": "error", "message": "Invalid evidence verification path"})
+
+    def _handle_operator_action(self) -> None:
+        """Handle POST /api/v1/operator/action (Operational HITL decisions)."""
+        length = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(length)
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+            action = str(payload.get("action", "CONFIRM_AND_DISPATCH")).strip().upper()
+            cam_id = str(payload.get("camera_id", "UNKNOWN")).strip()
+            event_id = payload.get("event_id")
+            op_id = str(payload.get("operator_id", "OPERATOR_CHIEF_01")).strip()
+            notes = payload.get("notes", "")
+
+            msg = f"Vận hành viên {op_id} đã thực hiện: [{action}] cho sự cố {event_id or cam_id}."
+            logger.info("Operational HITL Action: %s", msg)
+
+            self.soc.record_dashboard_event({
+                "camera_id": cam_id,
+                "action": action,
+                "severity": "OPERATOR_CONFIRMED" if action == "CONFIRM_AND_DISPATCH" else "OPERATOR_ACTION",
+                "reasoning": msg,
+                "event_id": event_id,
+                "operator_id": op_id,
+            })
+
+            self._send_json_response(200, {
+                "status": "success",
+                "action": action,
+                "operator_id": op_id,
+                "event_id": event_id,
+                "message": msg,
+                "verified_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            })
+        except Exception as e:
+            self._send_json_response(400, {"status": "error", "message": f"Operator action error: {e}"})
 
     def _handle_nvidia_analyze(self) -> None:
         """Analyze a frame image directly via NVIDIA NIM Vision API and return structured JSON."""
@@ -492,6 +650,8 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             if analysis.humans
             else "NORMAL"
         )
+        if test_action_hdr:
+            primary_action = test_action_hdr.strip().upper()
 
         humans_summary = [
             {
@@ -575,6 +735,10 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             # Flatten essential VLM metadata fields directly into response JSON
             response_data["severity"] = vlm_res.get("severity", "low")
             response_data["action_type"] = vlm_res.get("action_type", primary_action)
+            response_data["primary_action"] = vlm_res.get("action_type", primary_action)
+            response_data["incident_status"] = vlm_res.get("incident_status", "AWAITING_OPERATOR_VERIFICATION" if vlm_res.get("severity") in ("high", "critical") else "MONITORING")
+            if "multi_camera_blind_spot_reasoning" in vlm_res:
+                response_data["multi_camera_blind_spot_reasoning"] = vlm_res["multi_camera_blind_spot_reasoning"]
             response_data["threat_score"] = vlm_res.get("threat_score", 0.0)
             response_data["confidence"] = vlm_res.get("confidence", 0.90)
             response_data["situation_assessment"] = vlm_res.get("situation_assessment", {})
@@ -590,6 +754,30 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             # Forward JSON metadata directly to Webhook Dispatcher / Test Receiver if enabled
             if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
                 self.soc.webhook_dispatcher.dispatch_raw_payload(response_data)
+
+        # Record into Forensic Evidence Ledger (SHA-256 / HMAC / Merkle Hash Chain)
+        try:
+            evt_id = f"EVT_{int(timestamp_sec * 1000)}_{camera_id}"
+            rec = self.soc.evidence_keeper.record_evidence(
+                camera_id=camera_id,
+                frame_bgr=frame_bgr,
+                metadata=response_data,
+                event_id=evt_id,
+            )
+            response_data["event_id"] = rec.event_id
+            response_data["frame_sha256"] = rec.frame_sha256
+            response_data["chain_hash"] = rec.chain_hash
+            response_data["evidence"] = {
+                "event_id": rec.event_id,
+                "frame_sha256": rec.frame_sha256,
+                "chain_hash": rec.chain_hash,
+                "verification_status": rec.verification_status,
+            }
+        except Exception as ev_err:
+            logger.debug("Evidence recording notice: %s", ev_err)
+
+        # Broadcast live reasoning event to SOC Dashboard
+        self.soc.record_dashboard_event(response_data)
 
         self._send_json_response(200, response_data)
 
@@ -682,6 +870,7 @@ class InferenceServer:
         webhook_filter_noise: bool = True,
         enable_tunnel: bool = True,
         always_vlm: bool = False,
+        mock_vlm: bool = False,
     ) -> None:
         self.host = host
         self.port = port
@@ -692,6 +881,7 @@ class InferenceServer:
         self.webhook_url = webhook_url
         self.enable_tunnel = enable_tunnel
         self.always_vlm = always_vlm or os.getenv("ALWAYS_ANALYZE_VLM", "").lower() in ("true", "1", "yes")
+        self.mock_vlm = mock_vlm or os.getenv("MOCK_VLM", "").lower() in ("true", "1", "yes")
 
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -729,10 +919,46 @@ class InferenceServer:
             )
 
         # NVIDIA VLM Client for deep multimodal vision reasoning
-        self.nvidia_vlm = NvidiaVisionClient()
+        self.nvidia_vlm = NvidiaVisionClient(mock_mode=self.mock_vlm)
+
+        # Evidence Keeper for forensic cryptographic integrity
+        self.evidence_keeper = EvidenceKeeper(
+            storage_dir=os.path.join(self.output_dir, "evidence_storage")
+        )
+
+        # Dashboard live state & SSE
+        self.latest_events: List[Dict[str, Any]] = []
+        self.recent_logs: List[Dict[str, Any]] = []
+        self.sse_queues: List[Any] = []
+        self.state_lock = threading.Lock()
 
         self._httpd: Optional[ThreadedHTTPServer] = None
         self._server_thread: Optional[threading.Thread] = None
+
+    def record_dashboard_event(self, event_data: Dict[str, Any]) -> None:
+        """Publish real-time AI reasoning event to dashboard state and SSE subscribers."""
+        with self.state_lock:
+            self.latest_events.append(event_data)
+            if len(self.latest_events) > 50:
+                self.latest_events.pop(0)
+
+            log_item = {
+                "time": time.strftime("%H:%M:%S"),
+                "camera_id": event_data.get("camera_id", "UNKNOWN"),
+                "action": event_data.get("primary_action") or event_data.get("action_type", "INFERENCE"),
+                "severity": event_data.get("severity") or event_data.get("threat_level", "LOW"),
+                "summary": event_data.get("reasoning") or event_data.get("description", "AI Inference completed"),
+                "chain_hash": event_data.get("chain_hash") or (event_data.get("evidence", {}).get("chain_hash", "")),
+            }
+            self.recent_logs.insert(0, log_item)
+            if len(self.recent_logs) > 100:
+                self.recent_logs.pop()
+
+            for q in list(self.sse_queues):
+                try:
+                    q.put_nowait(event_data)
+                except Exception:
+                    pass
 
     def get_local_ip(self) -> str:
         """Find local LAN IP address to display to user for laptop-to-laptop connectivity."""
