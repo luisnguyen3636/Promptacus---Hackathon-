@@ -100,10 +100,27 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
         help="Directory to save audit logs, evidence, and webhooks (default: output)",
     )
     parser.add_argument(
+        "--url",
         "--webhook-forward-url",
+        "--webhook-url",
+        dest="webhook_forward_url",
         type=str,
         default="auto",
-        help=f"Target webhook URL to forward detected incidents (default: 'auto' routes to {HARDCODED_MODEL_URL})",
+        help=f"Target endpoint to automatically POST all alerts and metadata (default: 'auto' routes to {HARDCODED_MODEL_URL})",
+    )
+    parser.add_argument(
+        "--cooldown",
+        "--webhook-cooldown",
+        dest="webhook_cooldown",
+        type=float,
+        default=0.5,
+        help="Cooldown between webhook event posts in seconds (default: 0.5s to ensure >= 30 req/30s capability)",
+    )
+    parser.add_argument(
+        "--max-rpm",
+        type=int,
+        default=120,
+        help="Max webhook requests per minute (default: 120)",
     )
     parser.add_argument(
         "--tunnel",
@@ -141,6 +158,8 @@ def main() -> int:
         device=args.device,
         output_dir=args.output_dir,
         webhook_url=webhook_url,
+        webhook_cooldown=args.webhook_cooldown,
+        max_requests_per_minute=args.max_rpm,
         enable_tunnel=bool(args.tunnel),
         always_vlm=bool(args.always_vlm),
         mock_vlm=bool(args.mock_vlm),

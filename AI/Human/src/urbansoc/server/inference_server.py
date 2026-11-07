@@ -66,6 +66,11 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             self._handle_get_camera_mjpeg_stream(None)
             return
 
+        # 1c. HTTP Live Streaming (HLS) / m3u8 playlist endpoint
+        if clean_path in ("/stream.m3u8", "/live.m3u8") or clean_path.endswith(".m3u8"):
+            self._handle_get_hls_playlist()
+            return
+
         # 2. API: Get latest live visual snapshot for a specific camera
         if clean_path.startswith("/api/v1/cameras/") and clean_path.endswith("/snapshot"):
             parts = clean_path.split("/")
@@ -311,6 +316,30 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             logger.debug(f"MJPEG stream ended for {target_cam_id}: {e}")
             return
+
+    def _handle_get_hls_playlist(self) -> None:
+        """Serve HTTP Live Streaming (HLS) m3u8 playlist pointing to the latest snapshot frames."""
+        all_cams = self.soc.context_manager.get_all_contexts()
+        cam_id = list(all_cams.keys())[0] if all_cams else "LAPTOP_01"
+        seq = int(time.time() * 2)
+        m3u8_content = (
+            "#EXTM3U\n"
+            "#EXT-X-VERSION:3\n"
+            "#EXT-X-TARGETDURATION:1\n"
+            f"#EXT-X-MEDIA-SEQUENCE:{seq}\n"
+            "#EXTINF:0.5,\n"
+            f"/api/v1/cameras/{cam_id}/snapshot?seq={seq}\n"
+            "#EXTINF:0.5,\n"
+            f"/api/v1/cameras/{cam_id}/snapshot?seq={seq+1}\n"
+        ).encode("utf-8")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+        self.send_header("Content-Length", str(len(m3u8_content)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(m3u8_content)
 
     def _handle_get_root_info(self) -> None:
         """Serve JSON info about available camera streams, endpoints, and NVIDIA VLM status."""
@@ -649,7 +678,10 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             return
 
         # Retrieve isolated camera context
-        ctx = self.soc.context_manager.get_or_create(camera_id)
+        ctx = self.soc.context_manager.get_or_create(
+            camera_id,
+            cooldown_seconds=getattr(self.soc, "webhook_cooldown", 0.5),
+        )
         if camera_name and ctx.config.name != camera_name:
             ctx.config.name = camera_name
 
@@ -961,7 +993,8 @@ class InferenceServer:
         output_dir: str = "output",
         webhook_url: Optional[str] = None,
         webhook_min_threat: str = "ALL",
-        webhook_cooldown: float = 3.0,
+        webhook_cooldown: float = 0.5,
+        max_requests_per_minute: int = 120,
         webhook_filter_noise: bool = True,
         enable_tunnel: bool = True,
         always_vlm: bool = False,
@@ -974,6 +1007,8 @@ class InferenceServer:
         self.conf_threshold = conf_threshold
         self.output_dir = os.path.abspath(output_dir)
         self.webhook_url = webhook_url
+        self.webhook_cooldown = webhook_cooldown
+        self.max_requests_per_minute = max_requests_per_minute
         self.enable_tunnel = enable_tunnel
         self.always_vlm = always_vlm or os.getenv("ALWAYS_ANALYZE_VLM", "").lower() in ("true", "1", "yes")
         self.mock_vlm = mock_vlm or os.getenv("MOCK_VLM", "").lower() in ("true", "1", "yes")
@@ -1010,6 +1045,7 @@ class InferenceServer:
                 server_url=webhook_url,
                 min_threat_level=webhook_min_threat,
                 cooldown_seconds=webhook_cooldown,
+                max_requests_per_minute=max_requests_per_minute,
                 filter_noise=webhook_filter_noise,
             )
 

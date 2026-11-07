@@ -160,6 +160,21 @@ case "${ACTION}" in
             shift
         fi
 
+        TARGET_FORWARD_URL=""
+        REMAINING_ARGS=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --url|--webhook-url|--webhook-forward-url)
+                    TARGET_FORWARD_URL="$2"
+                    shift 2
+                    ;;
+                *)
+                    REMAINING_ARGS+=("$1")
+                    shift
+                    ;;
+            esac
+        done
+
         SERVER_PORT="${PORT:-8000}"
         SERVER_URL="http://127.0.0.1:${SERVER_PORT}"
         SERVER_PID=""
@@ -200,7 +215,12 @@ case "${ACTION}" in
             echo "✅ Central Inference Server đã chạy sẵn trên cổng ${SERVER_PORT}."
         else
             echo "🚀 [1/3] Đang khởi động Central Inference Server trên cổng ${SERVER_PORT}..."
-            "${PYTHON_BIN}" server.py "${SERVER_PORT}" > /tmp/soc_server.log 2>&1 &
+            SERVER_CMD=("${PYTHON_BIN}" server.py "${SERVER_PORT}")
+            if [[ -n "${TARGET_FORWARD_URL}" ]]; then
+                SERVER_CMD+=(--url "${TARGET_FORWARD_URL}")
+                echo "🎯 Cấu hình đẩy dữ liệu tự động tới Target: ${TARGET_FORWARD_URL}"
+            fi
+            "${SERVER_CMD[@]}" > /tmp/soc_server.log 2>&1 &
             SERVER_PID=$!
 
             # Đợi server sẵn sàng
@@ -257,6 +277,6 @@ case "${ACTION}" in
         echo "💡 Mẹo: Nhấn phím 'q' trên cửa sổ camera hoặc Ctrl+C trong terminal để dừng."
         echo ""
 
-        exec "${PYTHON_BIN}" client.py --server-url "${SERVER_URL}" "$@"
+        exec "${PYTHON_BIN}" client.py --server-url "${SERVER_URL}" ${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}
         ;;
 esac

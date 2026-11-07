@@ -397,20 +397,23 @@ class CameraContextManager:
         camera_id: str,
         config: Optional[CameraLocationConfig] = None,
         fps: Optional[float] = None,
+        cooldown_seconds: Optional[float] = None,
     ) -> CameraContext:
         """Retrieve existing camera context or lazily create a new isolated context."""
         clean_id = camera_id.strip()
         with self._lock:
             if clean_id not in self._contexts:
                 actual_fps = fps if fps is not None else self.default_fps
+                actual_cooldown = cooldown_seconds if cooldown_seconds is not None else 0.5
                 ctx = CameraContext(
                     camera_id=clean_id,
                     config=config,
                     output_dir=self.output_dir,
                     fps=actual_fps,
+                    cooldown_seconds=actual_cooldown,
                 )
                 self._contexts[clean_id] = ctx
-                logger.info("Allocated new CameraContext for camera '%s'", clean_id)
+                logger.info("Allocated new CameraContext for camera '%s' (cooldown: %.2fs)", clean_id, actual_cooldown)
             elif config is not None:
                 # Update config if provided
                 self._contexts[clean_id].config = config

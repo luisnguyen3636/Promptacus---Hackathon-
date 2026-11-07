@@ -296,6 +296,8 @@ class EventThrottler:
 
     def _check_and_record_rate_limit(self, track_id: int, now: float) -> bool:
         """Check if sliding 60-second window permits a new request; if so, record timestamp."""
+        if self.max_requests_per_minute <= 0:
+            return True
         window = self._sliding_windows.setdefault(track_id, deque())
         while window and (now - window[0]) > 60.0:
             window.popleft()
@@ -384,8 +386,8 @@ class WebhookDispatcher:
         server_url: Optional[str] = None,
         camera_config: Optional[CameraLocationConfig] = None,
         min_threat_level: str = "ALL",
-        cooldown_seconds: float = 25.0,
-        max_requests_per_minute: int = 3,
+        cooldown_seconds: float = 0.5,
+        max_requests_per_minute: int = 120,
         timeout: float = 3.5,
         max_retries: int = 2,
         queue_maxsize: int = 50,
