@@ -340,9 +340,9 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             action_hint=action_hint,
         )
         response_payload = {
+            **result,
             "status": "success",
             "result": result,
-            **result,
         }
         self._send_json_response(200, response_payload)
 
@@ -537,14 +537,41 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 }
                 for h in humans_summary
             ]
+            # Extract normalized bbox and velocity from primary track
+            h_img, w_img = frame_bgr.shape[:2]
+            primary_bbox_norm = (0.2, 0.2, 0.8, 0.8)
+            primary_vel = (0.0, 0.0)
+            if analysis.humans:
+                p_track = analysis.humans[0]
+                primary_bbox_norm = (
+                    p_track.bbox.x1 / max(1.0, w_img),
+                    p_track.bbox.y1 / max(1.0, h_img),
+                    p_track.bbox.x2 / max(1.0, w_img),
+                    p_track.bbox.y2 / max(1.0, h_img),
+                )
+                primary_vel = getattr(p_track, "velocity_vector", (0.0, 0.0))
+
             vlm_res = self.soc.nvidia_vlm.analyze_frame(
                 image_input=frame_bgr,
                 camera_id=camera_id,
                 location=ctx.config.name or "Camera Zone",
                 action_hint=primary_action,
                 actors_hint=actors_hint,
+                frame_id=ctx.frame_count,
+                bbox_norm=primary_bbox_norm,
+                velocity_vector=primary_vel,
+                yolov11_raw_actions=[primary_action],
             )
             response_data["nvidia_vlm_analysis"] = vlm_res
+
+            # Integrate Section 6 schema fields into top-level response
+            if "active_camera" in vlm_res:
+                response_data["active_camera"] = vlm_res["active_camera"]
+            if "evaluated_subjects" in vlm_res:
+                response_data["evaluated_subjects"] = vlm_res["evaluated_subjects"]
+            if "operator_dashboard_directives" in vlm_res:
+                response_data["operator_dashboard_directives"] = vlm_res["operator_dashboard_directives"]
+
             # Flatten essential VLM metadata fields directly into response JSON
             response_data["severity"] = vlm_res.get("severity", "low")
             response_data["action_type"] = vlm_res.get("action_type", primary_action)

@@ -105,6 +105,9 @@ class TestReceiverHandler(SimpleHTTPRequestHandler):
 
         situation = payload.get("situation_assessment") or {}
         intent_data = payload.get("intent_prediction") or {}
+        active_cam = payload.get("active_camera") or {}
+        eval_subs = payload.get("evaluated_subjects") or []
+        directives = payload.get("operator_dashboard_directives") or {}
 
         # Determine color badge
         if severity == "CRITICAL":
@@ -120,32 +123,42 @@ class TestReceiverHandler(SimpleHTTPRequestHandler):
         print("\n" + "=" * 78)
         print(f"📡 {BOLD}[TEST RECEIVER] NHẬN GÓI METADATA TỪ AI SERVER{RESET} ({now_str})")
         print("=" * 78)
-        print(f"• Camera ID:        {CYAN}{camera_id}{RESET} ({location_str})")
-        print(f"• Severity:         {sev_color}[{severity}]{RESET} | Threat Score: {BOLD}{threat_score}{RESET}")
-        print(f"• Action Detected:  {MAGENTA}{BOLD}{action}{RESET}")
-        if situation:
-            print(f"• Kịch bản (Scenario): {BOLD}{situation.get('scenario_type', 'N/A')}{RESET}")
-            print(f"• Tương quan vị thế:    {situation.get('power_dynamics', 'N/A')}")
-            print(f"• Yếu tố rủi ro nạn nhân: {situation.get('victim_vulnerability', 'N/A')}")
-        if intent_data:
-            esc_risk = intent_data.get('escalation_risk', 'LOW')
-            esc_color = RED if esc_risk in ('CRITICAL', 'EXTREME') else YELLOW if esc_risk == 'HIGH' else GREEN
-            print(f"• Ý đồ đối tượng:     {BOLD}{intent_data.get('primary_intent', 'N/A')}{RESET} | Rủi ro leo thang: {esc_color}[{esc_risk}]{RESET}")
-            print(f"• Dự báo 5-10s tới:   {CYAN}{intent_data.get('predicted_next_action', 'N/A')}{RESET}")
-        print(f"• Reasoning:        {reasoning}")
+        cam_display_name = active_cam.get("camera_name") or camera_id
+        cam_phys_loc = active_cam.get("physical_location") or location_str
+        print(f"• Camera Đích Danh:  {CYAN}{BOLD}{cam_display_name}{RESET}")
+        print(f"• Địa Điểm Vật Lý:   {cam_phys_loc}")
+        print(f"• Severity:          {sev_color}[{severity}]{RESET} | Threat Score: {BOLD}{threat_score}{RESET}")
+        print(f"• Hành Vi Nhận Diện: {MAGENTA}{BOLD}{action}{RESET}")
 
-        if isinstance(actors, list) and actors:
-            print(f"• Actors ({len(actors)}):")
-            for a in actors[:5]:
-                if isinstance(a, dict):
-                    a_id = a.get("id") or a.get("track_id", "?")
-                    a_role = a.get("role", "individual")
-                    a_act = a.get("action") or a.get("behavior", "")
-                    a_intent = a.get("intent", "unspecified")
-                    print(f"    - Track #{a_id} | Role: {BOLD}{a_role}{RESET} | Action: {a_act} | Intent: {a_intent}")
+        if eval_subs:
+            sub = eval_subs[0]
+            if sub.get("false_positive_suppressed"):
+                print(f"• Triệt tiêu lỗi:    {YELLOW}[FALSE POSITIVE SUPPRESSED] {sub.get('suppression_explanation')}{RESET}")
+            bs_data = sub.get("multi_camera_blind_spot_reasoning", {})
+            if bs_data and bs_data.get("is_triggered"):
+                tactical = bs_data.get("subject_tactical_profile", {})
+                print(f"• Cổng Thoát Vùng Mù: {bs_data.get('exit_gate_on_origin_cam')} ➔ Vùng {bs_data.get('blind_spot_zone_id')}")
+                print(f"• Hồ Sơ Chiến Thuật:  Tay thuận: {tactical.get('dominant_hand')} | Tay giữ đồ: {tactical.get('active_holding_hand')} | Tâm lý: {tactical.get('psychological_state')}")
 
-        if isinstance(visual_cues, dict) and visual_cues:
-            print(f"• Visual Cues:      {visual_cues}")
+                preds = bs_data.get("predicted_next_cameras", [])
+                if preds:
+                    print(f"\n🔮 {BOLD}DỰ BÁO ĐÓN LÕNG TẠI CÁC CAMERA ĐÍCH DANH TIẾP THEO:{RESET}")
+                    for p in preds[:3]:
+                        print(f"   [Rank {p.get('rank')}] 📹 {BOLD}{p.get('target_camera_name')}{RESET} (Xác suất: {BOLD}{int(p.get('probability',0)*100)}%{RESET})")
+                        print(f"          - Cửa ngõ xuất hiện: {CYAN}{p.get('expected_entry_gate_on_target_cam')}{RESET}")
+                        print(f"          - Cửa sổ thời gian ETA: {p.get('estimated_arrival_seconds', [0,0])[0]} - {p.get('estimated_arrival_seconds', [0,0])[1]} giây")
+                        print(f"          - Hành vi ẩn dự đoán: {', '.join(p.get('predicted_hidden_actions_in_blind_spot', []))}")
+                        print(f"          - Phân tích: {p.get('detailed_tactical_reasoning')}")
+
+                reid = bs_data.get("cross_camera_reid_handover_token", {})
+                if reid:
+                    print(f"• Nhận Dạng ReID:    Tag: {reid.get('global_subject_tag')} | {reid.get('visual_appearance_signature')}")
+
+        if directives and directives.get("suggested_operator_focus"):
+            print(f"\n🚨 {BOLD}CHỈ THỊ VẬN HÀNH VIÊN (SOC DIRECTIVE):{RESET}")
+            print(f"   👉 {directives.get('suggested_operator_focus')}")
+            if directives.get("highlight_camera_names_on_map"):
+                print(f"   🗺️ Camera cần bật viền đỏ: {directives.get('highlight_camera_names_on_map')}")
 
         # Save to file
         event_filename = f"event_{int(time.time() * 1000)}_{camera_id}.json"
