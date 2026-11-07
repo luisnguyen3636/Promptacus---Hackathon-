@@ -89,7 +89,7 @@ class NvidiaVisionClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
-        timeout_seconds: float = 6.0,
+        timeout_seconds: Optional[float] = None,
         mock_mode: bool = False,
     ) -> None:
         load_env_file()
@@ -106,7 +106,7 @@ class NvidiaVisionClient:
         raw_base = base_url or os.getenv("NVIDIA_BASE_URL", DEFAULT_NVIDIA_BASE_URL).strip()
         self.base_url = raw_base.rstrip("/")
         self.model = model or os.getenv("NVIDIA_MODEL", DEFAULT_NVIDIA_MODEL).strip()
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else float(os.getenv("NVIDIA_TIMEOUT_SECONDS", "20.0"))
 
         # Sub-engines
         self.registry = NamedCameraRegistry()

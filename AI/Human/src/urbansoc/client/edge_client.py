@@ -56,6 +56,7 @@ class EdgeCameraClient:
         address: str = "Laptop Client",
         headless: bool = False,
         test_action: Optional[str] = None,
+        timeout: float = 30.0,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.camera_id = camera_id if camera_id else get_auto_camera_id()
@@ -69,6 +70,7 @@ class EdgeCameraClient:
         self.address = address
         self.headless = headless
         self.test_action = test_action
+        self.stream_timeout = timeout
 
         self._running = False
         self._source = None
@@ -207,9 +209,9 @@ class EdgeCameraClient:
         self,
         frame_bgr: np.ndarray,
         timestamp_ms: int,
-        timeout: float = 2.0,
+        timeout: float = 6.0,
         max_retries: int = 1,
-        retry_delay_sec: float = 3.0,
+        retry_delay_sec: float = 1.0,
     ) -> Optional[Dict[str, Any]]:
         """Encode raw frame to JPEG binary and send via HTTP POST to intermediate server."""
         return self.stream_frame_post(
@@ -225,7 +227,7 @@ class EdgeCameraClient:
         self,
         frame_bgr: np.ndarray,
         timestamp_ms: int,
-        timeout: float = 2.0,
+        timeout: float = 6.0,
         endpoint_path: Optional[str] = None,
         max_retries: int = 4,
         retry_delay_sec: float = 3.0,
@@ -410,7 +412,7 @@ class EdgeCameraClient:
 
                 # Send frame to server
                 try:
-                    result = self.send_frame(frame, now_ms)
+                    result = self.send_frame(frame, now_ms, timeout=self.stream_timeout)
                     if result:
                         self.latest_server_result = result
                         threat = result.get("highest_threat", "LOW")
