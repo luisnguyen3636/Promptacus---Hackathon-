@@ -3,70 +3,182 @@ import { ISocOverview, ICameraDevice, IIncidentItem } from '../types/soc.ts';
 import { MOCK_OVERVIEW, MOCK_CAMERAS, MOCK_INCIDENTS } from '../data/mockData.ts';
 
 /**
- * Universal Mapper for Cloudflare KV Incident Objects
- * Perfectly extracts flat properties and nested parsed_json fields matching DeepSeek KV output:
- * { event_id, raw_response, parsed_json, model_used, latency_ms, timestamp }
+ * Universal Mapper for Server JSON & Cloudflare KV Incident Objects
+ * Maps all fields from the server's JSON format:
+ * { status, camera_id, location, timestamp, measured_fps, frame_index, human_count,
+ *   severity, action_type, threat_score, confidence, is_urgent, description,
+ *   reasoning, recommended_action, actors, visual_cues, nvidia_vlm_analysis }
  */
 export function mapKvIncidentItem(item: any): IIncidentItem {
   if (!item) {
     return {
       id: `EVT_${Date.now()}`,
-      title: 'NORMAL',
-      subTitle: 'Laptop Client Zone',
+      title: 'UNKNOWN',
+      subTitle: '',
       sourceIp: '127.0.0.1',
       category: 'PHYSICAL_CAMERA',
-      severity: 'MEDIUM',
+      severity: 'LOW',
       timestamp: new Date().toISOString(),
       status: 'PENDING_VERIFICATION',
     };
   }
 
+  const raw = item.rawDetection || item;
+  const vlm = item.nvidiaVlmAnalysis || item.nvidia_vlm_analysis || raw.nvidia_vlm_analysis;
   const parsed = item.parsed_json || {};
   const objDesc = parsed.object_description || item.object_description || {};
-  const eventId = item.event_id || item.id || `EVT_${Date.now()}`;
 
-  const primaryAction = objDesc.primary_action || item.title || item.engine_behavior || 'NORMAL';
-  const postureDetails = objDesc.posture_details || item.vlmAnalysis || `Detected action: ${primaryAction}`;
-  const kinematicsSummary =
-    objDesc.kinematics_summary ||
-    'Góc khuỷu tay phải: N/A°, Độ duỗi tay: N/Am, Vận tốc cổ tay: N/Apx/s';
-  const severity = (parsed.severity || item.severity || 'MEDIUM').toUpperCase() as any;
-  const investigationSummary =
+  const cameraId =
+    item.cameraId ||
+    item.camera_id ||
+    vlm?.camera_id ||
+    raw.camera_id ||
+    'LAPTOP_01';
+
+  const location =
+    item.location ||
+    item.subTitle ||
+    raw.location ||
+    vlm?.location ||
+    item.location_name ||
+    cameraId;
+
+  const actionType =
+    item.actionType ||
+    item.action_type ||
+    vlm?.action_type ||
+    objDesc.primary_action ||
+    item.title ||
+    'OBSERVED_EVENT';
+
+  const description =
+    item.description ||
+    raw.description ||
+    vlm?.description ||
     parsed.investigation_summary ||
-    item.raw_response ||
+    item.title ||
+    actionType;
+
+  const reasoning =
+    item.reasoning ||
+    raw.reasoning ||
+    vlm?.reasoning ||
     item.vlmAnalysis ||
-    item.deepseek_analysis?.investigation_summary ||
-    `[DeepSeek Forensic Engine] Hoạt động quan sát định kỳ tại ${item.location_name || 'Laptop Client Zone'}. Tiếp tục giám sát.`;
+    description;
+
+  const rawSeverity = String(
+    item.severity || raw.severity || vlm?.severity || parsed.severity || 'MEDIUM'
+  ).toUpperCase();
+  const severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' =
+    ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(rawSeverity)
+      ? (rawSeverity as any)
+      : 'MEDIUM';
+
+  const threatScore =
+    item.threatScore !== undefined
+      ? Number(item.threatScore)
+      : item.threat_score !== undefined
+      ? Number(item.threat_score)
+      : vlm?.threat_score !== undefined
+      ? Number(vlm.threat_score)
+      : undefined;
+
+  const confidence =
+    item.confidence !== undefined
+      ? Number(item.confidence)
+      : vlm?.confidence !== undefined
+      ? Number(vlm.confidence)
+      : undefined;
+
+  const isUrgent =
+    item.isUrgent !== undefined
+      ? Boolean(item.isUrgent)
+      : item.is_urgent !== undefined
+      ? Boolean(item.is_urgent)
+      : vlm?.is_urgent !== undefined
+      ? Boolean(vlm.is_urgent)
+      : severity === 'CRITICAL';
+
+  const recommendedAction =
+    item.recommendedAction ||
+    item.recommended_action ||
+    vlm?.recommended_action ||
+    (isUrgent ? 'DISPATCH_SECURITY' : 'MONITOR');
+
+  const actors = item.actors || raw.actors || vlm?.actors || [];
+  const visualCues = item.visualCues || item.visual_cues || raw.visual_cues || vlm?.visual_cues;
+
+  const measuredFps =
+    item.measuredFps !== undefined
+      ? Number(item.measuredFps)
+      : item.measured_fps !== undefined
+      ? Number(item.measured_fps)
+      : undefined;
+
+  const frameIndex =
+    item.frameIndex !== undefined
+      ? Number(item.frameIndex)
+      : item.frame_index !== undefined
+      ? Number(item.frame_index)
+      : undefined;
+
+  const humanCount =
+    item.humanCount !== undefined
+      ? Number(item.humanCount)
+      : item.human_count !== undefined
+      ? Number(item.human_count)
+      : actors.length;
+
+  const eventId =
+    item.id ||
+    item.eventId ||
+    item.event_id ||
+    `EVT_${cameraId}_${frameIndex ?? Date.now()}`;
+
+  const actorPostures = actors
+    .map((a: any) => `#${a.id} (${a.role}): ${a.action} - ${a.posture}`)
+    .join(' | ');
+
+  const title = item.title || `${actionType} — ${description}`;
 
   return {
     id: eventId,
-    eventId: eventId,
-    title: primaryAction,
-    subTitle: item.location_name || item.subTitle || item.camera_id || 'Laptop Client Zone',
-    sourceIp: item.camera_id || item.sourceIp || '127.0.0.1',
+    eventId,
+    title,
+    subTitle: location,
+    sourceIp: item.sourceIp || cameraId,
     category: 'PHYSICAL_CAMERA',
-    severity: severity,
-    timestamp: item.timestamp || item.evidence_timeline?.event_trigger || 'Vừa xong',
-    cameraId: item.camera_id || null,
-    cameraSnapshots: {
-      eventPeakSnapshotUrl: item.visual_evidence?.snapshot_url || item.snapshot_url || null,
-      preEventSnapshotUrl: item.visual_evidence?.crop_url || item.crop_url || null,
-    },
-    playbackUrl: item.visual_evidence?.snapshot_url || item.snapshot_url || null,
-    status: item.operator_status || 'PENDING_VERIFICATION',
-    vlmAnalysis: investigationSummary,
-    rawResponse: item.raw_response || investigationSummary,
-    threatVerdict: parsed.threat_verdict || item.deepseek_analysis?.threat_verdict || 'OBSERVED_ACTIVITY',
-    role: objDesc.role || 'bystander',
-    postureDetails: postureDetails,
-    kinematicsSummary: kinematicsSummary,
-    weaponDetected: objDesc.weapon_detected !== undefined ? objDesc.weapon_detected : null,
-    weaponConfidence: objDesc.weapon_confidence !== undefined ? objDesc.weapon_confidence : 0,
-    keypointsCount: objDesc.keypoints_count || 17,
-    modelUsed: item.model_used || item.deepseek_analysis?.model || '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
-    latencyMs: item.latency_ms !== undefined ? item.latency_ms : 925,
-    parsedJson: parsed,
-    fullImageBase64: item.visual_evidence?.snapshot_url || item.snapshot_url || null,
+    severity,
+    timestamp: item.timestamp || vlm?.timestamp || new Date().toISOString(),
+    cameraId,
+    location,
+    measuredFps,
+    frameIndex,
+    humanCount,
+    actionType,
+    threatScore,
+    confidence,
+    isUrgent,
+    description,
+    reasoning,
+    recommendedAction,
+    actors,
+    visualCues,
+    nvidiaVlmAnalysis: vlm,
+    cameraSnapshots: item.cameraSnapshots || null,
+    playbackUrl: item.playbackUrl || null,
+    status: item.status || item.operator_status || 'PENDING_VERIFICATION',
+    vlmAnalysis: reasoning || description,
+    rawResponse: reasoning,
+    threatVerdict: recommendedAction,
+    role: actors[0]?.role || objDesc.role,
+    postureDetails: actorPostures || objDesc.posture_details || description,
+    kinematicsSummary: visualCues
+      ? `Vũ khí: ${visualCues.weapons_visible ? 'CÓ' : 'Không'} · Va chạm vật lý: ${
+          visualCues.physical_contact ? 'CÓ' : 'Không'
+        } · Người ngã: ${visualCues.fallen_person ? 'CÓ' : 'Không'}`
+      : undefined,
+    fullImageBase64: item.fullImageBase64 || null,
   };
 }
 
@@ -77,10 +189,9 @@ export function useSocTelemetry() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
 
-  // 1. Fetch REST Telemetry
   const fetchData = useCallback(async () => {
     try {
-      const resOverview = await fetch('/api/soc/overview', { signal: AbortSignal.timeout(1500) });
+      const resOverview = await fetch('/api/soc/overview', { signal: AbortSignal.timeout(2000) });
       if (resOverview.ok) {
         const data = await resOverview.json();
         setOverview(data);
@@ -91,39 +202,27 @@ export function useSocTelemetry() {
     }
 
     try {
-      const resCameras = await fetch('/api/devices/cameras', { signal: AbortSignal.timeout(1500) });
+      const resCameras = await fetch('/api/devices/cameras', { signal: AbortSignal.timeout(2000) });
       if (resCameras.ok) {
         const data = await resCameras.json();
-        setCameras(data);
+        if (Array.isArray(data)) {
+          setCameras(data);
+        }
       }
     } catch {
       // Giữ state hiện tại
     }
 
     try {
-      // Continuous polling for DeepSeek analyzed incidents from Cloudflare KV
-      const resIncidents = await fetch('/api/get-incident', { signal: AbortSignal.timeout(1500) });
+      const resIncidents = await fetch('/api/get-incident', { signal: AbortSignal.timeout(2000) });
       if (resIncidents.ok) {
         const result = await resIncidents.json();
-
-        if (result && Array.isArray(result.incidents) && result.incidents.length > 0) {
-          const mapped = result.incidents.map(mapKvIncidentItem);
-          setIncidents(mapped);
-        } else if (Array.isArray(result) && result.length > 0) {
-          const mapped = result.map(mapKvIncidentItem);
-          setIncidents(mapped);
-        } else if (result && (result.event_id || result.parsed_json)) {
-          const mapped = [mapKvIncidentItem(result)];
-          setIncidents(mapped);
-        } else {
-          // Fallback if no deepseek incidents yet
-          const resFallback = await fetch('/api/incidents/recent', { signal: AbortSignal.timeout(1500) });
-          if (resFallback.ok) {
-            const data = await resFallback.json();
-            if (Array.isArray(data) && data.length > 0) {
-              setIncidents(data.map(mapKvIncidentItem));
-            }
-          }
+        if (result && Array.isArray(result.incidents)) {
+          setIncidents(result.incidents.map(mapKvIncidentItem));
+        } else if (Array.isArray(result)) {
+          setIncidents(result.map(mapKvIncidentItem));
+        } else if (result && (result.id || result.event_id || result.camera_id)) {
+          setIncidents([mapKvIncidentItem(result)]);
         }
       }
     } catch {
@@ -133,14 +232,12 @@ export function useSocTelemetry() {
     }
   }, []);
 
-  // 2. Chu kỳ REST Polling tối ưu 1000ms (1s Realtime KV Sync)
   useEffect(() => {
     fetchData();
     const cycle = setInterval(fetchData, 1000);
     return () => clearInterval(cycle);
   }, [fetchData]);
 
-  // 3. Kết nối WebSocket Live AI Tracking Stream
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimeout: ReturnType<typeof setTimeout>;
@@ -167,7 +264,7 @@ export function useSocTelemetry() {
               fetchData();
             }
           } catch {
-            // Bỏ qua gói tin lỗi
+            // Ignore malformed message
           }
         };
 

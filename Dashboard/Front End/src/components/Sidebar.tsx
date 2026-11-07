@@ -11,17 +11,34 @@ import {
 interface SidebarProps {
   activeTab?: string;
   onSelectTab?: (tab: string) => void;
+  activeThreatCount?: number;
+  cameraCount?: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab = 'SOC Dashboard',
-  onSelectTab
+  onSelectTab,
+  activeThreatCount = 0,
+  cameraCount = 0
 }) => {
   const operations = [
     { name: 'SOC Dashboard', icon: LayoutDashboard },
-    { name: 'Threat Intelligence', icon: AlertTriangle, badge: '5' },
-    { name: 'Incident Feed', icon: Activity },
-    { name: 'Device Manager', icon: Server },
+    {
+      name: 'Threat Intelligence',
+      icon: AlertTriangle,
+      badge: activeThreatCount > 0 ? String(activeThreatCount) : undefined
+    },
+    {
+      name: 'Incident Feed',
+      icon: Activity,
+      badge: activeThreatCount > 0 ? String(activeThreatCount) : undefined
+    },
+    {
+      name: 'Device Manager',
+      icon: Server,
+      badge: cameraCount > 0 ? String(cameraCount) : undefined,
+      isInfoBadge: true
+    }
   ];
 
   return (
@@ -33,11 +50,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         <div className="min-w-0 truncate">
           <div className="font-bold text-sm tracking-wide text-[#10B981] truncate">CYBERGUARD</div>
-          <div className="text-[10px] text-[#64748B] font-mono tracking-wider truncate">AI · SOC v2.1</div>
+          <div className="text-[10px] text-[#64748B] font-mono tracking-wider truncate">SOC DASHBOARD v2.1</div>
         </div>
       </div>
 
-      {/* Nhóm OPERATIONS (7 mục chuẩn xác theo SPEC) */}
+      {/* Nhóm OPERATIONS */}
       <div className="px-4 pt-4 pb-2 text-[10px] font-mono text-[#64748B] tracking-wider uppercase shrink-0">
         OPERATIONS
       </div>
@@ -50,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={item.name}
               onClick={() => onSelectTab && onSelectTab(item.name)}
-              className={`w-full flex items-center gap-3 px-4 py-2.5 text-left text-xs transition-colors duration-150 min-w-0 ${
+              className={`w-full flex items-center gap-3 px-4 py-2.5 text-left text-xs transition-colors duration-150 min-w-0 cursor-pointer ${
                 isActive
                   ? 'bg-[#112224] text-[#10B981] font-semibold border-l-[3px] border-[#10B981]'
                   : 'text-[#94A3B8] hover:bg-[#0E131A] hover:text-white border-l-[3px] border-transparent'
@@ -59,7 +76,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-[#10B981]' : 'text-slate-400'}`} />
               <span className="flex-1 truncate" title={item.name}>{item.name}</span>
               {item.badge && (
-                <span className="bg-[#991B1B] border border-[#DC2626] text-white font-mono text-[10px] font-bold px-1.5 py-0.2 shrink-0 ml-auto">
+                <span
+                  className={`${
+                    item.isInfoBadge
+                      ? 'bg-[#112224] border border-[#10B981] text-[#10B981]'
+                      : 'bg-[#991B1B] border border-[#DC2626] text-white'
+                  } font-mono text-[10px] font-bold px-1.5 py-0.2 shrink-0 ml-auto`}
+                >
                   {item.badge}
                 </span>
               )}
@@ -77,24 +100,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Settings */}
         <button
           onClick={() => onSelectTab && onSelectTab('Settings')}
-          className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-xs text-[#94A3B8] hover:bg-[#0E131A] hover:text-white border-l-[3px] border-transparent transition-colors min-w-0"
+          className={`w-full flex items-center gap-3 px-4 py-2.5 text-left text-xs transition-colors min-w-0 cursor-pointer ${
+            activeTab === 'Settings'
+              ? 'bg-[#112224] text-[#10B981] font-semibold border-l-[3px] border-[#10B981]'
+              : 'text-[#94A3B8] hover:bg-[#0E131A] hover:text-white border-l-[3px] border-transparent'
+          }`}
         >
-          <Settings className="w-4 h-4 text-slate-400 shrink-0" />
+          <Settings
+            className={`w-4 h-4 shrink-0 ${
+              activeTab === 'Settings' ? 'text-[#10B981]' : 'text-slate-400'
+            }`}
+          />
           <span className="truncate">Settings</span>
         </button>
       </nav>
-
-      {/* Hộp Trạng thái Đáy (SYSTEM ACTIVE) */}
-      <div className="m-4 p-3 bg-[#0E131A] border border-[#1E2631] shrink-0">
-        <div className="flex items-center gap-2 mb-1.5">
-          <span className="w-2 h-2 bg-[#10B981] animate-pulse shrink-0"></span>
-          <span className="font-bold text-[11px] text-[#10B981] tracking-wide truncate">SYSTEM ACTIVE</span>
-        </div>
-        <div className="text-[10px] font-mono text-[#94A3B8] truncate">
-          Threat DB: <span className="text-slate-300">v2024.12</span>
-        </div>
-        <div className="text-[10px] font-mono text-white font-bold truncate">Engine: Online</div>
-      </div>
     </aside>
   );
 };

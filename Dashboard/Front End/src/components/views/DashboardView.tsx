@@ -2,10 +2,9 @@ import React, { useState } from 'react';
 import { KpiCards } from '../KpiCards.tsx';
 import { CameraMatrix } from '../CameraMatrix/CameraMatrix.tsx';
 import { AlertLogModule } from '../AlertLog/AlertLogModule.tsx';
-import { AiMetricsGrid } from '../AiMetricsGrid/AiMetricsGrid.tsx';
 import { RecentThreatsTable } from '../RecentThreats/RecentThreatsTable.tsx';
 import { ISocOverview, ICameraDevice, IIncidentItem } from '../../types/soc.ts';
-import { Volume2, VolumeX, FileText, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Volume2, VolumeX, FileText } from 'lucide-react';
 
 interface DashboardViewProps {
   overview: ISocOverview;
@@ -25,32 +24,44 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onToast,
 }) => {
   const [isSirenMuted, setIsSirenMuted] = useState<boolean>(false);
-  const [isLockdownActive, setIsLockdownActive] = useState<boolean>(false);
-  // State quản lý phóng to camera quan sát chi tiết
   const [zoomedCameraId, setZoomedCameraId] = useState<string | null>(null);
 
   const handleToggleSiren = () => {
     setIsSirenMuted(!isSirenMuted);
-    onToast?.(isSirenMuted ? '[SOC AUDIO] Còi báo động đã kích hoạt' : '[SOC AUDIO] Còi báo động đã tắt tiếng');
+    onToast?.(
+      isSirenMuted
+        ? '[SOC AUDIO] Còi báo động đã kích hoạt'
+        : '[SOC AUDIO] Còi báo động đã tắt tiếng'
+    );
   };
 
   const handleExportReport = () => {
-    onToast?.('[REPORT GENERATED] Đã trích xuất báo cáo ca trực SOC (PDF/CSV)');
-  };
-
-  const handleToggleLockdown = () => {
-    setIsLockdownActive(!isLockdownActive);
-    onToast?.(
-      !isLockdownActive
-        ? '[EMERGENCY ALERT] KÍCH HOẠT CHẾ ĐỘ PHÒNG THỦ KHẨN CẤP (LOCKDOWN)'
-        : '[SOC NORMALIZED] Đã hủy chế độ phòng thủ khẩn cấp'
-    );
+    const reportData = {
+      generatedAt: new Date().toISOString(),
+      overview,
+      cameras,
+      incidents,
+    };
+    const blob = new Blob([JSON.stringify(reportData, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `soc-shift-report-${Date.now()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    onToast?.('[REPORT GENERATED] Đã tải xuống báo cáo ca trực SOC (JSON)');
   };
 
   const handleToggleZoom = (camId: string | null) => {
     setZoomedCameraId(camId);
     if (camId) {
-      onToast?.(`[CAMERA ZOOM] Đang quan sát cận cảnh camera: ${camId}. Alert Log chuyển thành menu phải (20% width).`);
+      onToast?.(
+        `[CAMERA ZOOM] Đang quan sát cận cảnh camera: ${camId}. Alert Log mở rộng thành menu phải (20% width).`
+      );
     } else {
       onToast?.('[CAMERA ZOOM] Đã trở về ma trận 2x2 tiêu chuẩn.');
     }
@@ -89,19 +100,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <FileText className="w-3.5 h-3.5" />
             <span>XUẤT BÁO CÁO CA TRỰC</span>
           </button>
-
-          {/* Nút Lockdown */}
-          <button
-            onClick={handleToggleLockdown}
-            className={`px-3 py-1 border font-mono text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
-              isLockdownActive
-                ? 'bg-[#7F1D1D] border-[#DC2626] text-white animate-pulse'
-                : 'bg-[#161E29] border-[#2D3748] text-slate-300 hover:border-[#DC2626] hover:text-[#DC2626]'
-            }`}
-          >
-            {isLockdownActive ? <ShieldAlert className="w-3.5 h-3.5" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-            <span>{isLockdownActive ? 'LOCKDOWN: ĐANG BẬT' : 'PHÒNG THỦ KHẨN CẤP'}</span>
-          </button>
         </div>
       </div>
 
@@ -113,7 +111,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           - Khi phóng to quan sát: Camera chiếm 80% width (chia đều), Alert Log mở rộng thành right menu modal 20% width */}
       {zoomedCameraId ? (
         <section className="flex gap-4 min-w-0 transition-all duration-200">
-          {/* Khu vực Camera chiếm 80% width */}
           <div className="w-[80%] min-w-0">
             <CameraMatrix
               cameras={cameras}
@@ -123,7 +120,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             />
           </div>
 
-          {/* Khu vực Alert Log mở rộng thành Right Menu Modal chiếm đúng 20% width */}
           <div className="w-[20%] min-w-0">
             <AlertLogModule
               threatScore={overview.threatScore}
@@ -138,7 +134,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </section>
       ) : (
         <section className="grid grid-cols-12 gap-4 min-w-0 transition-all duration-200">
-          {/* Lưới 2x2 tiêu chuẩn: 8 cột (68-70%) */}
           <div className="col-span-8 min-w-0">
             <CameraMatrix
               cameras={cameras}
@@ -148,7 +143,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             />
           </div>
 
-          {/* Alert Log Rút gọn tiêu chuẩn: 4 cột (30-32%) */}
           <div className="col-span-4 min-w-0">
             <AlertLogModule
               threatScore={overview.threatScore}
@@ -162,12 +156,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </section>
       )}
 
-      {/* Hàng 3: Thống Kê Hiệu Năng AI & Phân Bố Đối Tượng */}
-      <div className="min-w-0">
-        <AiMetricsGrid cameras={cameras} />
-      </div>
-
-      {/* Hàng 4: Bảng Sự cố & Xem lại Camera (RECENT THREATS) */}
+      {/* Hàng 3: Bảng Sự cố & Xem lại Camera (RECENT THREATS) */}
       <div className="min-w-0">
         <RecentThreatsTable
           incidents={incidents}

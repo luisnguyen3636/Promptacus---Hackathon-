@@ -3,10 +3,10 @@
  * Enforces dual Human-in-the-Loop directives [CD-04] and immutable SOC traceability [CD-05].
  */
 
-import { updateIncidentStatus, getRecentIncidents } from "./incident_manager";
-import { updateThreatScore } from "./telemetry";
-import { D1IncidentVault } from "./db";
-import { IHitlVerificationRequest, IHitlVerificationResponse, IIncidentDispatchPackage, Env } from "./types";
+import { updateIncidentStatus, getRecentIncidents } from "./incident_manager.ts";
+import { updateThreatScore } from "./telemetry.ts";
+import { D1IncidentVault } from "./db.ts";
+import type { IHitlVerificationRequest, IHitlVerificationResponse, IIncidentDispatchPackage, Env } from "./types.ts";
 
 let memoryAuditLogs: Array<{
   auditId: string;
@@ -80,10 +80,10 @@ export async function processHitlVerification(
 
   const timestamp = verifiedAt || new Date().toISOString();
   let incidentPackage: IIncidentDispatchPackage | null = null;
-  let newThreatScore = 12;
+  let newThreatScore = 0;
 
   if (decision === "CONFIRM_AND_DISPATCH") {
-    updateIncidentStatus(incidentId, "OPERATOR_CONFIRMED");
+    await updateIncidentStatus(incidentId, "OPERATOR_CONFIRMED", env);
 
     const targetIncident = getRecentIncidents().find((i) => i.id === incidentId);
     const rawDet = targetIncident?.rawDetection;
@@ -95,19 +95,19 @@ export async function processHitlVerification(
       dispatchedByOperator: operatorId,
       verifiedAt: timestamp,
       camera: {
-        id: targetIncident?.cameraId || rawDet?.camera?.camera_id || "UNKNOWN_CAMERA",
-        name: rawDet?.camera?.name || "Giám sát camera",
+        id: targetIncident?.cameraId || rawDet?.camera_id || rawDet?.camera?.camera_id || "UNKNOWN_CAMERA",
+        name: targetIncident?.location || rawDet?.location || rawDet?.camera?.name || "Giám sát camera",
         zoneId: rawDet?.camera?.zone_id || "ZONE_SOC",
-        address: rawDet?.camera?.address || "Hiện trường vụ việc"
+        address: targetIncident?.location || rawDet?.location || rawDet?.camera?.address || "Hiện trường vụ việc"
       },
       coordinates: {
-        latitude: rawDet?.camera?.latitude || 21.028511,
-        longitude: rawDet?.camera?.longitude || 105.854444
+        latitude: rawDet?.camera?.latitude || 0,
+        longitude: rawDet?.camera?.longitude || 0
       },
       threatAssessment: {
         severity: targetIncident?.severity || "HIGH",
-        threatScore: rawDet?.detection?.threat_score || 0.95,
-        reasoning: targetIncident?.vlmAnalysis || "Phát hiện mối đe dọa bất thường"
+        threatScore: targetIncident?.threatScore || rawDet?.threat_score || rawDet?.detection?.threat_score || 0.94,
+        reasoning: targetIncident?.reasoning || targetIncident?.vlmAnalysis || "Phát hiện mối đe dọa bất thường"
       },
       visualEvidence: {
         annotatedSnapshot: targetIncident?.cameraSnapshots?.eventPeakSnapshotUrl || targetIncident?.fullImageBase64 || null,
@@ -116,18 +116,21 @@ export async function processHitlVerification(
       },
       dispatchStatus: "DISPATCHED_TO_EMERGENCY_AUTHORITIES",
       urgency: "IMMEDIATE_INTERVENTION",
-      notes: notes || "Xác nhận hành vi xâm nhập thực tế từ video bằng chứng."
+      notes: notes || "Xác nhận sự cố thực tế từ dữ liệu giám sát."
     };
 
-    newThreatScore = 8;
+    const remainingPending = getRecentIncidents().filter((i) => i.status === "PENDING_VERIFICATION");
+    newThreatScore = remainingPending.length > 0 ? Math.round((remainingPending[0].threatScore || 0.5) * 100) : 0;
     updateThreatScore(newThreatScore);
   } else if (decision === "DOWNGRADE_MONITOR") {
-    updateIncidentStatus(incidentId, "DOWNGRADED_MONITORING");
-    newThreatScore = 10;
+    await updateIncidentStatus(incidentId, "DOWNGRADED_MONITORING", env);
+    const remainingPending = getRecentIncidents().filter((i) => i.status === "PENDING_VERIFICATION");
+    newThreatScore = remainingPending.length > 0 ? Math.round((remainingPending[0].threatScore || 0.25) * 100) : 0;
     updateThreatScore(newThreatScore);
   } else if (decision === "DISMISS_FALSE_POSITIVE") {
-    updateIncidentStatus(incidentId, "DISMISSED");
-    newThreatScore = 5;
+    await updateIncidentStatus(incidentId, "DISMISSED", env);
+    const remainingPending = getRecentIncidents().filter((i) => i.status === "PENDING_VERIFICATION");
+    newThreatScore = remainingPending.length > 0 ? Math.round((remainingPending[0].threatScore || 0) * 100) : 0;
     updateThreatScore(newThreatScore);
   } else {
     throw new Error(`Invalid decision: ${decision}`);

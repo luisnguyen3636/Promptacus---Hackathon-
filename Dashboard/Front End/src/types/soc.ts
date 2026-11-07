@@ -1,6 +1,6 @@
 /**
- * CYBERGUARD AI · SOC v2.1 — DATA CONTRACTS & TYPE DEFINITIONS
- * Đồng bộ với SPEC.md và Dashboard/Back End/standard.md
+ * CYBERGUARD SOC — DATA CONTRACTS & TYPE DEFINITIONS
+ * Pure Display & Operational HITL Dashboard synchronized with Cloudflare KV.
  */
 
 export type ThreatLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
@@ -42,6 +42,38 @@ export interface IAiBoundingBox {
   h: number; // 0.0 - 1.0 (relative)
 }
 
+export interface IServerActor {
+  id: number | string;
+  role: string;
+  action: string;
+  posture: string;
+  interacting_with?: number | string | null;
+  bbox?: [number, number, number, number];
+}
+
+export interface IServerVisualCues {
+  weapons_visible: boolean;
+  physical_contact: boolean;
+  fallen_person: boolean;
+}
+
+export interface INvidiaVlmAnalysis {
+  severity: string;
+  timestamp: string;
+  action_type: string;
+  confidence: number;
+  threat_score: number;
+  description: string;
+  reasoning: string;
+  actors?: IServerActor[];
+  visual_cues?: IServerVisualCues;
+  recommended_action?: string;
+  is_urgent?: boolean;
+  camera_id?: string;
+  location?: string;
+  source?: string;
+}
+
 export interface ICameraDevice {
   id: string;
   name: string;
@@ -59,55 +91,17 @@ export interface ICameraDevice {
     focus: string;
   };
   boundingBoxes: IAiBoundingBox[];
-}
-
-export interface ICompactAlertLog {
-  id: string;
-  eventId: string;
-  timestamp: string;
-  cameraId: string;
-  cameraName: string;
-  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-  behavior: string;
-  confidence?: number;
-  status: string;
-  reasoningSnippet: string;
-  rawIncident?: IIncidentItem;
+  location?: string;
+  address?: string;
+  measuredFps?: number;
+  frameIndex?: number;
+  humanCount?: number;
+  lastTimestamp?: string;
 }
 
 export interface ICameraSnapshots {
   preEventSnapshotUrl: string;
   eventPeakSnapshotUrl: string;
-}
-
-export interface IDeepSeekObjectDescription {
-  primary_action: string;
-  role: 'suspect' | 'victim' | 'bystander' | string;
-  posture_details: string;
-  weapon_detected: string | null;
-  weapon_confidence: number;
-  kinematics_summary: string;
-  keypoints_count: number;
-}
-
-export interface IDeepSeekParsedJson {
-  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-  threat_verdict: string;
-  investigation_summary: string;
-  object_description: IDeepSeekObjectDescription;
-}
-
-export interface IStandardKvIncidentOutput {
-  event_id: string;
-  raw_response: string;
-  parsed_json: IDeepSeekParsedJson;
-  model_used: string;
-  latency_ms: number;
-  timestamp: string;
-  id?: string;
-  camera_id?: string;
-  location_name?: string;
-  operator_status?: 'PENDING_VERIFICATION' | 'AWAITING_OPERATOR_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED';
 }
 
 export interface IIncidentItem {
@@ -120,13 +114,27 @@ export interface IIncidentItem {
   severity: IncidentSeverity;
   timestamp: string;
   cameraId?: string | null;
+  location?: string;
+  measuredFps?: number;
+  frameIndex?: number;
+  humanCount?: number;
+  actionType?: string;
+  threatScore?: number;
+  confidence?: number;
+  isUrgent?: boolean;
+  description?: string;
+  reasoning?: string;
+  recommendedAction?: string;
+  actors?: IServerActor[];
+  visualCues?: IServerVisualCues;
+  nvidiaVlmAnalysis?: INvidiaVlmAnalysis;
   cameraSnapshots?: ICameraSnapshots | null;
   playbackUrl?: string | null;
   vlmAnalysis?: string;
   rawResponse?: string;
-  status: 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED';
+  status: 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DOWNGRADED_MONITORING' | 'DISMISSED';
 
-  // Rich metadata from parsed_json
+  // Legacy fields for backwards compatibility
   threatVerdict?: string;
   role?: string;
   postureDetails?: string;
@@ -136,8 +144,29 @@ export interface IIncidentItem {
   keypointsCount?: number;
   modelUsed?: string;
   latencyMs?: number;
-  parsedJson?: IDeepSeekParsedJson;
   fullImageBase64?: string | null;
+}
+
+export interface ISocSettings {
+  operatorId: string;
+  operatorName: string;
+  shiftRotation: string;
+  liveStreamUrl: string;
+  criticalThreshold: number;
+  preBufferSeconds: number;
+  postBufferSeconds: number;
+  dispatchWebhook: string;
+  autoSirenOnCritical: boolean;
+  updatedAt?: string;
+}
+
+export interface IOperatorSession {
+  token: string;
+  operatorId: string;
+  operatorName: string;
+  role: string;
+  shift: string;
+  loggedInAt: string;
 }
 
 export interface IPtzCommandPayload {

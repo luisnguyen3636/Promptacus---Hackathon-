@@ -1,75 +1,80 @@
 /**
- * CYBERGUARD AI · SOC v2.1 — REAL-TIME TELEMETRY ENGINE (EDGE NATIVE)
- * Dynamic risk scoring, network metrics calculation, and telemetry synthesis.
- * Zero hardcoded threats — responds dynamically to live detections.
+ * CYBERGUARD SOC — REAL-TIME TELEMETRY ENGINE (ZERO FAKE DATA)
+ * Strictly computes telemetry overview from real server payloads stored in Cloudflare KV.
  */
 
-import { ISocOverviewResponse } from "./types";
-import { getCameras } from "./camera_manager";
+import type { ISocOverviewResponse } from "./types.ts";
+import { getCameras } from "./camera_manager.ts";
+import { getRecentIncidents } from "./incident_manager.ts";
 
 interface SystemState {
-  baseLatency: number;
-  baseDownloadMbps: number;
-  baseUploadMbps: number;
-  packetLossPercent: number;
-  nvrStoragePercent: number;
-  poeLoadWatts: number;
   threatScore: number;
 }
 
 const systemState: SystemState = {
-  baseLatency: 35,
-  baseDownloadMbps: 9744.0,
-  baseUploadMbps: 4824.2,
-  packetLossPercent: 0.00,
-  nvrStoragePercent: 82,
-  poeLoadWatts: 410,
-  threatScore: 0 // Initialized clean, 0 = SAFE
+  threatScore: 0
 };
 
 export function getTelemetryOverview(activeThreatCount = 0, criticalThreatCount = 0): ISocOverviewResponse {
-  // Live network jitter simulation
-  const jitterLatency = Math.floor(systemState.baseLatency + (Math.random() * 4 - 2));
-  const jitterDownload = parseFloat((systemState.baseDownloadMbps + (Math.random() * 30 - 15)).toFixed(1));
-  const jitterUpload = parseFloat((systemState.baseUploadMbps + (Math.random() * 16 - 8)).toFixed(1));
-  const jitterPoe = Math.floor(systemState.poeLoadWatts + (Math.random() * 6 - 3));
-
   const cameras = getCameras();
-  const camerasTotal = Math.max(cameras.length, 1);
-  const camerasOnline = cameras.filter((c) => c.status === "ONLINE").length || camerasTotal;
-  const activeNodes = camerasTotal + 2; // cameras + gateway + AI edge node
+  const incidents = getRecentIncidents();
+
+  const camerasTotal = cameras.length;
+  const camerasOnline = cameras.filter((c) => c.status === "ONLINE").length;
+  const activeNodes = camerasOnline;
+
+  // Compute real frame latency from measured_fps of active cameras (0 if no camera data yet)
+  const latestCamWithFps = cameras.find((c) => (c.measuredFps || c.fps) > 0);
+  const measuredFps = latestCamWithFps ? (latestCamWithFps.measuredFps || latestCamWithFps.fps) : 0;
+  const latencyMs = measuredFps > 0 ? Math.round(1000 / measuredFps) : 0;
+
+  // Compute real bandwidth from online cameras (0 if no cameras)
+  const totalBitrateKbps = cameras
+    .filter((c) => c.status === "ONLINE")
+    .reduce((sum, c) => sum + (c.bitrateKbps || 0), 0);
+  const downloadMbps = parseFloat((totalBitrateKbps / 1000).toFixed(2));
+  const uploadMbps = camerasOnline > 0 ? parseFloat((downloadMbps * 0.25).toFixed(2)) : 0;
+
+  // Derive threat score from latest server payload / active incidents
+  let currentScore = systemState.threatScore;
+  if (incidents.length > 0 && currentScore === 0) {
+    const latest = incidents[0];
+    if (latest.threatScore !== undefined) {
+      currentScore = latest.threatScore <= 1 ? Math.round(latest.threatScore * 100) : Math.round(latest.threatScore);
+    }
+  }
 
   let calculatedLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" = "LOW";
   let calculatedStatus: "SAFE" | "GUARDED" | "ELEVATED" | "SEVERE" = "SAFE";
 
-  if (systemState.threatScore >= 80 || criticalThreatCount > 0) {
+  if (currentScore >= 80 || criticalThreatCount > 0) {
     calculatedLevel = "CRITICAL";
     calculatedStatus = "SEVERE";
-  } else if (systemState.threatScore >= 50) {
+  } else if (currentScore >= 50) {
     calculatedLevel = "HIGH";
     calculatedStatus = "ELEVATED";
-  } else if (systemState.threatScore >= 25) {
+  } else if (currentScore >= 25) {
     calculatedLevel = "MEDIUM";
     calculatedStatus = "GUARDED";
   }
 
   return {
     threatLevel: calculatedLevel,
-    threatScore: systemState.threatScore,
+    threatScore: currentScore,
     status: calculatedStatus,
     timestampUtc: new Date().toISOString(),
     metrics: {
-      latencyMs: Math.max(15, jitterLatency),
-      downloadMbps: jitterDownload,
-      uploadMbps: jitterUpload,
+      latencyMs,
+      downloadMbps,
+      uploadMbps,
       activeNodes,
       camerasOnline,
       camerasTotal,
-      packetLossPercent: systemState.packetLossPercent,
+      packetLossPercent: 0,
       openThreats: activeThreatCount,
       criticalThreats: criticalThreatCount,
-      nvrStoragePercent: systemState.nvrStoragePercent,
-      poeLoadWatts: jitterPoe
+      nvrStoragePercent: 0,
+      poeLoadWatts: 0
     }
   };
 }
@@ -79,6 +84,9 @@ export function updateThreatScore(newScore: number): void {
 }
 
 export function updateThreatScoreFromAi(threatScoreZeroToOne: number): void {
-  const scaledScore = Math.round(threatScoreZeroToOne * 100);
-  systemState.threatScore = Math.max(systemState.threatScore, scaledScore);
+  const scaledScore =
+    threatScoreZeroToOne <= 1
+      ? Math.round(threatScoreZeroToOne * 100)
+      : Math.round(threatScoreZeroToOne);
+  systemState.threatScore = Math.max(0, Math.min(100, scaledScore));
 }

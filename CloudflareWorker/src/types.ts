@@ -73,6 +73,86 @@ export interface IPtzState {
   focus: string;
 }
 
+export interface IServerActor {
+  id: number | string;
+  role: string;
+  action: string;
+  posture: string;
+  interacting_with?: number | string | null;
+  bbox?: [number, number, number, number];
+}
+
+export interface IServerVisualCues {
+  weapons_visible: boolean;
+  physical_contact: boolean;
+  fallen_person: boolean;
+}
+
+export interface INvidiaVlmAnalysis {
+  severity: string;
+  timestamp: string;
+  action_type: string;
+  confidence: number;
+  threat_score: number;
+  description: string;
+  reasoning: string;
+  actors?: IServerActor[];
+  visual_cues?: IServerVisualCues;
+  recommended_action?: string;
+  is_urgent?: boolean;
+  camera_id?: string;
+  location?: string;
+  source?: string;
+}
+
+export interface IServerIngestPayload {
+  event_id?: string;
+  id?: string;
+  status?: string;
+  camera_id?: string;
+  location?: string;
+  timestamp?: string;
+  measured_fps?: number;
+  frame_index?: number;
+  human_count?: number;
+  severity?: string;
+  action_type?: string;
+  threat_score?: number;
+  confidence?: number;
+  is_urgent?: boolean;
+  description?: string;
+  reasoning?: string;
+  recommended_action?: string;
+  actors?: IServerActor[];
+  visual_cues?: IServerVisualCues;
+  nvidia_vlm_analysis?: INvidiaVlmAnalysis;
+  snapshot_url?: string;
+  image_base64?: string;
+  [key: string]: any;
+}
+
+export interface ISocSettings {
+  operatorId: string;
+  operatorName: string;
+  shiftRotation: string;
+  liveStreamUrl: string;
+  criticalThreshold: number;
+  preBufferSeconds: number;
+  postBufferSeconds: number;
+  dispatchWebhook: string;
+  autoSirenOnCritical: boolean;
+  updatedAt?: string;
+}
+
+export interface IOperatorSession {
+  token: string;
+  operatorId: string;
+  operatorName: string;
+  role: string;
+  shift: string;
+  loggedInAt: string;
+}
+
 export interface ICameraDevice {
   id: string;
   name: string;
@@ -81,11 +161,17 @@ export interface ICameraDevice {
   bitrateKbps: number;
   status: "ONLINE" | "OFFLINE" | "DEGRADED";
   streamUrl: string;
+  directStreamUrl?: string;
   ptzEnabled: boolean;
   ptzState: IPtzState;
   boundingBoxes: IAIBoundingBox[];
   zoneId?: string;
   address?: string;
+  location?: string;
+  measuredFps?: number;
+  frameIndex?: number;
+  humanCount?: number;
+  lastTimestamp?: string;
   latitude?: number;
   longitude?: number;
   lastSnapshotBase64?: string;
@@ -102,6 +188,7 @@ export interface IPtzCommandRequest {
 
 export interface IIncidentItem {
   id: string;
+  eventId?: string;
   title: string;
   subTitle: string;
   sourceIp: string;
@@ -109,6 +196,20 @@ export interface IIncidentItem {
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   timestamp: string;
   cameraId?: string | null;
+  location?: string;
+  measuredFps?: number;
+  frameIndex?: number;
+  humanCount?: number;
+  actionType?: string;
+  threatScore?: number;
+  confidence?: number;
+  isUrgent?: boolean;
+  description?: string;
+  reasoning?: string;
+  recommendedAction?: string;
+  actors?: IServerActor[];
+  visualCues?: IServerVisualCues;
+  nvidiaVlmAnalysis?: INvidiaVlmAnalysis;
   cameraSnapshots?: {
     preEventSnapshotUrl?: string;
     eventPeakSnapshotUrl?: string;

@@ -8,9 +8,7 @@ interface ThreatRowProps {
 }
 
 export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) => {
-  // 1. Status Square Color
   const isMedium = incident.severity === 'MEDIUM';
-  const isLow = incident.severity === 'LOW';
   const isCritical = incident.severity === 'CRITICAL';
   const isHigh = incident.severity === 'HIGH';
 
@@ -19,7 +17,6 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
   else if (isHigh) sqColor = 'bg-[#F97316]';
   else if (isMedium) sqColor = 'bg-[#EAB308]';
 
-  // 6. Badge Style
   let badgeStyle = 'border-[#10B981] text-[#10B981] bg-[#10B981]/10';
   if (isCritical) {
     badgeStyle = 'border-[#DC2626] text-[#DC2626] bg-[#DC2626]/15';
@@ -34,10 +31,16 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
       ? incident.timestamp.split('T')[1].substring(0, 8)
       : incident.timestamp || '--:--:--';
 
-  const secondaryDesc = incident.postureDetails || incident.subTitle || incident.category;
+  const secondaryDesc = incident.location || incident.reasoning || incident.subTitle || incident.category;
+  const scorePct =
+    incident.threatScore !== undefined
+      ? incident.threatScore <= 1
+        ? Math.round(incident.threatScore * 100)
+        : Math.round(incident.threatScore)
+      : 0;
 
   return (
-    <div className="grid grid-cols-[20px_55px_minmax(140px,1fr)_120px_120px_90px_105px] items-center gap-2.5 px-3 py-2 border-b border-[#1E2631] hover:bg-[#161E29]/60 transition-colors select-none min-w-[650px]">
+    <div className="grid grid-cols-[20px_65px_minmax(160px,1fr)_120px_120px_90px_105px] items-center gap-2.5 px-3 py-2 border-b border-[#1E2631] hover:bg-[#161E29]/60 transition-colors select-none min-w-[680px]">
       {/* 1. Status Square */}
       <div className="flex items-center justify-center min-w-0">
         <span className={`w-2 h-2 shrink-0 ${sqColor}`} />
@@ -48,13 +51,14 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
         {displayTime}
       </div>
 
-      {/* 3. Event Title (Fix tràn chữ bằng truncate + title tooltip) */}
+      {/* 3. Event Title & Location */}
       <div className="min-w-0 overflow-hidden pr-2">
         <div
           className="font-bold text-slate-100 text-xs truncate"
-          title={`[${incident.eventId || incident.id}] ${incident.title}`}
+          title={`[${incident.actionType || 'EVENT'}] ${incident.description || incident.title}`}
         >
-          {incident.title}
+          {incident.actionType ? `[${incident.actionType}] ` : ''}
+          {incident.description || incident.title}
         </div>
         <div
           className="text-[10px] text-slate-500 font-mono truncate"
@@ -64,15 +68,15 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
         </div>
       </div>
 
-      {/* 4. Source IP */}
+      {/* 4. Camera ID */}
       <div
-        className="font-mono text-slate-300 text-xs text-center min-w-0 truncate"
-        title={incident.sourceIp}
+        className="font-mono text-[#38BDF8] text-xs text-center font-bold min-w-0 truncate"
+        title={incident.cameraId || incident.sourceIp}
       >
-        {incident.sourceIp}
+        {incident.cameraId || incident.sourceIp}
       </div>
 
-      {/* 5. Camera Dual-Thumbnails */}
+      {/* 5. Telemetry / Snapshot Info */}
       <div className="min-w-0 shrink-0">
         {incident.cameraSnapshots?.eventPeakSnapshotUrl || incident.cameraSnapshots?.preEventSnapshotUrl ? (
           <div className="flex gap-1 items-center">
@@ -94,8 +98,9 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
             )}
           </div>
         ) : (
-          <div className="w-[52px] h-[30px] bg-[#121822] border border-[#1E2631] flex items-center justify-center text-slate-500 font-mono text-[9px] shrink-0">
-            NET_LOG
+          <div className="px-2 py-1 bg-[#121822] border border-[#1E2631] text-slate-300 font-mono text-[10px] shrink-0 text-center">
+            SCORE: <span className="text-[#10B981] font-bold">{scorePct}%</span>
+            {incident.humanCount !== undefined ? ` • ${incident.humanCount}P` : ''}
           </div>
         )}
       </div>
@@ -113,7 +118,7 @@ export const ThreatRow: React.FC<ThreatRowProps> = ({ incident, onPlayback }) =>
           onClick={() => onPlayback(incident)}
           className="bg-[#161E29] border border-[#2D3748] text-white hover:bg-[#1E2631] hover:border-[#10B981] hover:text-[#10B981] font-mono text-[10px] font-bold px-2 py-1 inline-flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap"
         >
-          <span>PLAYBACK</span>
+          <span>CHI TIẾT</span>
           <Play className="w-2.5 h-2.5 fill-current" />
         </button>
       </div>

@@ -1,16 +1,11 @@
 import React, { useState } from 'react';
 import { IIncidentItem, ISocMetrics, ThreatLevel } from '../../types/soc.ts';
 import {
-  AlertTriangle,
-  ShieldAlert,
   ShieldCheck,
   Clock,
   Eye,
   ChevronRight,
-  Filter,
-  CheckCircle,
-  XCircle,
-  Bell
+  Bell,
 } from 'lucide-react';
 
 interface AlertLogModuleProps {
@@ -29,7 +24,6 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
   incidents,
   onSelectPlayback,
   isExpanded = false,
-  onCloseExpanded,
 }) => {
   const [filterSeverity, setFilterSeverity] = useState<'ALL' | 'CRITICAL' | 'HIGH' | 'PENDING'>('ALL');
 
@@ -42,7 +36,6 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
   });
 
   const pendingCount = incidents.filter((i) => i.status === 'PENDING_VERIFICATION').length;
-  const criticalCount = incidents.filter((i) => i.severity === 'CRITICAL').length;
 
   let scoreColor = 'text-[#10B981] border-[#10B981] bg-[#10B981]/10';
   if (threatScore > 75 || threatLevel === 'CRITICAL') scoreColor = 'text-[#EF4444] border-[#EF4444] bg-[#EF4444]/10';
@@ -115,7 +108,7 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
         <div className="flex items-center gap-1">
           <button
             onClick={() => setFilterSeverity('ALL')}
-            className={`px-1.5 py-0.5 text-[9px] font-bold font-mono transition-colors ${
+            className={`px-1.5 py-0.5 text-[9px] font-bold font-mono transition-colors cursor-pointer ${
               filterSeverity === 'ALL' ? 'bg-[#3B82F6] text-white' : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -123,7 +116,7 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
           </button>
           <button
             onClick={() => setFilterSeverity('PENDING')}
-            className={`px-1.5 py-0.5 text-[9px] font-bold font-mono transition-colors ${
+            className={`px-1.5 py-0.5 text-[9px] font-bold font-mono transition-colors cursor-pointer ${
               filterSeverity === 'PENDING' ? 'bg-[#DC2626] text-white' : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -131,7 +124,7 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
           </button>
           <button
             onClick={() => setFilterSeverity('HIGH')}
-            className={`px-1.5 py-0.5 text-[9px] font-bold font-mono transition-colors ${
+            className={`px-1.5 py-0.5 text-[9px] font-bold font-mono transition-colors cursor-pointer ${
               filterSeverity === 'HIGH' ? 'bg-[#F59E0B] text-white' : 'text-slate-400 hover:text-white'
             }`}
           >
@@ -145,8 +138,8 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
         {filteredIncidents.length === 0 ? (
           <div className="p-4 text-center text-slate-500 font-mono text-xs flex flex-col items-center justify-center h-48">
             <ShieldCheck className="w-8 h-8 text-[#10B981] mb-2 opacity-60" />
-            <div>Không có mối đe dọa nào đang kích hoạt</div>
-            <div className="text-[10px] text-slate-600 mt-1">Hệ thống đang quan sát liên tục</div>
+            <div>Chưa có cảnh báo nào từ Server trong KV</div>
+            <div className="text-[10px] text-slate-600 mt-1">Đang lắng nghe JSON cập nhật liên tục từ Server</div>
           </div>
         ) : (
           filteredIncidents.map((inc) => {
@@ -155,6 +148,12 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
               : inc.timestamp || '--:--:--';
 
             const isPending = inc.status === 'PENDING_VERIFICATION';
+            const scorePct =
+              inc.threatScore !== undefined
+                ? inc.threatScore <= 1
+                  ? Math.round(inc.threatScore * 100)
+                  : Math.round(inc.threatScore)
+                : 0;
 
             return (
               <div
@@ -172,9 +171,14 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
                 <div className="flex items-center justify-between gap-1 mb-1">
                   <div className="flex items-center gap-1.5 min-w-0">
                     {getSeverityBadge(inc.severity)}
-                    <span className="font-mono text-[10px] text-slate-400 font-bold truncate">
-                      {inc.cameraId || 'LAPTOP_01'}
+                    <span className="font-mono text-[10px] text-slate-300 font-bold truncate">
+                      {inc.cameraId || 'CAM'}
                     </span>
+                    {scorePct > 0 && (
+                      <span className="font-mono text-[9px] text-[#38BDF8] font-bold">
+                        {scorePct}%
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 text-[10px] font-mono text-slate-400 shrink-0">
                     <Clock className="w-2.5 h-2.5" />
@@ -182,19 +186,20 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
                   </div>
                 </div>
 
-                {/* Hàng 2: Tên Hành vi & Chi tiết tóm tắt */}
+                {/* Hàng 2: Tên Hành vi & Mô tả */}
                 <div className="font-bold text-xs text-white group-hover:text-[#3B82F6] truncate transition-colors">
-                  {inc.title || 'PHÁT HIỆN HÀNH VI BẤT THƯỜNG'}
+                  {inc.actionType ? `[${inc.actionType}] ` : ''}
+                  {inc.description || inc.title}
                 </div>
 
                 <div className="text-[10px] text-slate-400 line-clamp-2 mt-0.5 leading-snug">
-                  {inc.vlmAnalysis || inc.postureDetails || 'AI Kinematics & DeepSeek VLM Evaluated.'}
+                  {inc.reasoning || inc.location || inc.subTitle}
                 </div>
 
                 {/* Hàng 3: Trạng thái & Nút Thẩm định HITL */}
                 <div className="mt-1.5 pt-1 border-t border-[#1E2631] flex items-center justify-between text-[10px] font-mono">
                   <span className={isPending ? 'text-[#F59E0B] font-bold animate-pulse' : 'text-[#10B981]'}>
-                    {isPending ? 'CHỜ THẨM ĐỊNH' : 'ĐÃ XÁC NHẬN'}
+                    {isPending ? 'CHỜ THẨM ĐỊNH' : inc.status === 'DISMISSED' ? 'ĐÃ HỦY' : 'ĐÃ XÁC NHẬN'}
                   </span>
 
                   <button
@@ -217,8 +222,8 @@ export const AlertLogModule: React.FC<AlertLogModuleProps> = ({
 
       {/* 4. Footer Mini Thông số Nhanh */}
       <div className="p-2 bg-[#090D14] border-t border-[#1E2631] text-[10px] font-mono text-slate-400 flex items-center justify-between shrink-0">
-        <span>CẬP NHẬT: REALTIME</span>
-        <span className="text-[#10B981] font-bold">ONLINE 100%</span>
+        <span>KV STORE: ACTIVE</span>
+        <span className="text-[#10B981] font-bold">{incidents.length} EVENTS</span>
       </div>
     </div>
   );

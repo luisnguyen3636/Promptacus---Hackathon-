@@ -1,6 +1,6 @@
 # CẤU TRÚC DỰ ÁN (PROJECT STRUCTURE)
-**Dự án:** Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety AI-SOC)  
-**Nền tảng:** Cloudflare Workers Edge Stack (React 19 + TypeScript + Workers AI + D1 SQL + YOLO11-Pose)
+**Dự án:** Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety SOC)  
+**Nền tảng:** Cloudflare Workers Edge Stack (React 19 + TypeScript + Cloudflare KV + D1 SQL)
 
 ---
 
@@ -9,12 +9,14 @@
 ```text
 Promptacus---Hackathon-/
 ├── AGENTS.md                          # Quy tắc điều phối AI Agent (SDD, HITL, CD-01 -> CD-06)
-├── README.md                          # Tài liệu giới thiệu, hướng dẫn cài đặt & vận hành hệ thống
+├── README.md                          # Tài liệu giới thiệu, hướng dẫn cài đặt & API hệ thống
 ├── PROJECT_STRUCTURE.md               # Sơ đồ và mô tả chi tiết toàn bộ cấu trúc dự án (Tài liệu này)
-├── SPEC_STREAM_ZOOM_ALERT_REFACTOR.md  # Đặc tả kỹ thuật tích hợp video stream Laptop, zoom matrix 2x2 & Alert Log 20% modal
-├── PLAN_STREAM_ZOOM_ALERT_REFACTOR.md  # Kế hoạch triển khai tích hợp video stream Laptop, zoom matrix 2x2 & Alert Log 20% modal
-├── SPEC_DASHBOARD_KV_REALTIME.md      # Đặc tả kỹ thuật đồng bộ realtime Dashboard với Cloudflare KV & chuẩn hóa DeepSeek Output
-├── PLAN_DASHBOARD_KV_REALTIME.md      # Kế hoạch triển khai đồng bộ realtime Dashboard với Cloudflare KV & chuẩn hóa DeepSeek Output
+├── SPEC_PURE_DASHBOARD_KV_SERVER.md   # Đặc tả kỹ thuật Pure Display Dashboard, KV Storage & Server JSON Ingestion
+├── PLAN_PURE_DASHBOARD_KV_SERVER.md   # Kế hoạch triển khai Pure Display Dashboard, KV Storage & Server JSON Ingestion
+├── SPEC_STREAM_ZOOM_ALERT_REFACTOR.md # Đặc tả kỹ thuật tích hợp video stream Laptop, zoom matrix 2x2 & Alert Log 20% modal
+├── PLAN_STREAM_ZOOM_ALERT_REFACTOR.md # Kế hoạch triển khai tích hợp video stream Laptop, zoom matrix 2x2 & Alert Log 20% modal
+├── SPEC_DASHBOARD_KV_REALTIME.md      # Đặc tả kỹ thuật đồng bộ realtime Dashboard với Cloudflare KV
+├── PLAN_DASHBOARD_KV_REALTIME.md      # Kế hoạch triển khai đồng bộ realtime Dashboard với Cloudflare KV
 ├── SPEC.md                            # Đặc tả kỹ thuật mức tổng thể hệ thống
 ├── PLAN.md                            # Kế hoạch triển khai mức tổng thể hệ thống
 ├── package.json                       # Root package.json điều phối build, dev và deploy
@@ -22,103 +24,66 @@ Promptacus---Hackathon-/
 ├── pnpm-lock.yaml                     # Khóa phiên bản dependencies toàn dự án
 ├── .gitignore                         # Danh sách tệp/thư mục loại trừ khỏi Git
 │
-├── CloudflareWorker/                  # [CORE BACKEND & EDGE RUNTIME] Nền tảng hợp nhất Edge SOC
+├── CloudflareWorker/                  # [CORE BACKEND & KV GATEWAY] Nền tảng hợp nhất Edge SOC
 │   ├── src/
-│   │   ├── index.ts                   # Router chính: REST APIs, WebSocket broker, Static Assets fetcher
-│   │   ├── types.ts                   # Data Models & Schemas (AI Ingestion, Incidents, Cameras, HITL, DeepSeek, SOC Log)
-│   │   ├── deepseek_analyzer.ts       # Lớp AI phân tích tự động: DeepSeek Direct API, Workers AI, Kinematics, SOC Audit Logs
-│   │   ├── camera_manager.ts          # Quản lý fleet camera động, chuẩn hóa bounding box tỉ đối
-│   │   ├── incident_manager.ts        # Quản lý sự cố, rolling buffer bằng chứng, tích hợp AI
-│   │   ├── hitl_dispatcher.ts         # Chốt chặn HITL [CD-04], đóng gói gói cứu hộ, ghi log kiểm toán [CD-05]
-│   │   ├── telemetry.ts               # Bộ máy chấm điểm rủi ro động (Dynamic Threat Scoring)
+│   │   ├── index.ts                   # Router chính: Server JSON Ingest -> KV, Auth, Settings, Stream Proxy, HITL
+│   │   ├── types.ts                   # Data Models & Schemas (IServerIngestPayload, ICameraDevice, IIncidentItem, ISocSettings, IOperatorSession)
+│   │   ├── camera_manager.ts          # Quản lý danh mục camera thực tế từ Server JSON, lưu trữ vào KV (`kv_cameras`)
+│   │   ├── incident_manager.ts        # Lưu trữ sự cố trực tiếp từ Server JSON vào KV (`kv_recent_incidents`, `incident:<id>`)
+│   │   ├── hitl_dispatcher.ts         # Chốt chặn HITL [CD-04], đóng gói hồ sơ sự cố, ghi log kiểm toán [CD-05]
+│   │   ├── telemetry.ts               # Tính toán chỉ số tổng quan thực tế từ KV (Zero fake metrics)
 │   │   ├── websocket.ts               # WebSocket broker native (Cloudflare WebSocketPair)
-│   │   ├── ai_evaluator.ts            # Tích hợp Workers AI (DeepSeek / Llama 3.2 Vision)
 │   │   ├── security.ts                # Bộ điều khiển bảo mật: CORS Origin Whitelist & Client IP CIDR Filter
-│   │   └── db.ts                      # Repository tương tác cơ sở dữ liệu Cloudflare D1 SQL
+│   │   └── db.ts                      # Repository tương tác cơ sở dữ liệu Cloudflare D1 SQL (Audit & Backup)
 │   ├── dist/                          # Thư mục chứa bản build tĩnh của React Frontend SPA
 │   ├── schema.sql                     # Schema SQL D1 (bảng incidents, audit_logs và các index)
-│   ├── wrangler.toml                  # Cấu hình Cloudflare Worker, D1 Database, Workers AI binding, DeepSeek API Key
+│   ├── wrangler.toml                  # Cấu hình Cloudflare Worker, KV Namespace (`INCIDENT_CACHE`), D1, `LIVE_CAMERA_STREAM_URL`
 │   ├── package.json                   # Dependencies & scripts của Cloudflare Worker
 │   ├── tsconfig.json                  # Cấu hình TypeScript cho Cloudflare Worker
-│   ├── worker-configuration.d.ts      # Khai báo kiểu môi trường (Cloudflare Env bindings)
-│   ├── test_e2e.mjs                   # Script kiểm thử tự động toàn diện AI Ingestion & HITL
-│   ├── test_post_incidents.mjs        # Script kiểm thử tự động endpoint POST /api/incidents
-│   ├── test_cors_ip_whitelist.mjs     # Script kiểm thử tự động CORS Origin & IP Whitelist Gate
-│   ├── test_deepseek_pipeline.mjs     # Script kiểm thử tự động DeepSeek 2-phút & /api/get-incident (20 assertions)
-│   ├── test_integrated_ai_layer.mjs   # Script kiểm thử tự động Lớp AI Tích Hợp & Log Chuẩn SOC (26 assertions)
-│   ├── test_kv_pipeline.mjs           # Script kiểm thử tự động Cloudflare KV & Input/Output Trace (24 assertions)
-│   ├── test_dashboard_kv_realtime.mjs # Script kiểm thử tự động Dashboard KV Realtime & Exact Schema Rendering (24 assertions)
-│   ├── SPEC_KV_INCIDENT_PIPELINE.md   # Đặc tả kỹ thuật lưu trữ KV & DeepSeek Input/Output Trace
-│   ├── PLAN_KV_INCIDENT_PIPELINE.md   # Kế hoạch triển khai lưu trữ KV & DeepSeek Input/Output Trace
-│   ├── SPEC_INTEGRATED_AI_LAYER.md    # Đặc tả kỹ thuật lớp AI tích hợp tự động & DeepSeek API Key
-│   ├── PLAN_INTEGRATED_AI_LAYER.md    # Kế hoạch triển khai lớp AI tích hợp tự động & DeepSeek API Key
-│   ├── SPEC_DEEPSEEK_PIPELINE.md      # Đặc tả kỹ thuật đường ống phân tích DeepSeek 2 phút
-│   ├── PLAN_DEEPSEEK_PIPELINE.md      # Kế hoạch triển khai đường ống phân tích DeepSeek 2 phút
-│   ├── SPEC_AI_INTEGRATION.md         # Đặc tả kỹ thuật tích hợp payload AI thực tế
-│   ├── PLAN_AI_INTEGRATION.md         # Kế hoạch triển khai tích hợp payload AI thực tế
-│   ├── SPEC_UNIFIED_SOC.md            # Đặc tả kỹ thuật hợp nhất backend lên Cloudflare Worker
-│   └── PLAN_UNIFIED_SOC.md            # Kế hoạch triển khai hợp nhất backend lên Cloudflare Worker
+│   └── worker-configuration.d.ts      # Khai báo kiểu môi trường (Cloudflare Env bindings)
 │
 ├── Dashboard/
-│   ├── Front End/                     # [FRONTEND SPA] Giao diện Tác chiến SOC chuyên dụng (React 19)
+│   ├── Front End/                     # [FRONTEND SPA] Giao diện Hiển thị & Điều hành SOC (React 19)
 │   │   ├── src/
-│   │   │   ├── App.tsx                # Container chính, điều phối 8 view tác chiến và xử lý lệnh PTZ/HITL
+│   │   │   ├── App.tsx                # Container chính, quản lý phiên đăng nhập (`session`), điều phối 5 tab và HITL
 │   │   │   ├── main.tsx               # Điểm khởi chạy ứng dụng React 19
 │   │   │   ├── index.css              # Cấu hình CSS toàn cục & TailwindCSS directives
 │   │   │   ├── types/
-│   │   │   │   └── soc.ts             # Định nghĩa kiểu dữ liệu frontend (Camera, Incident, Overview)
+│   │   │   │   └── soc.ts             # Định nghĩa kiểu dữ liệu frontend khớp 100% với Server JSON & KV
 │   │   │   ├── hooks/
-│   │   │   │   ├── useSocTelemetry.ts # Hook đồng bộ dữ liệu qua REST polling & Live WebSocket
-│   │   │   │   ├── useCctvCanvas.ts   # Canvas renderer hiệu năng cao vẽ video frame & bounding box
-│   │   │   │   └── useUtcClock.ts     # Đồng hồ nguyên tử chuẩn hóa UTC cho SOC
+│   │   │   │   ├── useSocTelemetry.ts # Hook đồng bộ dữ liệu thực tế từ KV qua REST polling & Live WebSocket
+│   │   │   │   ├── useCctvCanvas.ts   # Canvas renderer vẽ video frame & bounding box của `actors`
+│   │   │   │   └── useUtcClock.ts     # Đồng hồ chuẩn hóa UTC cho SOC
 │   │   │   ├── data/
-│   │   │   │   └── mockData.ts        # Trạng thái khởi tạo sạch (Zero fake data, sẵn sàng đón nhận AI)
+│   │   │   │   └── mockData.ts        # Trạng thái khởi tạo rỗng (`MOCK_CAMERAS = []`, `MOCK_INCIDENTS = []`)
 │   │   │   └── components/
-│   │   │       ├── Sidebar.tsx        # Menu tác chiến chuyển đổi giữa các module (đã gỡ bỏ Network Topology)
-│   │   │       ├── TopHeader.tsx      # Thanh tiêu đề hệ thống, trạng thái mạng, PoE, KPI tổng
-│   │   │       ├── KpiCards.tsx       # Khối hiển thị chỉ số quan trọng (Độ trễ, Camera online, Threat)
-│   │   │       ├── AiMetricsGrid/     # Cụm 8 thẻ chỉ số hiệu năng AI & phân bố đối tượng thời gian thực
-│   │   │       │   └── AiMetricsGrid.tsx # Inference Time, GPU Load, Accuracy, Active Tracks, Class Breakdown
-│   │   │       ├── CameraMatrix/      # Ma trận hiển thị luồng camera 2x2, nút zoom 1x1, điều khiển PTZ & hỗ trợ phóng to 80%
+│   │   │       ├── Sidebar.tsx        # Menu trái 5 tab với badge động (đã xóa hộp thông tin góc dưới)
+│   │   │       ├── TopHeader.tsx      # Thanh tiêu đề hệ thống, nút Sign In / Operator Profile & chuông thông báo
+│   │   │       ├── KpiCards.tsx       # Khối hiển thị chỉ số quan trọng từ dữ liệu thực
+│   │   │       ├── CameraMatrix/      # Ma trận hiển thị luồng camera 2x2, zoom 1x1 (80% width) & điều khiển PTZ
+│   │   │       │   ├── CameraMatrix.tsx
+│   │   │       │   └── CameraSlot.tsx
 │   │   │       ├── AlertLog/          # Bảng Alert Log rút gọn cảnh báo sớm & mở rộng 20% right menu modal khi phóng to
-│   │   │       │   └── AlertLogModule.tsx # Module Alert Log tinh gọn thay thế ThreatScoreModule
+│   │   │       │   └── AlertLogModule.tsx
 │   │   │       ├── Modal/
-│   │   │       │   └── EvidencePlaybackModal.tsx # Hộp thoại phát lại bằng chứng tư pháp & nút duyệt HITL
-│   │   │       ├── RecentThreats/     # Bảng danh sách sự cố thời gian thực
-│   │   │       └── views/             # Các Giao diện Tác chiến Chuyên biệt:
-│   │   │           ├── DashboardView.tsx           # View 1: Trung tâm chỉ huy tổng thể (nhúng AiMetricsGrid & AlertLogModule)
-│   │   │           ├── ThreatIntelligenceView.tsx  # View 2: Phân tích tình báo rủi ro & bằng chứng
-│   │   │           ├── IncidentFeedView.tsx        # View 3: Quản lý chi tiết danh mục sự cố
-│   │   │           ├── DeviceManagerView.tsx       # View 4: Quản lý danh mục thiết bị phần cứng & camera stream
-│   │   │           └── SettingsView.tsx            # View 5: Cấu hình ngưỡng cảnh báo & hệ thống
+│   │   │       │   ├── EvidencePlaybackModal.tsx # Hộp thoại chi tiết sự cố (`actors`, `visual_cues`, `reasoning`) & duyệt HITL
+│   │   │       │   └── AuthLoginModal.tsx        # Hộp thoại đăng nhập & quản lý phiên trực Vận hành viên SOC
+│   │   │       ├── RecentThreats/     # Bảng danh sách sự kiện Server gửi lên lưu trong KV
+│   │   │       │   ├── RecentThreatsTable.tsx
+│   │   │       │   └── ThreatRow.tsx
+│   │   │       └── views/             # 5 Giao diện Tác chiến:
+│   │   │           ├── DashboardView.tsx           # Tab 1: SOC Dashboard (đã gỡ bỏ nút Phòng Thủ Khẩn Cấp)
+│   │   │           ├── ThreatIntelligenceView.tsx  # Tab 2: Phân tích `action_type`, `visual_cues`, `actors` từ dữ liệu thật
+│   │   │           ├── IncidentFeedView.tsx        # Tab 3: Nhật ký sự cố chi tiết từ KV kèm tìm kiếm & lọc
+│   │   │           ├── DeviceManagerView.tsx       # Tab 4: Quản lý camera thực tế từ Server JSON (`measured_fps`, `frame_index`, `human_count`)
+│   │   │           └── SettingsView.tsx            # Tab 5: Cấu hình hệ thống đồng bộ hai chiều với Cloudflare KV
 │   │   ├── index.html                 # Template HTML chính
-│   │   ├── package.json               # Dependencies của React (Vite, Tailwind, Lucide, Chart.js)
+│   │   ├── package.json               # Dependencies của React (Vite, Tailwind, Lucide)
 │   │   ├── vite.config.ts             # Cấu hình Vite build ra CloudflareWorker/dist
-│   │   ├── tsconfig.json              # Cấu hình TypeScript cho Frontend
-│   │   ├── SPEC_REMOVE_DATA_SUMMARY.md # Đặc tả kỹ thuật gỡ bỏ Data Summary Table trong AI Analyzer
-│   │   ├── PLAN_REMOVE_DATA_SUMMARY.md # Kế hoạch triển khai gỡ bỏ Data Summary Table trong AI Analyzer
-│   │   ├── SPEC.md                    # Đặc tả kỹ thuật giao diện Frontend
-│   │   └── PLAN.md                    # Kế hoạch triển khai giao diện Frontend
+│   │   └── tsconfig.json              # Cấu hình TypeScript cho Frontend
 │   │
-│   └── Back End/                      # [LEGACY BACKEND] Express.js & Python Ingestion (Lưu trữ tham chiếu)
-│       ├── server.js                  # Máy chủ Express.js truyền thống (đã được chuyển đổi lên Worker)
-│       ├── package.json               # Cấu hình Express & WS
-│       └── ingestion_service/         # Service phụ trợ nhận dữ liệu trước đây
-│
-├── AI/                                # [AI DETECTION SUBSYSTEM] Phân hệ Trí tuệ Nhân tạo Thị giác
-│   ├── Human/
-│   │   ├── src/urbansoc/              # Module nghiệp vụ phân tích hành vi & nhận diện tư thế
-│   │   │   ├── domain/                # Pydantic schemas (WebhookIncidentPayload, AIKeypoint, Kinematics)
-│   │   │   ├── pipeline/              # Xử lý khung hình, ước lượng dáng điệu (YOLO-Pose), bộ đệm bằng chứng
-│   │   │   └── utils/                 # Băm tư pháp SHA-256, chuyển đổi Base64, mã hóa video
-│   │   ├── server.py                  # Server giả lập luồng camera và phát hiện bất thường
-│   │   ├── client.py                  # Client gửi video và webhook kiểm thử
-│   │   ├── main.py                    # Điểm khởi chạy phân tích luồng trực tiếp
-│   │   ├── requirements.txt           # Thư viện Python (ultralytics, torch, opencv-python, pydantic)
-│   │   ├── pyproject.toml             # Cấu hình gói Python UrbanSOC
-│   │   └── README.md                  # Hướng dẫn khởi chạy mô hình AI
-│   └── Rule/                          # Các quy tắc phát hiện nghiệp vụ đặc thù
-│
+│   └── Back End/                      # [LEGACY BACKEND] Lưu trữ tham chiếu trước đây
+├── AI/                                # [EXTERNAL CAMERA SERVER SCRIPTS] Phân hệ Server bên ngoài gửi JSON lên Worker
 ├── Engine/                            # [BEHAVIOR RULE ENGINE] Quy tắc đánh giá chuỗi hành vi
 └── Rule/                              # [SECURITY POLICIES] Tập luật an ninh đô thị
 ```
@@ -127,28 +92,11 @@ Promptacus---Hackathon-/
 
 ## 2. MÔ TẢ TRÁCH NHIỆM CÁC THÀNH PHẦN CHỦ CHỐT
 
-### 2.1. Phân hệ Edge Backend (`CloudflareWorker/`)
-- Chịu trách nhiệm toàn quyền xử lý các yêu cầu HTTP REST và phiên kết nối WebSocket trực tiếp từ trình duyệt của Điều hành viên SOC.
-- **Hợp nhất Edge:** Không cần máy chủ VPS hay container Docker; toàn bộ backend được biên dịch thành một Cloudflare Worker duy nhất, tận dụng mạng lưới máy chủ biên toàn cầu của Cloudflare.
-- **Lưu trữ Bất biến:** Sử dụng **Cloudflare D1 SQL Database** để lưu vết sự cố và nhật ký kiểm toán tư pháp theo tiêu chuẩn SOC-grade.
-- **Workers AI:** Tích hợp trực tiếp các mô hình AI ngôn ngữ lớn và VLM (DeepSeek, Llama 3.2 Vision) để thẩm định độ tin cậy của sự cố, loại trừ cảnh báo giả (False Positive Filtering).
+### 2.1. Phân hệ Edge Backend & KV Gateway (`CloudflareWorker/`)
+- Tiếp nhận liên tục các gói tin JSON từ Server gửi lên qua các endpoint `POST` (`/api/v1/ai/detection`, `/api/incidents`, `/api/v1/webhook`, `/api/ingest`) mà không chạy lại mô hình AI trên Worker.
+- Lưu trữ trực tiếp danh sách sự cố (`kv_recent_incidents`, `incident:<id>`), danh sách camera (`kv_cameras`), cấu hình hệ thống (`kv_settings`) và phiên đăng nhập (`kv_session:<token>`) vào **Cloudflare KV (`INCIDENT_CACHE`)**.
+- Thực thi nghiêm ngặt chốt chặn **Operational HITL (`[CD-04]`)** và ghi nhật ký kiểm toán bất biến (`[CD-05]`).
 
 ### 2.2. Phân hệ Dashboard Frontend (`Dashboard/Front End/`)
-- Giao diện tác chiến chuẩn quân sự/SOC dành riêng cho Vận hành viên (Human Operator).
-- **5 View Tác chiến Chuyên biệt:** Cung cấp đầy đủ công cụ từ Bảng điều khiển SOC Dashboard (Ma trận Camera 2x2, cơ chế phóng to 80/20, Alert Log rút gọn), điều khiển xoay/zoom PTZ, phân tích tình báo rủi ro (Threat Intelligence), quản lý sự cố (Incident Feed), quản lý thiết bị (Device Manager) đến cài đặt hệ thống (Settings).
-- **Hiển thị Bằng chứng Trực quan:** Trích xuất và phát lại bằng chứng từ Rolling Buffer gồm ảnh chụp trước sự kiện (pre-event) và đỉnh điểm sự cố (peak event), vẽ khung nhận diện đối tượng và khung xương 17 điểm khớp động học.
-- **Nút Xác thực HITL:** Cung cấp 3 nút bấm nghiệp vụ bắt buộc (`Xác nhận & Điều phối`, `Hạ mức theo dõi`, `Hủy cảnh báo giả`) để hoàn tất chốt chặn an toàn con người.
-
-### 2.3. Phân hệ Phân tích Thị giác AI (`AI/Human/`)
-- Thu thập luồng camera giám sát và chạy mô hình **YOLO11-Pose** theo thời gian thực để trích xuất 17 điểm khớp xương người (`keypoints`).
-- Tính toán động học cơ thể (`kinematics`): Góc khuỷu tay, độ duỗi cánh tay, khoảng cách cổ tay, vận tốc cổ tay để nhận diện sớm các hành vi tiền phạm tội (rút hung khí, giơ vũ khí nhắm bắn, thủ thế cận chiến) và hậu phạm tội (bỏ chạy tốc độ cao, xô xát, nằm bất động).
-- Đóng gói toàn bộ bằng chứng hình ảnh (Base64 JPEG), chữ ký hash SHA-256 và gửi Webhook trực tiếp tới endpoint `POST /api/v1/ai/detection` của Edge Worker.
-
----
-
-## 3. NGUYÊN TẮC BẢO TRÌ CẤU TRÚC (STRUCTURE INTEGRITY RULES)
-
-Theo chỉ thị `[CD-03]` và `[CD-06]` trong `AGENTS.md`:
-1. Mọi thay đổi về cấu trúc thư mục, bổ sung tệp mới hoặc thay đổi đường dẫn đều phải được cập nhật lại vào tài liệu này.
-2. Không tạo các thư mục rác hoặc file thử nghiệm tạm thời bên ngoài thư mục được chỉ định.
-3. Bản build của Frontend luôn xuất trực tiếp vào `CloudflareWorker/dist/` để Edge Worker đóng gói và phục vụ trực tiếp.
+- Hiển thị trung thực 100% dữ liệu từ Server gửi lên (Zero Fake Data).
+- Cung cấp đầy đủ 5 tab hoạt động hoàn chỉnh: `SOC Dashboard`, `Threat Intelligence`, `Incident Feed`, `Device Manager`, và `Settings`, cùng hệ thống xác thực `Sign In` / `Sign Out` cho Vận hành viên trực ban.

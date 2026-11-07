@@ -4,7 +4,7 @@
  * Supports active push broadcasting when real AI events are ingested.
  */
 
-import { getCameras } from "./camera_manager";
+import { getCameras } from "./camera_manager.ts";
 
 // Set of active WebSocket connections
 const activeSockets = new Set<WebSocket>();
