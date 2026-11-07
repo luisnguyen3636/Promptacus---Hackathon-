@@ -231,6 +231,74 @@ class CameraContext:
 
         return analysis, display_frame
 
+    def process_poses(
+        self,
+        frame_bgr: np.ndarray,
+        poses: List[HumanPoseTrack],
+        timestamp: Optional[float] = None,
+        keypoint_conf_threshold: float = KEYPOINT_CONFIDENCE_THRESHOLD,
+    ) -> Tuple[SOCFrameAnalysisResult, np.ndarray]:
+        """Directly process explicit human pose tracks through this camera's isolated BehaviorEngine."""
+        t_start = time.time()
+        curr_time = t_start if (timestamp is None or timestamp <= 0) else timestamp
+        dt_obj = datetime.fromtimestamp(curr_time)
+        now_str = dt_obj.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+        tracked_poses, telemetry, alerts = self.behavior_engine.update(
+            poses, curr_time, self.frame_count
+        )
+
+        threat_rank = {
+            ThreatLevel.LOW: 0,
+            ThreatLevel.MEDIUM: 1,
+            ThreatLevel.HIGH: 2,
+            ThreatLevel.CRITICAL: 3,
+        }
+        highest_threat = ThreatLevel.LOW
+        highest_score = 0.0
+        critical_events: List[str] = []
+
+        for p in tracked_poses:
+            p_threat = p.behavior.threat_level
+            p_score = p.behavior.threat_score
+            if threat_rank.get(p_threat, 0) > threat_rank.get(highest_threat, 0):
+                highest_threat = p_threat
+            if p_score > highest_score:
+                highest_score = p_score
+
+            if p_threat in (ThreatLevel.HIGH, ThreatLevel.CRITICAL):
+                critical_events.append(
+                    f"ID #{p.track_id} [{p.behavior.primary_behavior.value}]: {p.behavior.reasoning}"
+                )
+
+        analysis = SOCFrameAnalysisResult(
+            frame_index=self.frame_count,
+            timestamp=now_str,
+            human_count=len(tracked_poses),
+            humans=tracked_poses,
+            highest_threat_level=highest_threat,
+            highest_threat_score=highest_score,
+            critical_events=critical_events,
+            telemetry_list=telemetry,
+            recent_alerts=alerts,
+        )
+
+        display_frame = frame_bgr.copy()
+        for human in tracked_poses:
+            palette = THREAT_COLORS[human.behavior.threat_level]
+            draw_pose_skeleton_and_indicators(
+                display_frame,
+                human,
+                palette,
+                conf_thresh=keypoint_conf_threshold,
+            )
+
+        display_frame = draw_soc_hud_dashboard(display_frame, analysis, self.measured_fps)
+        display_frame = draw_diagnostic_alert_box(display_frame, analysis)
+
+        self.update_frame(frame_bgr, display_frame, analysis)
+        return analysis, display_frame
+
     def update_frame(
         self,
         raw_frame: np.ndarray,
