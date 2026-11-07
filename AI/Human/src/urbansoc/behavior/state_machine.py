@@ -11,6 +11,7 @@ FAST_TRACK_BEHAVIORS = {
     BehaviorType.FALLEN,
     BehaviorType.FIGHTING,
     BehaviorType.WEAPON_THREAT,
+    BehaviorType.KNIFE_THREAT,
     BehaviorType.SNATCHING,
     BehaviorType.RESTRAINING,
 }

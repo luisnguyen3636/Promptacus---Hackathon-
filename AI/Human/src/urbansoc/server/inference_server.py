@@ -10,6 +10,7 @@ import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import unquote
 
 import cv2
 import numpy as np
@@ -56,6 +57,11 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 self._handle_get_camera_snapshot(camera_id)
                 return
 
+        # 2b. API: Get incident full frame or hand crop image for external AI / DeepSeek
+        if clean_path.startswith("/api/v1/incidents/") and (clean_path.endswith(".jpg") or clean_path.endswith(".jpeg")):
+            self._handle_get_incident_image(clean_path)
+            return
+
         # 3. Web Dashboard UI
         if clean_path in ("", "/", "/dashboard"):
             self._handle_get_dashboard()
@@ -82,6 +88,35 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             return
 
         self._send_json_response(404, {"status": "error", "message": f"Endpoint '{clean_path}' not found."})
+
+    def _handle_get_incident_image(self, clean_path: str) -> None:
+        """Serve incident full frame or hand crop JPEG image for DeepSeek VLM consumption."""
+        parts = clean_path.split("/")
+        if len(parts) >= 6:
+            event_id = parts[4]
+            filename = parts[5]
+            save_dir = os.path.abspath(os.path.join(self.soc.output_dir, "received_webhooks"))
+            target_file = None
+            if "hand" in filename:
+                target_file = os.path.join(save_dir, f"{event_id}_hand_crop.jpg")
+            else:
+                target_file = os.path.join(save_dir, f"{event_id}_full_frame.jpg")
+
+            if target_file and os.path.exists(target_file):
+                try:
+                    with open(target_file, "rb") as f:
+                        img_bytes = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(img_bytes)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(img_bytes)
+                    return
+                except Exception:
+                    pass
+
+        self._send_json_response(404, {"status": "error", "message": f"Incident image not found: {clean_path}"})
 
     def _handle_get_cameras(self) -> None:
         """Return JSON status of all registered cameras."""
@@ -183,7 +218,8 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
 
         raw_bytes = self.rfile.read(length)
         camera_id = self.headers.get("X-Camera-ID", "LAPTOP_01").strip()
-        camera_name = self.headers.get("X-Camera-Name", f"Camera {camera_id}")
+        raw_name = self.headers.get("X-Camera-Name")
+        camera_name = unquote(raw_name) if raw_name else None
         timestamp_ms_hdr = self.headers.get("X-Timestamp-Ms")
         timestamp_ms = int(timestamp_ms_hdr) if timestamp_ms_hdr and timestamp_ms_hdr.isdigit() else int(time.time() * 1000)
 
@@ -218,26 +254,57 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         if camera_name and ctx.config.name != camera_name:
             ctx.config.name = camera_name
 
-        # Perform centralized YOLO inference under thread lock
-        detections = None
-        raw_kpts = None
-        raw_boxes = None
-        t_infer = 0.0
+        # Check if client requested a simulated behavior action via header
+        test_action_hdr = self.headers.get("X-Test-Action")
+        if test_action_hdr:
+            from urbansoc.domain.synthetic import create_synthetic_pose
 
-        if self.soc.detector is not None:
-            with self.soc.model_lock:
-                detections, raw_kpts, raw_boxes, t_infer = self.soc.detector.extract_raw_detections(frame_bgr)
+            action_name = test_action_hdr.strip().upper()
+            step_idx = ctx.frame_count
+            if action_name == "WEAPON_THREAT":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="two_handed_aim", step=step_idx)
+            elif action_name in ("KNIFE_THREAT", "SHARP_OBJECT", "KNIFE", "BLADE"):
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="knife_threat", step=step_idx)
+            elif action_name == "FALLEN":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="fallen", step=step_idx)
+            elif action_name == "HANDS_UP":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="hands_up", step=step_idx)
+            elif action_name == "CROUCHING":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="crouching", step=step_idx)
+            elif action_name == "FIGHTING":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="fighting", step=step_idx)
+            elif action_name == "RUNNING":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", step=step_idx, speed_offset_x=float(step_idx * 45))
+            else:
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="normal", step=step_idx)
 
-        # Process detections inside isolated CameraContext (own tracker & behavior engine)
-        timestamp_sec = timestamp_ms / 1000.0
-        analysis, display_frame = ctx.process_detections(
-            frame_bgr=frame_bgr,
-            detections=detections,
-            raw_kpts_data=raw_kpts,
-            raw_boxes_xyxy=raw_boxes,
-            t_infer=t_infer,
-            timestamp=timestamp_sec,
-        )
+            timestamp_sec = timestamp_ms / 1000.0
+            analysis, display_frame = ctx.process_poses(
+                frame_bgr=frame_bgr,
+                poses=[sim_pose],
+                timestamp=timestamp_sec,
+            )
+        else:
+            # Perform centralized YOLO inference under thread lock
+            detections = None
+            raw_kpts = None
+            raw_boxes = None
+            t_infer = 0.0
+
+            if self.soc.detector is not None:
+                with self.soc.model_lock:
+                    detections, raw_kpts, raw_boxes, t_infer = self.soc.detector.extract_raw_detections(frame_bgr)
+
+            # Process detections inside isolated CameraContext (own tracker & behavior engine)
+            timestamp_sec = timestamp_ms / 1000.0
+            analysis, display_frame = ctx.process_detections(
+                frame_bgr=frame_bgr,
+                detections=detections,
+                raw_kpts_data=raw_kpts,
+                raw_boxes_xyxy=raw_boxes,
+                t_infer=t_infer,
+                timestamp=timestamp_sec,
+            )
 
         # Dispatch webhook if incident occurs and webhook dispatcher is configured
         if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
@@ -297,6 +364,13 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             if full_bytes:
                 with open(os.path.join(save_dir, f"{event_id}_full_frame.jpg"), "wb") as f:
                     f.write(full_bytes)
+
+            # Save zoomed hand crop if present for AI/VLM inspection
+            hand_b64 = payload.get("hand_crop_base64") or payload.get("detection", {}).get("hand_crop_image_base64", "")
+            if hand_b64 and "," in hand_b64:
+                raw_hand = base64.b64decode(hand_b64.split(",", 1)[1])
+                with open(os.path.join(save_dir, f"{event_id}_hand_crop.jpg"), "wb") as f:
+                    f.write(raw_hand)
 
             with open(os.path.join(save_dir, f"{event_id}.json"), "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -619,6 +693,8 @@ class InferenceServer:
         print(f"• Frame Ingestion:  POST http://{local_ip}:{self.port}/api/v1/ingest/frame")
         print(f"• Model Weights:    {self.model_weights} (Device: {self.detector.device})")
         print(f"• Output Directory: {self.output_dir}/")
+        if self.webhook_url:
+            print(f"• Webhook Forward:  {self.webhook_url} (Auto-Dispatched to AI Model)")
         print("=" * 76)
         print(f"👉 Để kết nối Laptop khác, chạy trên laptop đó:")
         print(f"   python3 client.py --server-url http://{local_ip}:{self.port} --camera 0 --camera-id LAPTOP_01\n")

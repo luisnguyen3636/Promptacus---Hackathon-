@@ -15,6 +15,7 @@ import argparse
 import os
 import subprocess
 import sys
+from typing import List, Optional
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -58,10 +59,11 @@ src_dir = os.path.join(current_dir, "src")
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
+from urbansoc.config import HARDCODED_MODEL_URL
 from urbansoc.server.inference_server import InferenceServer
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Urban Safety AI-SOC: Multi-Camera Intermediate Inference Server",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -100,21 +102,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--webhook-forward-url",
         type=str,
-        default=None,
-        help="Optional external webhook URL to forward detected incidents",
+        default="auto",
+        help=f"Target webhook URL to forward detected incidents (default: 'auto' routes to {HARDCODED_MODEL_URL})",
     )
-    return parser.parse_args()
+    return parser.parse_args(args)
 
 
 def main() -> int:
     args = parse_args()
+    webhook_url = args.webhook_forward_url
+    if webhook_url == "auto":
+        webhook_url = HARDCODED_MODEL_URL
+    elif webhook_url and webhook_url.lower() in ("none", "disabled", "false", "off"):
+        webhook_url = None
+
     server = InferenceServer(
         host=args.host,
         port=args.port,
         model_weights=args.weights,
         device=args.device,
         output_dir=args.output_dir,
-        webhook_url=args.webhook_forward_url,
+        webhook_url=webhook_url,
     )
     server.start(blocking=True)
     return 0
