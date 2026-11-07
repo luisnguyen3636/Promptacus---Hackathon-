@@ -363,6 +363,7 @@ class WebhookDispatcher:
         annotated_frame: Optional[np.ndarray],
         analysis_result: SOCFrameAnalysisResult,
         audio_result: Optional[Any] = None,
+        camera_config: Optional[CameraLocationConfig] = None,
     ) -> bool:
         """Extract metadata, filter noise, crop subjects, compute SHA-256, and enqueue non-blocking.
 
@@ -533,11 +534,13 @@ class WebhookDispatcher:
 
         event_id = f"EVT_{now_dt.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
+        active_cam_cfg = camera_config if camera_config is not None else self.camera_config
+
         payload = WebhookIncidentPayload(
             event_id=event_id,
             timestamp=iso_timestamp,
             timestamp_ms=timestamp_ms,
-            camera=self.camera_config,
+            camera=active_cam_cfg,
             primary_action=primary_action,
             threat_level=highest_level.value,
             threat_score=highest_score,

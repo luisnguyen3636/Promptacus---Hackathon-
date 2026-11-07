@@ -1,165 +1,124 @@
 #!/usr/bin/env python3
-"""Dedicated Urban Safety AI-SOC Webhook Test Server.
+"""Dedicated Urban Safety AI-SOC Multi-Camera Inference & Webhook Server.
 
-Extends SimpleHTTPRequestHandler to serve web files for GET
-and accept incident event payloads for POST on port 8000,
-verifying cryptographic SHA-256 tamper-proof image signatures
-and displaying comprehensive subject telemetry.
+Khởi động Máy chủ Suy luận Trung gian cho toàn bộ mạng lưới Camera/Laptop:
+    python3 server.py 8000
+
+Tính năng:
+1. Chạy đa luồng nhận video từ nhiều chiếc Laptop khác gửi về qua mạng Wi-Fi/LAN.
+2. Nạp mô hình YOLOv11-Pose tập trung trên máy chủ, cách ly 100% Track ID theo từng Laptop.
+3. Cung cấp Giao diện Web Dashboard thời gian thực (http://localhost:8000).
+4. Tiếp nhận và kiểm chứng chữ ký băm mật mã học Forensic SHA-256 (Raw Bytes + Timestamp).
 """
 
-import base64
-import hashlib
-import http.server
-import json
+import argparse
 import os
+import subprocess
 import sys
-from datetime import datetime
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 1. Dependency check & auto venv handoff
+try:
+    import cv2
+    import numpy as np
+except ImportError:
+    candidate_pythons = [
+        os.path.join(current_dir, ".venv", "bin", "python"),
+        os.path.join(current_dir, ".venv", "bin", "python3"),
+        os.path.join(current_dir, "..", ".venv", "bin", "python"),
+        "/home/test/Hackathon-Test-/.venv/bin/python",
+    ]
+    re_exec_done = False
+    for candidate in candidate_pythons:
+        if os.path.exists(candidate) and os.path.abspath(candidate) != os.path.abspath(sys.executable):
+            try:
+                ret = subprocess.run(
+                    [candidate, "-c", "import cv2, numpy"],
+                    capture_output=True,
+                )
+                if ret.returncode == 0:
+                    os.execv(candidate, [candidate] + sys.argv)
+                    re_exec_done = True
+                    break
+            except Exception:
+                pass
+
+    if not re_exec_done:
+        print(
+            "LỖI: Chưa cài đặt thư viện 'cv2' hoặc 'numpy'.\n"
+            "Vui lòng cài đặt:\n"
+            "    pip install opencv-python numpy\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+# 2. Ensure src/ package is accessible
+src_dir = os.path.join(current_dir, "src")
+if src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
+
+from urbansoc.server.inference_server import InferenceServer
 
 
-def verify_sha256(raw_bytes: bytes, timestamp_ms: int, expected_hash: str) -> bool:
-    """Verify that cryptographic SHA-256(raw_bytes + timestamp_ms) matches expected_hash."""
-    hasher = hashlib.sha256()
-    hasher.update(raw_bytes)
-    hasher.update(str(timestamp_ms).encode("utf-8"))
-    computed = hasher.hexdigest()
-    return computed == expected_hash
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Urban Safety AI-SOC: Multi-Camera Intermediate Inference Server",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument(
+        "port",
+        type=int,
+        nargs="?",
+        default=8000,
+        help="Server listening port (default: 8000)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host address to bind (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--weights",
+        type=str,
+        default="yolo/yolo11n-pose.pt",
+        help="Path to YOLO11-Pose weights (default: yolo/yolo11n-pose.pt)",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Compute device: 'cpu', 'cuda', or auto-detect (default: None)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="output",
+        help="Directory to save audit logs, evidence, and webhooks (default: output)",
+    )
+    parser.add_argument(
+        "--webhook-forward-url",
+        type=str,
+        default=None,
+        help="Optional external webhook URL to forward detected incidents",
+    )
+    return parser.parse_args()
 
 
-class IncidentWebhookHandler(http.server.SimpleHTTPRequestHandler):
-    """Dual HTTP handler: GET serves directory files, POST accepts incident payloads."""
-
-    def do_POST(self) -> None:
-        content_length = int(self.headers.get("Content-Length", 0))
-        raw_body = self.rfile.read(content_length)
-
-        try:
-            payload = json.loads(raw_body.decode("utf-8"))
-            event_id = payload.get("event_id", f"EVT_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-            timestamp = payload.get("timestamp")
-            timestamp_ms = int(payload.get("timestamp_ms", 0))
-            camera = payload.get("camera", {})
-            detection = payload.get("detection", {})
-            weapon = detection.get("weapon", {})
-            subjects = detection.get("subjects", [])
-            full_img = detection.get("full_image", {})
-            audit = payload.get("audit", {})
-
-            print("\n" + "=" * 76)
-            print("🚨 [SERVER 8000] RECEIVED VERIFIED INCIDENT POST WEBHOOK EVENT!")
-            print("=" * 76)
-            print(f"• Event ID:        {event_id}")
-            print(f"• Timestamp:       {timestamp} (Epoch ms: {timestamp_ms})")
-            print(f"• Camera ID:       {camera.get('camera_id')} - {camera.get('name')}")
-            print(f"• Camera Location: Lat={camera.get('latitude')}, Lon={camera.get('longitude')}")
-            print(f"• Camera Address:  {camera.get('address')}")
-            print(f"• Primary Action:  {detection.get('primary_action')}")
-            print(f"• Threat Level:    {detection.get('threat_level')} (Score: {detection.get('threat_score')})")
-            print(f"• Urgent Flag:     {detection.get('is_urgent')}")
-            print(f"• Reasoning:       {detection.get('reasoning')}")
-            print(f"• Weapon Detected: {weapon.get('is_weapon_detected')} (Types: {weapon.get('weapon_types')})")
-
-            # Anti-noise audit info
-            anti_noise = audit.get("anti_noise_filtering", {})
-            if anti_noise:
-                print(f"• Anti-Noise:      Active={anti_noise.get('enabled')} | MinConf={anti_noise.get('min_conf')} | MinArea={anti_noise.get('min_bbox_area')} | FilteredOut={anti_noise.get('filtered_noise_count')}")
-
-            save_dir = os.path.abspath(os.path.join("output", "received_webhooks"))
-            os.makedirs(save_dir, exist_ok=True)
-
-            print(f"• Total Subjects:  {len(subjects)}")
-            for s in subjects:
-                track_id = s.get("track_id")
-                role = s.get("role")
-                b_name = s.get("behavior")
-                score = s.get("threat_score")
-                conf = s.get("confidence")
-                geom = s.get("bbox_geometry", {})
-                dwell = s.get("dwell_time_seconds")
-                kine = s.get("kinematics", {})
-                kps = s.get("keypoints", [])
-                crop_b64 = s.get("crop_image_base64", "")
-                expected_crop_hash = s.get("crop_image_sha256", "")
-
-                print(f"   ▶ Track #{track_id}: Role={role} | Behavior={b_name} | Score={score} | DetConf={conf}")
-                print(f"     Geometry: Box={s.get('bbox')} | WxH={geom.get('width')}x{geom.get('height')} | Area={geom.get('area')} | Dwell={dwell}s")
-                print(f"     Kinematics: SpineAngle={kine.get('spine_angle')}° | L_Elbow={kine.get('left_elbow_angle')}° | R_Elbow={kine.get('right_elbow_angle')}° | WristDist={kine.get('wrist_distance')}px")
-                print(f"     Keypoints: {len(kps)} COCO-17 landmarks verified")
-
-                # Verify SHA-256 hash of cropped image
-                if crop_b64 and "," in crop_b64:
-                    raw_b64 = crop_b64.split(",", 1)[1]
-                    crop_bytes = base64.b64decode(raw_b64)
-                    hash_valid = verify_sha256(crop_bytes, timestamp_ms, expected_crop_hash)
-                    hash_status = "✅ VALID (MATCH)" if hash_valid else "❌ TAMPER DETECTED"
-                    print(f"     Forensic Hash: {expected_crop_hash[:16]}... [{hash_status}] ({len(crop_bytes)} bytes)")
-
-                    crop_filename = f"{event_id}_track_{track_id}_crop.jpg"
-                    crop_filepath = os.path.join(save_dir, crop_filename)
-                    with open(crop_filepath, "wb") as cf:
-                        cf.write(crop_bytes)
-
-            full_b64 = full_img.get("image_base64", "")
-            expected_full_hash = full_img.get("sha256_hash", "")
-            if full_b64 and "," in full_b64:
-                raw_b64 = full_b64.split(",", 1)[1]
-                full_bytes = base64.b64decode(raw_b64)
-                full_hash_valid = verify_sha256(full_bytes, timestamp_ms, expected_full_hash)
-                full_hash_status = "✅ VALID (TAMPER-PROOF)" if full_hash_valid else "❌ TAMPER DETECTED"
-                print(f"• Full Frame:      {full_img.get('width')}x{full_img.get('height')} | {len(full_bytes)} bytes")
-                print(f"• Forensic Hash:   {expected_full_hash} [{full_hash_status}]")
-
-                full_filename = f"{event_id}_full_frame.jpg"
-                full_filepath = os.path.join(save_dir, full_filename)
-                with open(full_filepath, "wb") as ff:
-                    ff.write(full_bytes)
-
-            # Save full raw JSON event
-            json_filepath = os.path.join(save_dir, f"{event_id}.json")
-            with open(json_filepath, "w", encoding="utf-8") as jf:
-                json.dump(payload, jf, ensure_ascii=False, indent=2)
-
-            print(f"💾 Saved Event Data & Images to: {save_dir}/")
-            print("=" * 76 + "\n")
-
-            response_data = {
-                "status": "success",
-                "message": "Incident payload with forensic SHA-256 verified and stored successfully",
-                "event_id": event_id,
-            }
-            resp_bytes = json.dumps(response_data).encode("utf-8")
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp_bytes)))
-            self.end_headers()
-            self.wfile.write(resp_bytes)
-
-        except Exception as e:
-            print(f"❌ [SERVER 8000] Error processing POST: {e}")
-            err_bytes = json.dumps({"status": "error", "message": str(e)}).encode("utf-8")
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(err_bytes)))
-            self.end_headers()
-            self.wfile.write(err_bytes)
-
-
-def run_server(port: int = 8000) -> None:
-    server_address = ("", port)
-    httpd = http.server.HTTPServer(server_address, IncidentWebhookHandler)
-    print("=" * 76)
-    print(f"🌐 [AI-SOC WEBHOOK SERVER] Listening on http://0.0.0.0:{port}")
-    print("   • GET:  Serves web browser files & status")
-    print("   • POST: Receives incident events with forensic SHA-256 & full telemetry")
-    print("=" * 76)
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopping server...")
-    finally:
-        httpd.server_close()
+def main() -> int:
+    args = parse_args()
+    server = InferenceServer(
+        host=args.host,
+        port=args.port,
+        model_weights=args.weights,
+        device=args.device,
+        output_dir=args.output_dir,
+        webhook_url=args.webhook_forward_url,
+    )
+    server.start(blocking=True)
+    return 0
 
 
 if __name__ == "__main__":
-    port_arg = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    run_server(port_arg)
+    sys.exit(main())

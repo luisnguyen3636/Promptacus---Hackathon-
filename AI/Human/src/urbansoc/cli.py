@@ -19,11 +19,13 @@ def create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--mode",
-        choices=["live", "batch"],
+        choices=["live", "batch", "server", "client"],
         default="live",
         help="Operating mode:\n"
-             "  live  = Real-time camera feed analysis (default)\n"
-             "  batch = Offline batch scan across video files in records/",
+             "  live   = Real-time camera feed analysis (default)\n"
+             "  batch  = Offline batch scan across video files in records/\n"
+             "  server = Central intermediate multi-camera inference server\n"
+             "  client = Edge camera client streaming to central server",
     )
     parser.add_argument(
         "--camera",
@@ -129,6 +131,24 @@ def create_parser() -> argparse.ArgumentParser:
         help="Anti-noise filter: minimum bounding box pixel area to avoid distant noise (default: 1200)",
     )
     parser.add_argument(
+        "--server-url",
+        type=str,
+        default="http://localhost:8000",
+        help="Intermediate server URL for client streaming (default: http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Server port to bind when running in --mode server (default: 8000)",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        default=False,
+        help="Run without local GUI preview window (default: False)",
+    )
+    parser.add_argument(
         "--webhook-no-filter-noise",
         action="store_true",
         default=False,
@@ -203,6 +223,33 @@ def main(argv: Optional[list] = None) -> int:
             conf_threshold=args.conf_thresh,
         )
         batch_app.process_all_videos()
+    elif args.mode == "server":
+        from urbansoc.server.inference_server import InferenceServer
+        server = InferenceServer(
+            port=args.port,
+            model_weights=args.weights,
+            device=args.device,
+            conf_threshold=args.conf_thresh,
+            output_dir=args.output_dir,
+            webhook_url=args.webhook_url,
+            webhook_min_threat=args.webhook_min_threat,
+            webhook_cooldown=args.webhook_cooldown,
+            webhook_filter_noise=(not args.webhook_no_filter_noise),
+        )
+        server.start(blocking=True)
+    elif args.mode == "client":
+        from urbansoc.client.edge_client import EdgeCameraClient
+        client = EdgeCameraClient(
+            server_url=args.server_url,
+            camera_id=args.camera_id,
+            camera_name=args.camera_name,
+            camera_index=cam_target,
+            lat=args.camera_lat,
+            lon=args.camera_lon,
+            address=args.camera_address,
+            headless=args.headless,
+        )
+        client.stream_loop()
 
     return 0
 

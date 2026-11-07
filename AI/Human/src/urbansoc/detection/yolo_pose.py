@@ -6,7 +6,7 @@ import time
 import warnings
 from collections import deque
 from datetime import datetime
-from typing import Deque, List, Optional, Tuple
+from typing import Any, Deque, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -149,6 +149,35 @@ class YOLOPoseDetector(PoseDetector):
             self.fallback_detector.show_debug_box = self.show_debug_box
         return self.show_debug_box
 
+    def extract_raw_detections(
+        self, frame_bgr: np.ndarray
+    ) -> Tuple[Optional[Any], Optional[np.ndarray], Optional[np.ndarray], float]:
+        """Stateless YOLO inference returning (sv.Detections, raw_kpts_data, raw_boxes_xyxy, t_infer_ms)."""
+        if self.use_fallback or not hasattr(self, "model") or self.model is None:
+            return None, None, None, 0.0
+
+        import supervision as sv
+
+        t_infer_start = time.time()
+        results = self.model(
+            frame_bgr,
+            conf=self.conf_threshold,
+            iou=self.iou_threshold,
+            device=self.device,
+            verbose=False,
+        )[0]
+        t_infer = (time.time() - t_infer_start) * 1000.0
+
+        detections = sv.Detections.from_ultralytics(results)
+        raw_kpts_data = None
+        raw_boxes_xyxy = None
+        if results.keypoints is not None and hasattr(results.keypoints, "data"):
+            raw_kpts_data = results.keypoints.data.cpu().numpy()
+        if results.boxes is not None and hasattr(results.boxes, "xyxy"):
+            raw_boxes_xyxy = results.boxes.xyxy.cpu().numpy()
+
+        return detections, raw_kpts_data, raw_boxes_xyxy, t_infer
+
     def process_frame(
         self,
         frame_bgr: np.ndarray,
@@ -163,32 +192,30 @@ class YOLOPoseDetector(PoseDetector):
         if self.use_fallback and self.fallback_detector is not None:
             return self.fallback_detector.process_frame(frame_bgr, frame_index, curr_time)
 
-        import supervision as sv
-
         # Step 1: YOLO inference
-        t_infer_start = time.time()
-        results = self.model(
-            frame_bgr,
-            conf=self.conf_threshold,
-            iou=self.iou_threshold,
-            device=self.device,
-            verbose=False,
-        )[0]
-        t_infer = (time.time() - t_infer_start) * 1000.0
+        detections, raw_kpts_data, raw_boxes_xyxy, t_infer = self.extract_raw_detections(frame_bgr)
+        if detections is None:
+            if self.fallback_detector is not None:
+                return self.fallback_detector.process_frame(frame_bgr, frame_index, curr_time)
+            # Empty analysis fallback
+            empty_analysis = SOCFrameAnalysisResult(
+                frame_index=frame_index,
+                timestamp=now_str,
+                human_count=0,
+                humans=[],
+                highest_threat_level=ThreatLevel.LOW,
+                highest_threat_score=0.0,
+                critical_events=[],
+                telemetry_list=[],
+                recent_alerts=[],
+            )
+            annotated = draw_soc_hud_dashboard(frame_bgr.copy(), empty_analysis, self.current_fps)
+            return empty_analysis, annotated
 
         # Step 2: ByteTrack update
         t_track_start = time.time()
-        detections = sv.Detections.from_ultralytics(results)
         tracked = self.tracker.update_with_detections(detections)
         t_track = (time.time() - t_track_start) * 1000.0
-
-        # Step 3: Extract raw boxes and keypoints
-        raw_kpts_data = None
-        raw_boxes_xyxy = None
-        if results.keypoints is not None and hasattr(results.keypoints, "data"):
-            raw_kpts_data = results.keypoints.data.cpu().numpy()
-        if results.boxes is not None and hasattr(results.boxes, "xyxy"):
-            raw_boxes_xyxy = results.boxes.xyxy.cpu().numpy()
 
         raw_poses: List[HumanPoseTrack] = []
 

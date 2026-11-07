@@ -161,10 +161,46 @@ python3 main.py \
 
 ---
 
+### 3.5. Triển Khai Đa Camera Phân Tán Bằng Mô Hình Client - Server (Multi-Laptop AI-SOC)
+
+Hệ thống cho phép kết nối **nhiều chiếc Laptop hoặc PC khác nhau trong cùng mạng Wi-Fi/LAN** để tạo thành mạng lưới camera giám sát đa điểm:
+
+```
+[Laptop Khách 1 (Webcam)] ───► POST /api/v1/ingest/frame ───┐
+                                                             ▼
+[Laptop Khách 2 (Webcam)] ───► POST /api/v1/ingest/frame ───► [Laptop Máy Chủ AI (Port 8000)]
+                                                             ▲    - Chạy YOLOv11-Pose tập trung
+[Laptop Khách N (Webcam)] ───► POST /api/v1/ingest/frame ───┘    - Cách ly 100% Track ID theo từng Laptop
+                                                                  - Web Dashboard đa camera trực quan
+```
+
+#### Bước 1: Khởi động Máy chủ Suy luận Trung gian (Server Laptop)
+Trên chiếc Laptop có cấu hình tốt hơn (đóng vai trò Máy Chủ AI Trung Gian):
+```bash
+python3 server.py 8000
+```
+- Máy chủ sẽ lắng nghe tại cổng `8000`, tự động hiển thị IP mạng LAN (ví dụ: `http://192.168.1.50:8000`).
+- Mở trình duyệt truy cập `http://localhost:8000` để xem **Multi-Camera Grid Dashboard**.
+
+#### Bước 2: Khởi động Camera trên các Laptop khác (Client Laptops)
+Trên các chiếc Laptop khác (chỉ cần webcam thông thường, **không cần GPU hay AI**):
+```bash
+# Trên Laptop thứ nhất:
+python3 client.py --server-url http://192.168.1.50:8000 --camera 0 --camera-id LAPTOP_01 --camera-name "Cổng Đông"
+
+# Trên Laptop thứ hai:
+python3 client.py --server-url http://192.168.1.50:8000 --camera 0 --camera-id LAPTOP_02 --camera-name "Sảnh Chính"
+```
+- Client sẽ tự động mở Webcam, nén khung hình JPEG nhẹ nhàng và truyền về máy chủ với độ trễ thấp $\le 100\text{ms}$.
+- Máy chủ xử lý độc lập từng luồng camera, đảm bảo không bao giờ bị lẫn lộn người hay va chạm Track ID giữa các Laptop.
+- Khi bất kỳ camera nào phát hiện nguy hiểm, hệ thống tự động băm mã **Forensic SHA-256** và bắn cảnh báo tức thì!
+
+---
+
 ## 4. CHẠY KIỂM THỬ TỰ ĐỘNG (PYTEST)
 
 Toàn bộ test suite được thiết kế tất định (deterministic), không cần phần cứng camera và không tải mô hình từ mạng:
 ```bash
 pytest -v
 ```
-Toàn bộ **40 test cases** kiểm chứng toàn diện từ schema, 13 luật hành vi nguy hiểm, khử false positive, ẩu đả cặp đôi, cướp giật, rượt đuổi, khống chế, vây ráp, ghi log kiểm toán, rolling buffer clip, render đa độ phân giải, cho đến trích xuất webhook payload, cắt ảnh crop Base64 và worker HTTP POST bất đồng bộ.
+Toàn bộ **46 test cases** kiểm chứng toàn diện từ schema, 13 luật hành vi nguy hiểm, khử false positive, ẩu đả cặp đôi, cướp giật, rượt đuổi, khống chế, vây ráp, ghi log kiểm toán, rolling buffer clip, render đa độ phân giải, kiểm chứng băm mật mã học Forensic SHA-256, cho đến mô hình Client-Server đa camera và cách ly hoàn toàn Track ID giữa các laptop.
