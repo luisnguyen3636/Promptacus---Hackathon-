@@ -79,6 +79,12 @@ class EdgeCameraClient:
         self.frame_count = 0
         self.latest_server_result: Optional[Dict[str, Any]] = None
 
+        # Reuse HTTP persistent connection pool to eliminate TCP handshake latency on every frame
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
         self._init_source()
 
     def _init_source(self) -> None:
@@ -111,6 +117,7 @@ class EdgeCameraClient:
                 if ret:
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     self._cap = cap
                     logger.info("Direct cv2.VideoCapture successfully opened physical webcam on index %s", int_idx)
                     return
@@ -128,6 +135,7 @@ class EdgeCameraClient:
                         if ret:
                             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
                             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                             self._cap = cap
                             logger.info("Auto-detected alternative physical webcam at index %d", alt_idx)
                             return
@@ -195,7 +203,7 @@ class EdgeCameraClient:
             "fps": self.fps,
         }
         try:
-            resp = requests.post(url, json=payload, timeout=timeout)
+            resp = self.session.post(url, json=payload, timeout=timeout)
             if resp.status_code == 200:
                 logger.info("Successfully registered camera '%s' with server at %s", self.camera_id, url)
                 return True
@@ -257,7 +265,7 @@ class EdgeCameraClient:
 
         for attempt in range(1, max_retries + 1):
             try:
-                resp = requests.post(url, data=raw_bytes, headers=headers, timeout=timeout)
+                resp = self.session.post(url, data=raw_bytes, headers=headers, timeout=timeout)
                 if resp.status_code == 200:
                     data = resp.json()
                     self.latest_server_result = data
@@ -471,8 +479,12 @@ class EdgeCameraClient:
             self.stop()
 
     def stop(self) -> None:
-        """Release camera hardware and close all OpenCV display windows."""
+        """Release camera hardware, close session, and close all OpenCV display windows."""
         self._running = False
+        try:
+            self.session.close()
+        except Exception:
+            pass
         if self._source is not None:
             self._source.release()
             self._source = None

@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import cv2
 
 from urbansoc.behavior.engine import BehaviorEngine
 from urbansoc.domain.enums import ThreatLevel
@@ -92,6 +93,10 @@ class CameraContext:
         self.latest_analysis: Optional[SOCFrameAnalysisResult] = None
         self.latest_frame: Optional[np.ndarray] = None
         self.latest_display_frame: Optional[np.ndarray] = None
+        self.latest_jpeg_bytes: Optional[bytes] = None
+        self.latest_vlm_analysis: Optional[Dict[str, Any]] = None
+        self.last_vlm_time: float = 0.0
+        self.new_frame_event = threading.Event()
         self.is_active = True
         self._lock = threading.Lock()
 
@@ -324,7 +329,14 @@ class CameraContext:
             self.latest_frame = raw_frame
             self.latest_display_frame = display_frame
             self.latest_analysis = analysis
+            try:
+                success, encoded = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if success:
+                    self.latest_jpeg_bytes = encoded.tobytes()
+            except Exception:
+                pass
             self.is_active = True
+            self.new_frame_event.set()
 
     def get_status_dict(self) -> Dict[str, Any]:
         """Return a snapshot dictionary of this camera's current telemetry status."""

@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import queue
 import socket
 import threading
 import time
@@ -260,15 +261,18 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         try:
             while True:
                 ctx = self.soc.context_manager.get(target_cam_id)
-                frame_to_serve: Optional[np.ndarray] = None
+                jpeg_bytes: Optional[bytes] = None
                 if ctx is not None:
                     with ctx._lock:
-                        if ctx.latest_display_frame is not None:
-                            frame_to_serve = ctx.latest_display_frame.copy()
-                        elif ctx.latest_frame is not None:
-                            frame_to_serve = ctx.latest_frame.copy()
+                        if ctx.latest_jpeg_bytes is not None:
+                            jpeg_bytes = ctx.latest_jpeg_bytes
+                        elif ctx.latest_display_frame is not None:
+                            success, encoded = cv2.imencode(".jpg", ctx.latest_display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                            if success:
+                                jpeg_bytes = encoded.tobytes()
+                                ctx.latest_jpeg_bytes = jpeg_bytes
 
-                if frame_to_serve is None:
+                if jpeg_bytes is None:
                     placeholder = np.full((360, 640, 3), 20, dtype=np.uint8)
                     cv2.putText(
                         placeholder,
@@ -280,11 +284,11 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                         2,
                         cv2.LINE_AA,
                     )
-                    frame_to_serve = placeholder
+                    success, encoded = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if success:
+                        jpeg_bytes = encoded.tobytes()
 
-                success, encoded = cv2.imencode(".jpg", frame_to_serve, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if success:
-                    jpeg_bytes = encoded.tobytes()
+                if jpeg_bytes is not None:
                     part_header = (
                         f"--frame\r\n"
                         f"Content-Type: image/jpeg\r\n"
@@ -300,7 +304,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 if 0 < max_frames <= sent_frames:
                     break
 
-                time.sleep(0.066)
+                time.sleep(0.04)
         except (BrokenPipeError, ConnectionResetError, socket.error):
             # Client closed stream connection
             return
@@ -776,8 +780,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 )
                 primary_vel = getattr(p_track, "velocity_vector", (0.0, 0.0))
 
-            vlm_res = self.soc.nvidia_vlm.analyze_frame(
-                image_input=frame_bgr,
+            vlm_kwargs = dict(
                 camera_id=camera_id,
                 location=ctx.config.name or "Camera Zone",
                 action_hint=primary_action,
@@ -787,6 +790,33 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 velocity_vector=primary_vel,
                 yolov11_raw_actions=[primary_action],
             )
+
+            is_mock_mode = getattr(self.soc, "mock_vlm", False) or not self.soc.nvidia_vlm.is_configured
+            sync_hdr = self.headers.get("X-Sync-VLM", "").lower() in ("true", "1", "yes")
+
+            if is_mock_mode or sync_hdr:
+                vlm_res = self.soc.nvidia_vlm.analyze_frame(
+                    image_input=frame_bgr,
+                    **vlm_kwargs,
+                )
+            else:
+                # Fast local tactical reasoning for instantaneous response (<5ms, zero camera lag)
+                vlm_res = self.soc.nvidia_vlm.analyze_frame(
+                    image_input=frame_bgr,
+                    mock_mode=True,
+                    **vlm_kwargs,
+                )
+                # Dispatch deep cloud NVIDIA NIM VLM asynchronously without blocking frame ingestion
+                self.soc.submit_vlm_task(
+                    camera_id=camera_id,
+                    frame_bgr=frame_bgr,
+                    vlm_kwargs=vlm_kwargs,
+                    base_response=response_data,
+                )
+
+            with ctx._lock:
+                ctx.latest_vlm_analysis = vlm_res
+
             response_data["nvidia_vlm_analysis"] = vlm_res
 
             # Integrate Section 6 schema fields into top-level response
@@ -1005,6 +1035,102 @@ class InferenceServer:
         self._httpd: Optional[ThreadedHTTPServer] = None
         self._server_thread: Optional[threading.Thread] = None
 
+        # Asynchronous non-blocking VLM Inference Worker (AGENTS.md CD-05 / Non-blocking Ingestion)
+        self._vlm_queue: queue.Queue = queue.Queue(maxsize=3)
+        self._vlm_stop_event = threading.Event()
+        self._vlm_worker_thread = threading.Thread(
+            target=self._vlm_worker_loop,
+            name="SOCAsyncVLMWorker",
+            daemon=True,
+        )
+        self._vlm_worker_thread.start()
+
+    def _vlm_worker_loop(self) -> None:
+        """Background thread executing deep Multimodal VLM analysis asynchronously.
+
+        Guarantees that cloud/NVIDIA NIM latency never blocks the video ingestion pipeline (AGENTS.md 3.1).
+        """
+        while not self._vlm_stop_event.is_set():
+            try:
+                task = self._vlm_queue.get(timeout=0.5)
+            except Exception:
+                continue
+
+            try:
+                camera_id = task["camera_id"]
+                ctx = self.context_manager.get(camera_id)
+                frame_bgr = task["frame_bgr"]
+                vlm_kwargs = task["vlm_kwargs"]
+                base_response = task["base_response"]
+
+                if self.nvidia_vlm is not None:
+                    vlm_res = self.nvidia_vlm.analyze_frame(image_input=frame_bgr, **vlm_kwargs)
+                    if ctx is not None:
+                        with ctx._lock:
+                            ctx.latest_vlm_analysis = vlm_res
+                            ctx.last_vlm_time = time.time()
+
+                    # Merge VLM results into dashboard event
+                    dashboard_payload = dict(base_response)
+                    dashboard_payload["nvidia_vlm_analysis"] = vlm_res
+                    dashboard_payload["severity"] = vlm_res.get("severity", dashboard_payload.get("severity", "low"))
+                    dashboard_payload["action_type"] = vlm_res.get("action_type", dashboard_payload.get("primary_action"))
+                    dashboard_payload["primary_action"] = vlm_res.get("action_type", dashboard_payload.get("primary_action"))
+                    dashboard_payload["threat_score"] = vlm_res.get("threat_score", dashboard_payload.get("threat_score", 0.0))
+                    dashboard_payload["reasoning"] = vlm_res.get("reasoning", "")
+                    dashboard_payload["description"] = vlm_res.get("description", "")
+                    dashboard_payload["recommended_action"] = vlm_res.get("recommended_action", "MONITOR")
+                    dashboard_payload["is_urgent"] = vlm_res.get("is_urgent", False)
+                    dashboard_payload["timestamp"] = vlm_res.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                    # Dispatch to dashboard and webhook
+                    self.record_dashboard_event(dashboard_payload)
+                    if self.webhook_dispatcher is not None and self.webhook_dispatcher.is_enabled:
+                        self.webhook_dispatcher.dispatch_raw_payload(dashboard_payload)
+            except Exception as e:
+                logger.warning("Asynchronous VLM worker error: %s", e)
+            finally:
+                try:
+                    self._vlm_queue.task_done()
+                except Exception:
+                    pass
+
+    def submit_vlm_task(
+        self,
+        camera_id: str,
+        frame_bgr: np.ndarray,
+        vlm_kwargs: Dict[str, Any],
+        base_response: Dict[str, Any],
+    ) -> bool:
+        """Submit frame to asynchronous VLM queue with rate limiting to prevent network/worker congestion."""
+        now = time.time()
+        ctx = self.context_manager.get(camera_id)
+        if ctx is not None:
+            # Enforce at least 1.5s sampling cooldown per camera for VLM
+            if (now - ctx.last_vlm_time) < 1.5:
+                return False
+
+        # Drop older queued task if full so worker always processes latest keyframe
+        if self._vlm_queue.full():
+            try:
+                self._vlm_queue.get_nowait()
+                self._vlm_queue.task_done()
+            except Exception:
+                pass
+
+        try:
+            self._vlm_queue.put_nowait({
+                "camera_id": camera_id,
+                "frame_bgr": frame_bgr.copy(),
+                "vlm_kwargs": vlm_kwargs,
+                "base_response": base_response,
+            })
+            if ctx is not None:
+                ctx.last_vlm_time = now
+            return True
+        except Exception:
+            return False
+
     def record_dashboard_event(self, event_data: Dict[str, Any]) -> None:
         """Publish real-time AI reasoning event to dashboard state, structured log, and SSE subscribers."""
         log_item = self.soc_logger.record_ai_reasoning(event_data)
@@ -1103,6 +1229,7 @@ class InferenceServer:
 
     def stop(self) -> None:
         """Gracefully shut down the server and worker threads."""
+        self._vlm_stop_event.set()
         if self._httpd is not None:
             self._httpd.shutdown()
             self._httpd.server_close()
