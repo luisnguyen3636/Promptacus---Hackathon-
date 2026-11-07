@@ -1,0 +1,41 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environments
+.venv/
+.venv
+venv/
+ENV/
+
+# Large model binaries
+*.weights
+*.onnx
+*.task
+*.pt
+!yolo/.gitkeep
+!yolo/README.md
+!models/.gitkeep
+
+# Runtime media and logs
+records/*
+!records/.gitkeep
+output/*
+!output/.gitkeep
+*.log
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.jpg
+*.jpeg
+*.png
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
