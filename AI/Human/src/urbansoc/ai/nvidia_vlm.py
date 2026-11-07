@@ -16,7 +16,7 @@ import numpy as np
 logger = logging.getLogger("urbansoc.ai.nvidia_vlm")
 
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEFAULT_NVIDIA_MODEL = "meta/llama-3.2-11b-vision-instruct"
+DEFAULT_NVIDIA_MODEL = "meta/llama-3.2-90b-vision-instruct"
 
 
 def load_env_file(env_path: Optional[str] = None) -> Dict[str, str]:
@@ -54,7 +54,7 @@ class NvidiaVisionClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
-        timeout_seconds: float = 15.0,
+        timeout_seconds: float = 6.0,
     ) -> None:
         load_env_file()
 
@@ -207,28 +207,27 @@ class NvidiaVisionClient:
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="ignore")
             logger.error(f"NVIDIA API HTTPError {e.code}: {err_body}")
-            return self._build_fallback_json(
-                severity="medium" if action_hint != "NORMAL" else "low",
-                action_type=action_hint or "NORMAL",
-                description=f"NVIDIA API HTTP Error {e.code}",
-                reasoning=f"Upstream NVIDIA NIM returned HTTP {e.code}: {err_body[:200]}",
+            res = self._build_mock_vlm_analysis(
                 camera_id=camera_id,
                 location=location,
-                actors=actors_hint or [],
+                action_hint=action_hint,
+                actors_hint=actors_hint,
                 timestamp=now_iso,
             )
+            res["source"] = f"vlm_local_fallback (HTTP {e.code})"
+            res["reasoning"] += f" [Upstream NIM returned HTTP {e.code}: {err_body[:120]}]"
+            return res
         except Exception as e:
             logger.error(f"NVIDIA Vision Request failed: {e}")
-            return self._build_fallback_json(
-                severity="medium" if action_hint != "NORMAL" else "low",
-                action_type=action_hint or "NORMAL",
-                description="NVIDIA NIM API connection timeout/failure",
-                reasoning=f"Request error: {str(e)}",
+            res = self._build_mock_vlm_analysis(
                 camera_id=camera_id,
                 location=location,
-                actors=actors_hint or [],
+                action_hint=action_hint,
+                actors_hint=actors_hint,
                 timestamp=now_iso,
             )
+            res["source"] = "vlm_local_fallback (timeout/error)"
+            return res
 
     def _prepare_image_data_uri(self, image_input: Union[np.ndarray, bytes, str]) -> Optional[str]:
         """Convert ndarray, bytes, or existing base64 string to data:image/jpeg;base64,... URI."""
