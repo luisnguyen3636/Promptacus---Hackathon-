@@ -21,6 +21,7 @@ from urbansoc.domain.webhook_models import CameraLocationConfig
 from urbansoc.evidence.keeper import EvidenceKeeper
 from urbansoc.server.camera_context import CameraContext, CameraContextManager
 from urbansoc.server.dashboard_html import DASHBOARD_HTML
+from urbansoc.telemetry.soc_logger import SOCLogger
 from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher, compute_forensic_sha256
 
 logger = logging.getLogger("urbansoc.server.inference_server")
@@ -86,7 +87,16 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             self._handle_get_dashboard_events()
             return
 
-        # 2d. Cryptographic Evidence Verification API (/api/v1/evidence/{event_id}/verify)
+        # 2d. Structured AI Reasoning & Audit Log APIs
+        if clean_path == "/api/v1/dashboard/logs":
+            self._handle_get_dashboard_logs()
+            return
+
+        if clean_path in ("/api/v1/dashboard/logs/download", "/api/v1/dashboard/export"):
+            self._handle_download_dashboard_logs()
+            return
+
+        # 2e. Cryptographic Evidence Verification API (/api/v1/evidence/{event_id}/verify)
         if clean_path.startswith("/api/v1/evidence/") and clean_path.endswith("/verify"):
             self._handle_verify_evidence(clean_path)
             return
@@ -401,6 +411,50 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 if q in self.soc.sse_queues:
                     self.soc.sse_queues.remove(q)
 
+    def _handle_get_dashboard_logs(self) -> None:
+        """Handle GET /api/v1/dashboard/logs with query filtering."""
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+
+        sev = qs.get("severity", [None])[0]
+        cam = qs.get("camera_id", [None])[0]
+        kw = qs.get("keyword", [None])[0]
+        try:
+            limit = min(200, max(1, int(qs.get("limit", [50])[0])))
+        except (ValueError, TypeError):
+            limit = 50
+
+        logs = self.soc.soc_logger.query_logs(
+            severity=sev,
+            camera_id=cam,
+            keyword=kw,
+            limit=limit,
+        )
+        self._send_json_response(200, {
+            "status": "success",
+            "count": len(logs),
+            "filters": {
+                "severity": sev or "ALL",
+                "camera_id": cam or "ALL",
+                "keyword": kw or "",
+                "limit": limit,
+            },
+            "logs": logs,
+        })
+
+    def _handle_download_dashboard_logs(self) -> None:
+        """Handle GET /api/v1/dashboard/logs/download as downloadable text file."""
+        text_content = self.soc.soc_logger.export_logs_text(max_lines=1000)
+        resp_bytes = text_content.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(resp_bytes)))
+        self.send_header("Content-Disposition", 'attachment; filename="urban_soc_audit_log.txt"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(resp_bytes)
+
     def _handle_verify_evidence(self, clean_path: str) -> None:
         """Handle /api/v1/evidence/{event_id}/verify."""
         parts = clean_path.split("/")
@@ -431,13 +485,23 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             msg = f"Vận hành viên {op_id} đã thực hiện: [{action}] cho sự cố {event_id or cam_id}."
             logger.info("Operational HITL Action: %s", msg)
 
+            audit_log = self.soc.soc_logger.record_audit(
+                operator_id=op_id,
+                action=action,
+                camera_id=cam_id,
+                event_id=event_id,
+                notes=notes,
+            )
+
             self.soc.record_dashboard_event({
                 "camera_id": cam_id,
                 "action": action,
-                "severity": "OPERATOR_CONFIRMED" if action == "CONFIRM_AND_DISPATCH" else "OPERATOR_ACTION",
+                "severity": "AUDIT",
                 "reasoning": msg,
                 "event_id": event_id,
                 "operator_id": op_id,
+                "notes": notes,
+                "timestamp": audit_log.get("timestamp"),
             })
 
             self._send_json_response(200, {
@@ -502,6 +566,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             "status": "success",
             "result": result,
         }
+        self.soc.record_dashboard_event(response_payload)
         self._send_json_response(200, response_payload)
 
     def _handle_register_camera(self) -> None:
@@ -926,6 +991,11 @@ class InferenceServer:
             storage_dir=os.path.join(self.output_dir, "evidence_storage")
         )
 
+        # Structured SOC Logger for 4-layer persistent logging and in-memory log buffer
+        self.soc_logger = SOCLogger(
+            log_dir=os.path.join(self.output_dir, "logs")
+        )
+
         # Dashboard live state & SSE
         self.latest_events: List[Dict[str, Any]] = []
         self.recent_logs: List[Dict[str, Any]] = []
@@ -936,27 +1006,23 @@ class InferenceServer:
         self._server_thread: Optional[threading.Thread] = None
 
     def record_dashboard_event(self, event_data: Dict[str, Any]) -> None:
-        """Publish real-time AI reasoning event to dashboard state and SSE subscribers."""
+        """Publish real-time AI reasoning event to dashboard state, structured log, and SSE subscribers."""
+        log_item = self.soc_logger.record_ai_reasoning(event_data)
         with self.state_lock:
             self.latest_events.append(event_data)
             if len(self.latest_events) > 50:
                 self.latest_events.pop(0)
 
-            log_item = {
-                "time": time.strftime("%H:%M:%S"),
-                "camera_id": event_data.get("camera_id", "UNKNOWN"),
-                "action": event_data.get("primary_action") or event_data.get("action_type", "INFERENCE"),
-                "severity": event_data.get("severity") or event_data.get("threat_level", "LOW"),
-                "summary": event_data.get("reasoning") or event_data.get("description", "AI Inference completed"),
-                "chain_hash": event_data.get("chain_hash") or (event_data.get("evidence", {}).get("chain_hash", "")),
-            }
             self.recent_logs.insert(0, log_item)
             if len(self.recent_logs) > 100:
                 self.recent_logs.pop()
 
             for q in list(self.sse_queues):
                 try:
-                    q.put_nowait(event_data)
+                    q.put_nowait({
+                        "event": event_data,
+                        "log": log_item,
+                    })
                 except Exception:
                     pass
 
