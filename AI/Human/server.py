@@ -105,6 +105,24 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
         default="auto",
         help=f"Target webhook URL to forward detected incidents (default: 'auto' routes to {HARDCODED_MODEL_URL})",
     )
+    parser.add_argument(
+        "--tunnel",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable automatic Cloudflare Tunnel for public remote access (default: True)",
+    )
+    parser.add_argument(
+        "--always-vlm",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Always analyze every incoming camera request with NVIDIA VLM (default: True)",
+    )
+    parser.add_argument(
+        "--mock-vlm",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use master local reasoning engine for VLM instead of external WAN API (default: False)",
+    )
     return parser.parse_args(args)
 
 
@@ -123,6 +141,9 @@ def main() -> int:
         device=args.device,
         output_dir=args.output_dir,
         webhook_url=webhook_url,
+        enable_tunnel=bool(args.tunnel),
+        always_vlm=bool(args.always_vlm),
+        mock_vlm=bool(args.mock_vlm),
     )
     server.start(blocking=True)
     return 0

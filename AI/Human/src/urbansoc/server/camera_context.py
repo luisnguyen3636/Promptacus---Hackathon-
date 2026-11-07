@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import cv2
 
 from urbansoc.behavior.engine import BehaviorEngine
 from urbansoc.domain.enums import ThreatLevel
@@ -23,7 +24,7 @@ from urbansoc.domain.schemas import (
 )
 from urbansoc.domain.webhook_models import CameraLocationConfig
 from urbansoc.render.hud import draw_diagnostic_alert_box, draw_soc_hud_dashboard
-from urbansoc.render.skeleton import draw_pose_skeleton_and_indicators
+from urbansoc.render.skeleton import draw_interaction_links, draw_pose_skeleton_and_indicators
 from urbansoc.render.theme import THREAT_COLORS
 from urbansoc.telemetry.webhook_dispatcher import EventThrottler
 
@@ -92,6 +93,10 @@ class CameraContext:
         self.latest_analysis: Optional[SOCFrameAnalysisResult] = None
         self.latest_frame: Optional[np.ndarray] = None
         self.latest_display_frame: Optional[np.ndarray] = None
+        self.latest_jpeg_bytes: Optional[bytes] = None
+        self.latest_vlm_analysis: Optional[Dict[str, Any]] = None
+        self.last_vlm_time: float = 0.0
+        self.new_frame_event = threading.Event()
         self.is_active = True
         self._lock = threading.Lock()
 
@@ -214,6 +219,7 @@ class CameraContext:
 
         # Render display overlay
         display_frame = frame_bgr.copy()
+        draw_interaction_links(display_frame, tracked_poses)
         for human in tracked_poses:
             palette = THREAT_COLORS[human.behavior.threat_level]
             draw_pose_skeleton_and_indicators(
@@ -284,6 +290,7 @@ class CameraContext:
         )
 
         display_frame = frame_bgr.copy()
+        draw_interaction_links(display_frame, tracked_poses)
         for human in tracked_poses:
             palette = THREAT_COLORS[human.behavior.threat_level]
             draw_pose_skeleton_and_indicators(
@@ -322,7 +329,14 @@ class CameraContext:
             self.latest_frame = raw_frame
             self.latest_display_frame = display_frame
             self.latest_analysis = analysis
+            try:
+                success, encoded = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if success:
+                    self.latest_jpeg_bytes = encoded.tobytes()
+            except Exception:
+                pass
             self.is_active = True
+            self.new_frame_event.set()
 
     def get_status_dict(self) -> Dict[str, Any]:
         """Return a snapshot dictionary of this camera's current telemetry status."""

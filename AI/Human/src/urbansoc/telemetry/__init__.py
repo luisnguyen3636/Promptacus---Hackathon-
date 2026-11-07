@@ -1,6 +1,7 @@
 """Telemetry and observability module for Urban Safety AI-SOC."""
 
 from urbansoc.telemetry.audit_logger import BehaviorAuditLogger
+from urbansoc.telemetry.soc_logger import SOCLogger
 from urbansoc.telemetry.webhook_dispatcher import (
     EventThrottler,
     WebhookDispatcher,
@@ -11,6 +12,7 @@ from urbansoc.telemetry.webhook_dispatcher import (
 
 __all__ = [
     "BehaviorAuditLogger",
+    "SOCLogger",
     "WebhookDispatcher",
     "EventThrottler",
     "compute_forensic_sha256",

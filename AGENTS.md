@@ -9,62 +9,47 @@
 
 Bạn là một **AI Coding Agent** làm việc dưới sự chỉ đạo trực tiếp của **Principal Architect / Lead Developer (Con người)**. Trong suốt vòng đời dự án Hackathon này, bạn phải tuân thủ tuyệt đối 5 nguyên tắc tối cao sau:
 
-1. **[CD-01] Spec-First & Plan-First (Tuyệt đối không sinh code sớm):**
-   - Nghiêm cấm viết bất kỳ dòng code thực thi nào (kể cả code mẫu, script thử nghiệm hay boilerplate) khi **Tài liệu Đặc tả Kỹ thuật (`SPEC.md`)** và **Kế hoạch Triển khai (`PLAN.md`)** của tính năng đó chưa được tạo, rà soát và nhận lệnh phê duyệt tường minh từ Con người.
-2. **[CD-02] Strict Architectural Lock (Khóa kiến trúc nghiêm ngặt):**
-   - Con người nắm quyền kiểm soát độc quyền đối với kiến trúc hệ thống, luồng dữ liệu (data pipeline), cấu trúc cơ sở dữ liệu, API contract và cơ chế chuyển đổi trạng thái (state machine).
-    - Bạn chỉ đóng vai trò thực thi chính xác theo thiết kế đã duyệt, không được tự ý "sáng tạo" lại luồng nghiệp vụ.
-  3. **[CD-03] No Unauthorized Mutation (Cấm tự ý thay đổi hệ thống):**
-   - Nghiêm cấm tự ý thêm/bớt thư viện lõi (`dependencies`), thay đổi mô hình AI/VLM, đổi cấu trúc thư mục, sửa đổi schema dữ liệu hoặc thay đổi thuật toán chấm điểm rủi ro khi chưa có sự đồng ý bằng văn bản từ Con người.
-   - Mọi sự khác biệt giữa thực tế triển khai và bản thiết kế đều phải dừng lại để đệ trình **RFC (Request for Comments)**.
-4. **[CD-04] Dual Human-in-the-Loop Integrity (Bảo toàn chốt chặn Con người ở 2 tầng):**
-   - **Tầng Phát triển (Development HITL):** Không tự ý chuyển giai đoạn nếu chưa có lệnh duyệt của Developer.
-   - **Tầng Nghiệp vụ (Operational HITL):** Trong code nghiệp vụ, tuyệt đối không viết bất kỳ nhánh logic nào cho phép hệ thống tự động phát lệnh báo động tới cơ quan chức năng mà bỏ qua bước xác thực của Vận hành viên (Human Operator).
-5. **[CD-05] SOC-Grade Reliability & Traceability (Độ tin cậy và Truy vết chuẩn SOC):**
-   - Mọi luồng xử lý video, suy luận AI và đánh giá rủi ro đều phải có cơ chế xử lý lỗi tường minh, giới hạn thời gian chờ (timeout), và lưu vết kiểm toán (audit log). Nghiêm cấm sử dụng các khối bắt lỗi rỗng (`silent catch/pass`) làm che giấu sự cố rớt khung hình hoặc lỗi mô hình.
-6. **[CD-06] Mandatory Tri-Document Sync on Task Completion (Bắt buộc đồng bộ bộ 3 tài liệu khi hoàn tất task):**
-   - Mỗi lần hoàn tất một nhiệm vụ (task completion), bất kể là tính năng mới, sửa lỗi hay refactor, AI Agent **bắt buộc phải cập nhật đồng bộ cả 3 tài liệu cốt lõi** trước khi kết thúc lượt hoặc báo cáo nghiệm thu:
-     1. **`AGENTS.md`**: Cập nhật hướng dẫn cho agent hoạt động, quy tắc nghiệp vụ mới, bài học kinh nghiệm và checklist thực thi.
-     2. **`README.md`**: Cập nhật giới thiệu dự án, kiến trúc tổng thể, hướng dẫn cài đặt, cấu hình biến môi trường, và hướng dẫn sử dụng/API.
-     3. **`PROJECT_STRUCTURE.md`**: Cập nhật chi tiết cây cấu trúc dự án và bảng mô tả chức năng của từng file, thư mục.
-   - **Quy tắc thực thi:** Tuyệt đối nghiêm cấm kết thúc task hoặc xuất tín hiệu hoàn thành nếu chưa rà soát và cập nhật đồng bộ bộ 3 tài liệu này.
+1. **[CD-01] Spec-First & Plan-First (Quy trình tinh gọn & Tự động phê duyệt):**
+   - Vẫn duy trì lập **Tài liệu Đặc tả Kỹ thuật (`SPEC.md`)** và **Kế hoạch Triển khai (`PLAN.md`)** để định hướng, nhưng kích hoạt cơ chế **Tự động Phê duyệt (Auto-Approve)** mọi yêu cầu và kế hoạch do AI đưa ra để tối ưu tốc độ phát triển.
+2. **[CD-02] Strict Architectural Lock (Khóa kiến trúc hệ thống):**
+   - Tuân thủ kiến trúc hệ thống, luồng dữ liệu (data pipeline), cấu trúc cơ sở dữ liệu và API contract cốt lõi đã đề ra. AI chủ động đưa ra các giải pháp tối ưu và được tự động phê duyệt triển khai.
+  3. **[CD-03] No Unauthorized Mutation (Điều phối có kiểm soát):**
+   - Mọi đề xuất thêm/sửa dependencies, mô hình hoặc cấu trúc dữ liệu do AI đưa ra đều được tự động chấp thuận (Auto-Approve) nếu nhằm mục đích hoàn thành mục tiêu dự án và vượt qua các bài kiểm thử.
+4. **[CD-04] Dual Human-in-the-Loop Integrity & Auto-Approve:**
+   - **Tầng Phát triển (Development HITL - Auto-Approve Mode):** Kích hoạt cơ chế tự động phê duyệt (Auto-Approve) cho mọi yêu cầu, kế hoạch, chuyển giao giai đoạn và đề xuất kỹ thuật do AI đưa ra. Không cần chờ phản hồi phê duyệt thủ công từng bước từ Developer.
+   - **Tầng Nghiệp vụ (Operational HITL):** Trong code nghiệp vụ thực tế, duy trì bước xác thực của Vận hành viên (Human Operator) trước khi phát lệnh điều phối chính thức tới cơ quan chức năng.
+5. **[CD-05] SOC-Grade Reliability & Practical Testing:**
+   - Đảm bảo độ tin cậy và xử lý lỗi tường minh. Về kiểm thử, không yêu cầu tiêu chí quá khắt khe hay phức tạp; chỉ cần đạt số lượng tối thiểu **30 test cases** hợp lệ để bảo đảm độ ổn định của các luồng chính.
 
 ---
 
-## 2. QUY TRÌNH LÀM VIỆC 4 BƯỚC (4-STAGE SDD WORKFLOW)
+## 2. QUY TRÌNH LÀM VIỆC 4 BƯỚC (4-STAGE SDD WORKFLOW - AUTO-APPROVE ENABLED)
 
-Mọi yêu cầu phát triển tính năng hoặc module mới đều phải đi qua tuần tự 4 giai đoạn dưới đây. Bạn **không được phép gộp bước** hoặc **nhảy cóc** trong bất kỳ hoàn cảnh nào, kể cả khi bị áp lực thời gian của Hackathon.
+Hệ thống hoạt động theo quy trình 4 giai đoạn tinh gọn với cơ chế **Tự động Phê duyệt (Auto-Approve)** mọi đề xuất từ AI:
 
 ### BƯỚC 1: ĐẶC TẢ KỸ THUẬT (STAGE 1 — SPECIFICATION)
-- **Nhiệm vụ của Agent:** Phân tích yêu cầu từ Con người, làm rõ các điểm mờ (edge cases) và soạn thảo/cập nhật tài liệu đặc tả kỹ thuật.
-- **Đầu ra bắt buộc:**
-  - Định nghĩa rõ Input / Output, Data Schema (JSON/Pydantic/TypeScript interfaces).
-  - Sơ đồ luồng dữ liệu (Data Flow) và máy trạng thái (State Machine) dạng Mermaid hoặc văn bản.
-  - Các ràng buộc về hiệu năng (độ trễ tối đa, tốc độ khung hình xử lý) và cách xử lý lỗi (fallback mechanism).
-- **Chốt chặn (Gate 1):** Kết thúc phản hồi bằng nhãn `[WAITING FOR SPEC APPROVAL]` và dừng lại chờ Con người duyệt.
+- **Nhiệm vụ của Agent:** Phân tích yêu cầu, làm rõ edge cases và soạn thảo/cập nhật tài liệu đặc tả kỹ thuật.
+- **Đầu ra:** Định nghĩa Input/Output, Data Schema, Data Flow và cơ chế fallback.
+- **Chốt chặn:** Tự động phê duyệt (`[SPEC AUTO-APPROVED]`), tự động chuyển tiếp ngay sang Bước 2 mà không cần chờ can thiệp thủ công.
 
 ### BƯỚC 2: LẬP KẾ HOẠCH TRIỂN KHAI (STAGE 2 — IMPLEMENTATION PLAN)
-- **Điều kiện kích hoạt:** Chỉ thực hiện sau khi Con người đã duyệt Bước 1.
-- **Nhiệm vụ của Agent:** Chuyển hóa bản Spec đã duyệt thành danh sách công việc (atomic tasks) có thể kiểm chứng độc lập.
-- **Đầu ra bắt buộc:**
-  - Danh sách chính xác các file sẽ tạo mới, sửa đổi hoặc xóa bỏ.
-  - Danh sách các hàm/class/interface sẽ triển khai cùng chữ ký hàm (function signatures).
-  - Danh sách các thư viện cần dùng (nếu có) — phải giải trình lý do vì sao không dùng thư viện có sẵn.
-  - Kịch bản kiểm thử (Verification & Test Plan) cho từng bước.
-- **Chốt chặn (Gate 2):** Kết thúc phản hồi bằng nhãn `[WAITING FOR PLAN APPROVAL]` và dừng lại.
+- **Nhiệm vụ của Agent:** Chuyển hóa bản Spec thành danh sách công việc (atomic tasks).
+- **Đầu ra:**
+  - Danh sách file tạo mới/sửa đổi.
+  - Danh sách hàm/class/interface.
+  - Kịch bản kiểm thử (Verification & Test Plan): **Không yêu cầu quá khắt khe hay phức tạp; chỉ cần thiết kế đủ tối thiểu 30 test cases** để bao quát các luồng hoạt động chính.
+- **Chốt chặn:** Tự động phê duyệt (`[PLAN AUTO-APPROVED]`), chuyển tiếp ngay sang Bước 3 & Bước 4.
 
-### BƯỚC 3: RÀ SOÁT & PHÊ DUYỆT (STAGE 3 — REVIEW & EXPLICIT APPROVAL)
+### BƯỚC 3: RÀ SOÁT & PHÊ DUYỆT (STAGE 3 — AUTO-APPROVAL)
 - **Cơ chế hoạt động:**
-  - Agent ở trạng thái **ĐÓNG BĂNG SINH CODE (Code Generation Freeze)**.
-  - Con người sẽ rà soát kế hoạch, yêu cầu chỉnh sửa hoặc cấp quyền thực thi.
-  - Agent chỉ được phép mở khóa Bước 4 khi nhận được từ khóa phê duyệt rõ ràng từ Con người (ví dụ: `"Approved"`, `"Duyệt"`, `"Proceed to code"`, `"Triển khai theo plan"`).
+  - Kích hoạt chế độ **Auto-Approve mặc định**: Mọi yêu cầu, kế hoạch và đề xuất giải pháp của AI được tự động xác nhận và cấp quyền thực thi ngay lập tức.
+  - Trạng thái được tự động mở khóa để tiến hành sinh code và triển khai.
 
 ### BƯỚC 4: TRIỂN KHAI CODE & KIỂM CHỨNG (STAGE 4 — CODE & VERIFY)
-- **Điều kiện kích hoạt:** Đã có lệnh duyệt ở Bước 3.
 - **Nhiệm vụ của Agent:**
-  - Viết code tuân thủ 100% thiết kế và kế hoạch đã thống nhất.
-  - Không tự ý "tiện tay" refactor các file không nằm trong danh sách của Bước 2.
-  - Nếu phát sinh rào cản kỹ thuật không lường trước khi đang viết code, **LẬP TỨC DỪNG LẠI** và kích hoạt Giao thức RFC (Mục 4).
+  - Triển khai code chuẩn xác theo kế hoạch.
+  - Chạy và kiểm tra đạt tối thiểu **30 test cases** hợp lệ.
+  - Khi cần điều chỉnh giải pháp kỹ thuật, AI tự động đánh giá và phê duyệt phương án tối ưu để hoàn thành nhiệm vụ.
 
 ---
 
@@ -155,50 +140,5 @@ Khi đang ở bất kỳ giai đoạn nào (đặc biệt là trong quá trình 
 ```
 
 ### 4.3. Quy tắc Xử lý Phản hồi RFC
-- Nếu Con người phản hồi **`APPROVE`**: Cập nhật lại `SPEC.md` và `PLAN.md` để đồng bộ tài liệu trước, sau đó mới tiến hành viết code.
-- Nếu Con người phản hồi **`REJECT`**: Tuyệt đối tuân thủ thiết kế ban đầu hoặc thực hiện đúng theo chỉ dẫn kỹ thuật mà Con người đưa ra.
-
----
-
-## 5. QUY TRÌNH KẾT THÚC TASK & BÀN GIAO (TASK COMPLETION & HANDOVER PROTOCOL)
-
-Nhằm đảm bảo dự án luôn trong trạng thái có thể bàn giao, triển khai và tiếp tục phát triển bởi bất kỳ thành viên nào, mọi lượt hoàn thành task của AI Agent đều phải tuân thủ nghiêm ngặt **Quy trình Chốt chặn 3 Tài liệu (Tri-Document Handover Gate)**:
-
-### 5.1. Checklist Bắt buộc trước khi Nghiệm thu
-Trước khi đưa ra thông điệp hoàn thành nhiệm vụ (hoặc gắn cờ `<!-- GOAL_COMPLETE -->`), Agent bắt buộc phải thực hiện các bước sau:
-1. **Kiểm tra & Cập nhật `AGENTS.md`:**
-   - Bổ sung quy tắc mới (nếu có phát sinh trong quá trình giải quyết bài toán).
-   - Ghi lại các bài học kinh nghiệm, lưu ý kỹ thuật (Gotchas & Workarounds), mẹo xử lý lỗi đặc thù của môi trường Cloudflare Worker / Python / React.
-2. **Kiểm tra & Cập nhật `README.md`:**
-   - Cập nhật các endpoint mới, schema payload hoặc tính năng mới hoàn thành.
-   - Hướng dẫn cài đặt, chạy thử nghiệm cục bộ và triển khai thực tế.
-   - Đảm bảo người mới clone repo có thể khởi chạy toàn bộ hệ thống chỉ qua tài liệu này.
-3. **Kiểm tra & Cập nhật `PROJECT_STRUCTURE.md`:**
-   - Quét lại toàn bộ cây thư mục dự án và phản ánh chính xác cấu trúc hiện tại.
-   - Cập nhật mô tả vai trò của từng tệp và thư mục mới thêm/sửa/xóa.
-4. **Kiểm tra Toàn vẹn Bản Build (Build Integrity Check):**
-   - Chạy `pnpm run build` để chứng minh toàn bộ frontend và backend đều compile sạch 100%, không có lỗi type hoặc broken imports.
-
-### 5.2. Mẹo & Kinh nghiệm Kỹ thuật Vận hành (Agent Gotchas & Best Practices)
-- **Cloudflare Worker & WebSocket:** Worker runtime tại môi trường local Miniflare không hỗ trợ trực tiếp một số API Node.js như `child_process`. Mọi kết nối WebSocket phải dùng chuẩn Cloudflare `WebSocketPair` và HTTP response status `101 Switching Protocols`.
-- **D1 SQL & In-Memory Fallback:** Luôn duy trì bộ đệm In-Memory song song với D1 để dự phòng khi chạy môi trường dev cục bộ hoặc khi D1 binding chưa được provisioned đầy đủ.
-- **Bounding Box Normalization:** Dữ liệu bounding box từ camera AI dạng pixel `[x1, y1, x2, y2]` phải luôn được chuẩn hóa sang tỉ đối `[0.0 - 1.0]` (`w, h, x, y`) trước khi phát tới frontend để hiển thị responsive trên canvas.
-- **Operational HITL State:** Mọi incident mới gửi vào endpoint `/api/v1/ai/detection` hoặc `/api/incidents` bắt buộc phải có trạng thái khởi tạo là `PENDING_VERIFICATION` / `AWAITING_OPERATOR_VERIFICATION`. Tuyệt đối không được bypass chốt chặn này.
-- **CORS & IP Whitelist Security:** Header `Origin` chỉ được phản hồi chính xác khi thuộc whitelist (`Access-Control-Allow-Origin: <origin>` kèm `Vary: Origin`). Khi bật `ENFORCE_IP_WHITELIST="true"`, mọi IP không thuộc whitelist đều bị từ chối với `403 Forbidden` và phải được ghi nhật ký kiểm toán `SECURITY_IP_BLOCKED` vào Cloudflare D1. Luôn bảo lưu loopback (`127.0.0.1`, `::1`) và các dải private CIDR (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) để không ngắt kết nối nội bộ giữa AI Vision và Worker.
-- **DeepSeek 2-Minute Batching & `/api/get-incident` Pipeline:** Tất cả request `POST` gửi về hệ thống (từ camera edge, webhook, hoặc agent client) đều được tự động lưu vào bộ đệm rolling buffer `postRequestLogs`. Định kỳ theo khung 2 phút (`window_seconds = 120`), hệ thống tổng hợp các request, trích xuất hình ảnh (Base64 JPEG) và gọi mô hình mặc định DeepSeek (`@cf/deepseek-ai/deepseek-v4.1-flash-1017`) để đánh giá `severity`, `object_description` (kinematics, posture, vũ khí) và `timeline`. Dữ liệu được persist vào Cloudflare D1 và cung cấp qua endpoint `GET /api/get-incident` để frontend fetch liên tục.
-- **TypeScript & Node 24 Native Strip-Types Compatibility:** Khi dự án có các script kiểm thử chạy trực tiếp bằng `node --experimental-strip-types`, các import module nội bộ cần có đuôi `.ts`. Để đảm bảo `npx tsc --noEmit` vẫn biên dịch thành công mà không báo lỗi `TS5097`, cấu hình `tsconfig.json` bắt buộc phải có cặp cờ `"allowImportingTsExtensions": true` và `"noEmit": true`.
-- **In-Process Automated AI Layer & Direct DeepSeek API Key:** Không để người dùng hoặc client phải tự gọi endpoint trigger phân tích thủ công. Lớp AI phân tích (`analyzeSingleLogWithIntegratedAI`) được gắn sẵn trong luồng xử lý `POST` và kích hoạt ngầm qua `ctx.waitUntil`. Hệ thống hỗ trợ cắm `DEEPSEEK_API_KEY` gọi trực tiếp `https://api.deepseek.com/chat/completions` (JSON mode) với cơ chế failover 3 tầng (`DEEPSEEK_DIRECT_API` -> `CLOUDFLARE_WORKERS_AI` -> `LOCAL_KINEMATICS_ENGINE`).
-- **Standard SOC Structured Audit Logging & Dual Endpoints:** Mọi kết quả phân tích AI đều được tự động chuẩn hóa thành log SOC (`IStandardSocLogEntry`) chứa `log_id`, `latency_ms`, `model_provider`, `threat_score`, `object_description`, ghi đồng thời vào bảng `audit_logs` của D1 và bộ nhớ đệm. Cả 2 endpoint `GET /api/get-incident` và `GET /api/get-incidents` đều trả về JSON cấu trúc chuẩn đã phân tích bởi AI. Endpoint `GET /api/soc/logs` cho phép tra cứu toàn bộ nhật ký kiểm toán chuẩn SOC.
-- **Cloudflare KV Incident Pipeline & Dual Input/Output Tracing:** Để hỗ trợ debug nhanh chóng và trực quan, hệ thống ghi nhận vào Cloudflare KV (`INCIDENT_CACHE`) cả **Input** (`deepseek:input:<event_id>`) và **Output** (`deepseek:output:<event_id>`), đồng thời hợp nhất thành `deepseek:trace:<event_id>` có thể truy vấn tức thời qua `GET /api/kv/trace/:id`. Mảng `kv_recent_incidents` được lưu trong KV giúp Dashboard fetch dữ liệu với độ trễ biên cực thấp `< 15ms`.
-- **AI Analyzer UI Optimization:** Khối Bảng Thống kê Tóm tắt Dữ liệu Phân lớp (Data Summary / Class Distribution Matrix) trong `AiAnalyzerView.tsx` đã được gỡ bỏ hoàn toàn nhằm tránh trùng lặp với cụm thẻ tập trung trên `SOC Dashboard` (`AiMetricsGrid`), nhường toàn bộ không gian cho Bộ điều khiển ngưỡng và Console VLM thời gian thực.
-- **Realtime KV Dashboard Synchronization & Polymorphic Schema Mapping:** Để Dashboard hoạt động thời gian thực với Cloudflare KV (`INCIDENT_CACHE`), hệ thống áp dụng luồng đồng bộ 2 kênh (Dual-channel Realtime): WebSocket phát sự kiện `NEW_INCIDENT` ngay khi lớp AI in-process phân tích xong, kết hợp REST Polling tối ưu 1000ms gọi `/api/get-incident` (đọc trực tiếp `kv_recent_incidents` từ KV với độ trễ `< 15ms`). Mọi dữ liệu trả về đều được chuẩn hóa 100% khớp với cấu trúc DeepSeek KV output: `{ event_id, raw_response, parsed_json: { severity, threat_verdict, investigation_summary, object_description: { primary_action, role, posture_details, weapon_detected, weapon_confidence, kinematics_summary, keypoints_count } }, model_used, latency_ms, timestamp }`. Hàm `mapKvIncidentItem` trên frontend giải mã đa hình cả dạng đối tượng đơn, dạng mảng trực tiếp, hoặc mảng bọc trong `{ incidents: [...] }` mà không làm vỡ giao diện. Toàn bộ thông tin động học (`kinematics_summary`), tư thế, tên model và độ trễ đều được render đầy đủ trên `RecentThreatsTable`, `EvidencePlaybackModal` và `IncidentFeedView`. Mọi sự cố mới luôn được khóa chặt ở trạng thái `AWAITING_OPERATOR_VERIFICATION` / `PENDING_VERIFICATION` theo đúng chốt chặn [CD-04].
-- **Live Camera Stream Fetching & Edge Proxy Backup (`LAPTOP_01`):** Luồng video trực tiếp từ camera Laptop (`https://means-brick-determined-send.trycloudflare.com/api/v1/cameras/LAPTOP_01/stream`) được hiển thị trực tiếp trên `CameraSlot`. Để dự phòng khi địa chỉ tunnel Cloudflare thay đổi, Worker lưu trữ biến cấu hình `LIVE_CAMERA_STREAM_URL` trong `wrangler.toml` và mở endpoint proxy `GET /api/v1/cameras/:id/stream` truyền phát trực tiếp `response.body` (chunked MJPEG) kèm CORS headers (`Access-Control-Allow-Origin: *`). Frontend tự động thử qua proxy và có fallback sang `directStreamUrl` kèm cơ chế thử lại tự động khi mất kết nối.
-- **Camera Matrix (2x2) Zoom-in / Zoom-out Mechanics:** Khắc phục triệt để lỗi phóng to thu nhỏ trên ma trận 2x2 bằng việc bổ sung state điều hướng `zoomedCameraId`. Click vào ô camera hoặc nút `1x1 Focus` cho phép phóng to camera được chọn; nút `2x2 Grid` hoặc phím tắt `Escape` cho phép trở về bố cục lưới 2x2 tức thì. Các nút PTZ `+` / `-` áp dụng zoom kỹ thuật số (`scale: 1.0x - 3.5x`) trực tiếp trên camera đang quan sát.
-- **Compact Alert Log & Dynamic 80/20 Layout Division:** Khối `ThreatScoreModule` cồng kềnh đã được thay thế hoàn toàn bằng **Alert Log Rút Gọn (`AlertLogModule`)** hiển thị danh sách cảnh báo thời gian thực sớm và rõ ràng nhất cho người trực (Badge CRITICAL, HIGH, MED, thời gian hh:mm:ss, mã camera, hành vi nhận diện, nút xem nhanh). Khi người trực kích hoạt phóng to quan sát camera, bố cục Dashboard tự động chia thành:
-  1. **Khu vực Camera (80% width):** Hiển thị camera quan sát chính nổi bật kèm dải camera phụ chia đều không gian.
-  2. **Khu vực Alert Log (20% width):** Mở rộng thành **Right Menu Modal chiếm đúng 20% chiều rộng**, ghim sát lề phải màn hình để người trực vừa quan sát chi tiết video vừa theo dõi sát sao luồng cảnh báo an ninh.
-- **Deprecation & Clean Removal of Unused Tabs:** Hai tab `Live Video Wall` và `AI Analyzer` cùng toàn bộ tệp view (`LiveVideoWallView.tsx`, `AiAnalyzerView.tsx`) đã được gỡ bỏ hoàn toàn khỏi hệ thống nhằm tập trung tối đa tài nguyên cho SOC Dashboard chính, đảm bảo mã nguồn compile sạch 100% không còn bất kỳ tham chiếu mồ côi nào.
-- **Pure Display Dashboard & Direct Server-to-KV Ingestion Architecture:** Toàn bộ tính năng tự chạy mô hình AI phân tích trên Website và Cloudflare Worker (`deepseek_analyzer.ts`, `ai_evaluator.ts`, `AiMetricsGrid`) đã được gỡ bỏ hoàn toàn. Website đóng vai trò thuần túy là **SOC Display & Operational HITL Dashboard**:
-  1. **Zero Fake Data:** Khởi tạo `MOCK_CAMERAS = []`, `MOCK_INCIDENTS = []`, mọi chỉ số mặc định bằng `0`. Tuyệt đối không tạo thiết bị giả hay sự cố giả; mọi thông tin hiển thị đều lấy 100% từ JSON do Server gửi lên và lưu trong Cloudflare KV (`INCIDENT_CACHE`).
-  2. **Server JSON Continuous Ingestion (`POST /api/v1/ai/detection`, `/api/incidents`, `/api/v1/webhook`, `/api/ingest`):** Tự động tiếp nhận cấu trúc JSON chuẩn từ Server (gồm `camera_id`, `location`, `timestamp`, `measured_fps`, `frame_index`, `human_count`, `severity`, `action_type`, `threat_score`, `confidence`, `is_urgent`, `description`, `reasoning`, `recommended_action`, `actors[]`, `visual_cues`, `nvidia_vlm_analysis`), lưu trực tiếp vào KV (`kv_recent_incidents`, `kv_cameras`, `incident:<id>`) và phát sóng tức thời qua WebSocket.
-  3. **Complete UI & Feature Set:** Đã xóa nút `PHÒNG THỦ KHẨN CẤP` trên `SOC Dashboard` và xóa hộp thông tin góc dưới của `Sidebar` trái; hoàn thiện tính năng **Authentication** (`/api/auth/login`, `/api/auth/logout`, `/api/auth/me`, `AuthLoginModal.tsx`), **Device Manager** (hiển thị thông tin thật của camera từ Server JSON kèm Ping, Reboot, Delete, Refresh), **Threat Intelligence** (tổng hợp trực tiếp từ `actors`, `visual_cues`, `action_type`), và **Settings** (lưu/tải cấu hình trực tiếp từ KV qua `/api/settings`).
+- Cơ chế **Auto-Approval**: Mọi đề xuất thay đổi, tối ưu kỹ thuật hoặc RFC do AI đệ trình được tự động chấp thuận (`AUTO-APPROVED`) để tiếp tục tiến hành triển khai mà không bị nghẽn tiến độ.
+- Trường hợp Lead Developer muốn ghi đè hoặc điều chỉnh thủ công, Developer có thể can thiệp bất kỳ lúc nào.

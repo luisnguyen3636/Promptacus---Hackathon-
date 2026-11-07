@@ -9,6 +9,8 @@ __pycache__/
 .venv
 venv/
 ENV/
+.env
+.env.local
 
 # Large model binaries
 *.weights
@@ -18,6 +20,7 @@ ENV/
 !yolo/.gitkeep
 !yolo/README.md
 !models/.gitkeep
+bin/
 
 # Runtime media and logs
 records/*

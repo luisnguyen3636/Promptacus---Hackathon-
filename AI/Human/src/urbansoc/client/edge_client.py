@@ -56,6 +56,7 @@ class EdgeCameraClient:
         address: str = "Laptop Client",
         headless: bool = False,
         test_action: Optional[str] = None,
+        timeout: float = 30.0,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.camera_id = camera_id if camera_id else get_auto_camera_id()
@@ -69,6 +70,7 @@ class EdgeCameraClient:
         self.address = address
         self.headless = headless
         self.test_action = test_action
+        self.stream_timeout = timeout
 
         self._running = False
         self._source = None
@@ -76,6 +78,12 @@ class EdgeCameraClient:
         self._simulated = False
         self.frame_count = 0
         self.latest_server_result: Optional[Dict[str, Any]] = None
+
+        # Reuse HTTP persistent connection pool to eliminate TCP handshake latency on every frame
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
         self._init_source()
 
@@ -109,6 +117,7 @@ class EdgeCameraClient:
                 if ret:
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     self._cap = cap
                     logger.info("Direct cv2.VideoCapture successfully opened physical webcam on index %s", int_idx)
                     return
@@ -126,6 +135,7 @@ class EdgeCameraClient:
                         if ret:
                             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
                             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                             self._cap = cap
                             logger.info("Auto-detected alternative physical webcam at index %d", alt_idx)
                             return
@@ -193,7 +203,7 @@ class EdgeCameraClient:
             "fps": self.fps,
         }
         try:
-            resp = requests.post(url, json=payload, timeout=timeout)
+            resp = self.session.post(url, json=payload, timeout=timeout)
             if resp.status_code == 200:
                 logger.info("Successfully registered camera '%s' with server at %s", self.camera_id, url)
                 return True
@@ -203,8 +213,37 @@ class EdgeCameraClient:
             logger.warning("Failed to register with server (%s): %s", url, e)
             return False
 
-    def send_frame(self, frame_bgr: np.ndarray, timestamp_ms: int, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
+    def send_frame(
+        self,
+        frame_bgr: np.ndarray,
+        timestamp_ms: int,
+        timeout: float = 6.0,
+        max_retries: int = 1,
+        retry_delay_sec: float = 1.0,
+    ) -> Optional[Dict[str, Any]]:
         """Encode raw frame to JPEG binary and send via HTTP POST to intermediate server."""
+        return self.stream_frame_post(
+            frame_bgr=frame_bgr,
+            timestamp_ms=timestamp_ms,
+            timeout=timeout,
+            endpoint_path="/api/v1/ingest/frame",
+            max_retries=max_retries,
+            retry_delay_sec=retry_delay_sec,
+        )
+
+    def stream_frame_post(
+        self,
+        frame_bgr: np.ndarray,
+        timestamp_ms: int,
+        timeout: float = 6.0,
+        endpoint_path: Optional[str] = None,
+        max_retries: int = 4,
+        retry_delay_sec: float = 3.0,
+    ) -> Optional[Dict[str, Any]]:
+        """Directly stream video frame to the SOC server/dashboard via HTTP POST method.
+
+        Supports automated retry policy (up to max_retries attempts spaced by retry_delay_sec).
+        """
         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]
         success, encoded_jpeg = cv2.imencode(".jpg", frame_bgr, encode_params)
         if not success:
@@ -212,7 +251,8 @@ class EdgeCameraClient:
             return None
 
         raw_bytes = encoded_jpeg.tobytes()
-        url = f"{self.server_url}/api/v1/ingest/frame"
+        path = endpoint_path or f"/api/v1/cameras/{self.camera_id}/stream"
+        url = f"{self.server_url}{path}"
         headers = {
             "Content-Type": "image/jpeg",
             "X-Camera-ID": self.camera_id,
@@ -223,10 +263,32 @@ class EdgeCameraClient:
         if self.test_action:
             headers["X-Test-Action"] = str(self.test_action)
 
-        resp = requests.post(url, data=raw_bytes, headers=headers, timeout=timeout)
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning("Server responded with HTTP %d: %s", resp.status_code, resp.text)
+        for attempt in range(1, max_retries + 1):
+            try:
+                resp = self.session.post(url, data=raw_bytes, headers=headers, timeout=timeout)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    self.latest_server_result = data
+                    return data
+                logger.warning(
+                    "Server responded with HTTP %d (attempt %d/%d): %s",
+                    resp.status_code,
+                    attempt,
+                    max_retries,
+                    resp.text,
+                )
+            except Exception as e:
+                logger.warning(
+                    "HTTP POST stream frame failed on attempt %d/%d (%s): %s",
+                    attempt,
+                    max_retries,
+                    url,
+                    e,
+                )
+
+            if attempt < max_retries and retry_delay_sec > 0:
+                time.sleep(retry_delay_sec)
+
         return None
 
     def _draw_client_hud(self, frame: np.ndarray, current_fps: float) -> np.ndarray:
@@ -247,6 +309,62 @@ class EdgeCameraClient:
             "CRITICAL": (40, 40, 230),   # Red
         }
         banner_color = threat_colors.get(threat, (100, 100, 100))
+
+        # 0. Draw detected subjects and interaction links received from server
+        humans_list = res.get("humans", []) if res else []
+        pos_by_id = {}
+        for h_info in humans_list:
+            bx1, by1, bx2, by2 = h_info.get("bbox", [0, 0, 0, 0])
+            tid = h_info.get("track_id", 0)
+            h_beh = h_info.get("behavior", "NORMAL")
+            h_role = h_info.get("role", "individual")
+            h_target = h_info.get("interacting_with")
+            h_threat = h_info.get("threat_level", "LOW")
+            h_color = threat_colors.get(h_threat, (0, 220, 0))
+
+            cx = int((bx1 + bx2) / 2)
+            cy = int((by1 + by2) / 2)
+            pos_by_id[tid] = (cx, cy)
+
+            if bx2 > bx1 and by2 > by1:
+                # Bounding box
+                cv2.rectangle(display, (bx1, by1), (bx2, by2), h_color, 2, cv2.LINE_AA)
+
+                # Label text
+                if h_beh == "FIGHTING":
+                    if h_role == "attacker" and h_target:
+                        lbl = f"ID #{tid} | ATTACKING #{h_target}"
+                        h_color = (40, 40, 230)
+                    elif h_role == "victim" and h_target:
+                        lbl = f"ID #{tid} | VICTIM (DEFENDING #{h_target})"
+                        h_color = (30, 160, 240)
+                    elif h_role == "mutual_combatant" and h_target:
+                        lbl = f"ID #{tid} | BRAWL <=> #{h_target}"
+                        h_color = (40, 40, 230)
+                    else:
+                        lbl = f"ID #{tid} | FIGHTING"
+                elif h_role == "bystander":
+                    lbl = f"ID #{tid} | BYSTANDER (CLEAR)"
+                    h_color = (70, 180, 50)
+                elif h_target:
+                    lbl = f"ID #{tid} | {h_beh} vs #{h_target}"
+                else:
+                    lbl = f"ID #{tid} | {h_beh}"
+
+                (tw, th), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+                cv2.rectangle(display, (bx1, max(0, by1 - th - 8)), (bx1 + tw + 8, by1), (20, 20, 20), -1)
+                cv2.rectangle(display, (bx1, max(0, by1 - th - 8)), (bx1 + tw + 8, by1), h_color, 1)
+                cv2.putText(display, lbl, (bx1 + 4, by1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Draw confrontation attack vector lines
+        for h_info in humans_list:
+            tid = h_info.get("track_id", 0)
+            target_id = h_info.get("interacting_with")
+            role = h_info.get("role", "individual")
+            if target_id and tid in pos_by_id and target_id in pos_by_id and role == "attacker":
+                pt1 = pos_by_id[tid]
+                pt2 = pos_by_id[target_id]
+                cv2.arrowedLine(display, pt1, pt2, (0, 0, 255), 2, tipLength=0.20)
 
         # 1. Top HUD Header Bar
         top_bar_h = 42
@@ -302,7 +420,7 @@ class EdgeCameraClient:
 
                 # Send frame to server
                 try:
-                    result = self.send_frame(frame, now_ms)
+                    result = self.send_frame(frame, now_ms, timeout=self.stream_timeout)
                     if result:
                         self.latest_server_result = result
                         threat = result.get("highest_threat", "LOW")
@@ -361,8 +479,12 @@ class EdgeCameraClient:
             self.stop()
 
     def stop(self) -> None:
-        """Release camera hardware and close all OpenCV display windows."""
+        """Release camera hardware, close session, and close all OpenCV display windows."""
         self._running = False
+        try:
+            self.session.close()
+        except Exception:
+            pass
         if self._source is not None:
             self._source.release()
             self._source = None

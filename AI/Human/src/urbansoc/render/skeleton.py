@@ -84,12 +84,32 @@ def draw_pose_skeleton_and_indicators(
     # 3. Draw Corner Box
     draw_corner_bounding_box(image, human.bbox, box_color)
 
-    # 4. Draw Header Label
+    # 4. Draw Header Label with Role Differentiation
     x1, y1, _, _ = human.bbox.to_xyxy()
     score_pct = int(round(human.behavior.threat_score * 100))
-    label_text = f"ID #{human.track_id} | {human.behavior.primary_behavior.value} [{score_pct}%]"
-    if human.behavior.interacting_with_track_id is not None:
-        label_text += f" vs #{human.behavior.interacting_with_track_id}"
+    role = getattr(human.behavior, "role", "individual")
+    beh_val = human.behavior.primary_behavior.value
+    target_id = human.behavior.interacting_with_track_id
+
+    if beh_val == "FIGHTING":
+        if role == "attacker" and target_id is not None:
+            label_text = f"ID #{human.track_id} | ATTACKING #{target_id} [{score_pct}%]"
+            box_color = (40, 40, 230)
+        elif role == "victim" and target_id is not None:
+            label_text = f"ID #{human.track_id} | VICTIM (DEFENDING #{target_id}) [{score_pct}%]"
+            box_color = (30, 160, 240)
+        elif role == "mutual_combatant" and target_id is not None:
+            label_text = f"ID #{human.track_id} | BRAWL <=> #{target_id} [{score_pct}%]"
+            box_color = (40, 40, 230)
+        else:
+            label_text = f"ID #{human.track_id} | FIGHTING [{score_pct}%]"
+    elif role == "bystander":
+        label_text = f"ID #{human.track_id} | BYSTANDER (CLEAR) [10%]"
+        box_color = (70, 180, 50)
+    elif target_id is not None:
+        label_text = f"ID #{human.track_id} | {beh_val} vs #{target_id} [{score_pct}%]"
+    else:
+        label_text = f"ID #{human.track_id} | {beh_val} [{score_pct}%]"
 
     font_scale = 0.42
     font_thick = 1
@@ -116,3 +136,41 @@ def draw_pose_skeleton_and_indicators(
         font_thick,
         cv2.LINE_AA,
     )
+
+
+def draw_interaction_links(
+    image: np.ndarray,
+    humans: list,
+) -> None:
+    """Draw tactical directional interaction vectors between interacting combatants."""
+    pos_by_id = {h.track_id: h.bbox.centroid for h in humans}
+    role_by_id = {h.track_id: getattr(h.behavior, "role", "individual") for h in humans}
+
+    drawn_pairs = set()
+    for h in humans:
+        t1 = h.track_id
+        t2 = h.behavior.interacting_with_track_id
+        if t2 is None or t2 not in pos_by_id:
+            continue
+
+        pair_key = tuple(sorted([t1, t2]))
+        if pair_key in drawn_pairs:
+            continue
+        drawn_pairs.add(pair_key)
+
+        pt1 = (int(round(pos_by_id[t1][0])), int(round(pos_by_id[t1][1])))
+        pt2 = (int(round(pos_by_id[t2][0])), int(round(pos_by_id[t2][1])))
+
+        r1 = role_by_id.get(t1, "individual")
+        r2 = role_by_id.get(t2, "individual")
+
+        if r1 == "attacker" or r2 == "victim":
+            cv2.arrowedLine(image, pt1, pt2, (0, 0, 255), 2, tipLength=0.20)
+        elif r2 == "attacker" or r1 == "victim":
+            cv2.arrowedLine(image, pt2, pt1, (0, 0, 255), 2, tipLength=0.20)
+        else:
+            cv2.line(image, pt1, pt2, (0, 140, 255), 2, cv2.LINE_AA)
+
+        mid_x = int((pt1[0] + pt2[0]) / 2)
+        mid_y = int((pt1[1] + pt2[1]) / 2)
+        cv2.circle(image, (mid_x, mid_y), 4, (0, 0, 255), -1)

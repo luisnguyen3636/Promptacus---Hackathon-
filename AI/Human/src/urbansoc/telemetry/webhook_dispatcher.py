@@ -544,7 +544,11 @@ class WebhookDispatcher:
 
             # Classify role
             b_enum = track.behavior.primary_behavior
-            role = self._infer_role(b_enum)
+            track_role = getattr(track.behavior, "role", None)
+            if track_role and track_role not in ("individual", ""):
+                role = track_role
+            else:
+                role = self._infer_role(b_enum)
 
             if track.behavior.threat_score > highest_score:
                 highest_score = track.behavior.threat_score
@@ -598,6 +602,7 @@ class WebhookDispatcher:
                 crop_image_base64=crop_b64,
                 crop_image_sha256=crop_sha256,
                 crop_image_size_bytes=crop_size,
+                interacting_with_track_id=track.behavior.interacting_with_track_id,
             )
             subject_crop_list.append(subject_data)
 
@@ -686,6 +691,22 @@ class WebhookDispatcher:
                 return True
             except (queue.Empty, queue.Full):
                 logger.error("Failed to enqueue event %s: queue contention", event_id)
+                return False
+
+    def dispatch_raw_payload(self, payload: Dict[str, Any]) -> bool:
+        """Enqueue arbitrary raw JSON metadata payload for non-blocking asynchronous dispatch."""
+        if not self.is_enabled:
+            return False
+        try:
+            self.queue.put_nowait(payload)
+            return True
+        except queue.Full:
+            self.dropped_count += 1
+            try:
+                _ = self.queue.get_nowait()
+                self.queue.put_nowait(payload)
+                return True
+            except (queue.Empty, queue.Full):
                 return False
 
     def _satisfies_min_threat(self, threat_level: ThreatLevel) -> bool:

@@ -7,7 +7,17 @@ from urbansoc.behavior.rules import (
     compute_normalized_speed,
     evaluate_single_track_behavior,
 )
+from urbansoc.behavior.falsification import (
+    AdversarialFalsificationResult,
+    AntiFalsePositiveAudit,
+    FiveGateFalsificationEngine,
+)
 from urbansoc.behavior.state_machine import HysteresisDebouncer, TrackDebounceState
+from urbansoc.behavior.twelve_actions import (
+    ACTION_WEIGHTS,
+    ALL_TWELVE_ACTIONS,
+    TwelveBehaviorAndThreatEngine,
+)
 
 __all__ = [
     "BehaviorEngine",
@@ -17,4 +27,10 @@ __all__ = [
     "analyze_multi_person_interactions",
     "HysteresisDebouncer",
     "TrackDebounceState",
+    "TwelveBehaviorAndThreatEngine",
+    "ACTION_WEIGHTS",
+    "ALL_TWELVE_ACTIONS",
+    "FiveGateFalsificationEngine",
+    "AntiFalsePositiveAudit",
+    "AdversarialFalsificationResult",
 ]

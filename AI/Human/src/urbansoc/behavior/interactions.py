@@ -5,6 +5,13 @@ from typing import Dict, List, Optional, Tuple
 
 from urbansoc.domain.enums import BehaviorType, ThreatLevel
 from urbansoc.domain.geometry import iou_xyxy
+from urbansoc.domain.keypoints import (
+    LEFT_SHOULDER,
+    LEFT_WRIST,
+    NOSE,
+    RIGHT_SHOULDER,
+    RIGHT_WRIST,
+)
 from urbansoc.domain.schemas import BehaviorPrediction, HumanPoseTrack, TrackHistoryState
 
 
@@ -18,17 +25,42 @@ def compute_vector_cosine_similarity(v1: Tuple[float, float], v2: Tuple[float, f
     return max(-1.0, min(1.0, dot / (mag1 * mag2)))
 
 
+def check_wrist_proximity_to_target(
+    attacker_pose: HumanPoseTrack,
+    target_pose: HumanPoseTrack,
+    reach_distance_px: float,
+) -> bool:
+    """Check if any active wrist of attacker reaches near target's bounding box or torso/head."""
+    target_bx1, target_by1, target_bx2, target_by2 = target_pose.bbox.to_xyxy()
+    # Expanded target bounding box representing strike zone
+    pad_x = target_pose.bbox.width * 0.25
+    pad_y = target_pose.bbox.height * 0.20
+
+    tc_x, tc_y = target_pose.bbox.centroid
+
+    for kp in attacker_pose.keypoints:
+        if kp.id in (LEFT_WRIST, RIGHT_WRIST) and kp.confidence >= 0.20:
+            # Check if wrist penetrated target's expanded bounding box
+            if (target_bx1 - pad_x) <= kp.x <= (target_bx2 + pad_x) and (target_by1 - pad_y) <= kp.y <= (target_by2 + pad_y):
+                return True
+            # Check direct distance to target centroid
+            if math.hypot(kp.x - tc_x, kp.y - tc_y) <= reach_distance_px:
+                return True
+    return False
+
+
 def analyze_multi_person_interactions(
     poses: List[HumanPoseTrack],
     states_by_id: Dict[int, TrackHistoryState],
     confirmed_behaviors_by_id: Dict[int, str],
     histories_by_id: Optional[Dict[int, List[TrackHistoryState]]] = None,
-    fight_distance_norm: float = 1.35,
-    fight_wrist_energy_thresh: float = 1200.0,
+    fight_distance_norm: float = 2.0,
+    fight_wrist_energy_thresh: float = 750.0,
 ) -> Dict[int, BehaviorPrediction]:
     """Detect complex dangerous interactions: Fighting, Snatching, Pursuit, Restraining, Surrounding.
 
-    Applies spatial and kinematic gates to systematically suppress false positives.
+    Applies spatial and kinematic gates to systematically suppress false positives and distinguishes
+    roles: attacker, victim, mutual_combatant, bystander.
     """
     interaction_predictions: Dict[int, BehaviorPrediction] = {}
     num_poses = len(poses)
@@ -104,28 +136,118 @@ def analyze_multi_person_interactions(
             if is_i_fallen and is_j_fallen:
                 continue
 
-            # --- A. FIGHTING / VIOLENT CONFRONTATION ---
-            is_close_combat = dist < (avg_w * fight_distance_norm)
+            spd_i = state_i.body_velocity / max(10.0, h_i)
+            spd_j = state_j.body_velocity / max(10.0, h_j)
+            cos_similarity = compute_vector_cosine_similarity(state_i.velocity_vector, state_j.velocity_vector)
+            both_running = spd_i >= 1.50 and spd_j >= 1.50
+            is_parallel_sprint = both_running and (cos_similarity >= 0.55)
+
+            # --- A. FIGHTING / VIOLENT CONFRONTATION & ASSAULT ---
+            effective_combat_dist = max(avg_w * fight_distance_norm, avg_h * 1.25)
+            is_close_combat = not is_parallel_sprint and ((dist <= effective_combat_dist) or (box_iou >= 0.05))
+
             w_vel_i = state_i.wrist_velocity
             w_vel_j = state_j.wrist_velocity
             total_wrist_energy = w_vel_i + w_vel_j
 
-            # Dual-assault or heavy asymmetric punching
-            is_mutual_fight = is_close_combat and (
+            # Check reach of fists/wrists into target's strike zone
+            reach_reach_dist = max(avg_w * 1.5, avg_h * 0.45)
+            wrist_i_in_target = check_wrist_proximity_to_target(pose_i, pose_j, reach_reach_dist)
+            wrist_j_in_target = check_wrist_proximity_to_target(pose_j, pose_i, reach_reach_dist)
+
+            # Punching thresholds calibrated for 15-30 FPS webcams (>= 220 px/s for single-arm strike)
+            single_punch_thresh = 220.0
+            is_i_striking = not is_parallel_sprint and is_close_combat and (wrist_i_in_target or dist < (avg_w * 1.7)) and (w_vel_i >= single_punch_thresh)
+            is_j_striking = not is_parallel_sprint and is_close_combat and (wrist_j_in_target or dist < (avg_w * 1.7)) and (w_vel_j >= single_punch_thresh)
+
+            # Recoil reactions (victim body pushed back or bending from impact)
+            is_j_recoiling = (state_j.spine_angle >= 14.0) or (state_j.body_velocity >= 120.0)
+            is_i_recoiling = (state_i.spine_angle >= 14.0) or (state_i.body_velocity >= 120.0)
+
+            # Heavy combined energy fallback
+            is_heavy_brawl = not is_parallel_sprint and is_close_combat and (
                 total_wrist_energy > fight_wrist_energy_thresh
-                or (w_vel_i > 750.0 and w_vel_j > 750.0)
-            )
-            is_asymmetric_assault = is_close_combat and (
-                (w_vel_i > 950.0 and state_j.spine_angle > 25.0)
-                or (w_vel_j > 950.0 and state_i.spine_angle > 25.0)
+                or (w_vel_i > 300.0 and w_vel_j > 300.0 and not (spd_i >= 1.4 and spd_j >= 1.4))
             )
 
-            if is_mutual_fight or is_asymmetric_assault:
+            # Asymmetric assault (one clear attacker throwing strikes, victim taking hits or covering)
+            is_asymmetric_assault_i = (
+                is_i_striking and (is_j_recoiling or w_vel_i >= 240.0 or wrist_i_in_target or total_wrist_energy >= 250.0)
+            )
+            is_asymmetric_assault_j = (
+                is_j_striking and (is_i_recoiling or w_vel_j >= 240.0 or wrist_j_in_target or total_wrist_energy >= 250.0)
+            )
+
+            if is_i_striking and is_j_striking:
+                interaction_predictions[tid_i] = BehaviorPrediction(
+                    primary_behavior=BehaviorType.FIGHTING,
+                    confidence=0.96,
+                    threat_level=ThreatLevel.CRITICAL,
+                    threat_score=0.98,
+                    role="mutual_combatant",
+                    reasoning=f"Mutual physical brawl / active striking exchange with ID #{tid_j} (wrist energy: {total_wrist_energy:.0f}px/s)",
+                    interacting_with_track_id=tid_j,
+                )
+                interaction_predictions[tid_j] = BehaviorPrediction(
+                    primary_behavior=BehaviorType.FIGHTING,
+                    confidence=0.96,
+                    threat_level=ThreatLevel.CRITICAL,
+                    threat_score=0.98,
+                    role="mutual_combatant",
+                    reasoning=f"Mutual physical brawl / active striking exchange with ID #{tid_i} (wrist energy: {total_wrist_energy:.0f}px/s)",
+                    interacting_with_track_id=tid_i,
+                )
+                continue
+
+            if is_asymmetric_assault_i:
+                interaction_predictions[tid_i] = BehaviorPrediction(
+                    primary_behavior=BehaviorType.FIGHTING,
+                    confidence=0.96,
+                    threat_level=ThreatLevel.CRITICAL,
+                    threat_score=0.98,
+                    role="attacker",
+                    reasoning=f"Direct physical assault / punching strikes targeting Subject #{tid_j} (strike vel: {w_vel_i:.0f}px/s)",
+                    interacting_with_track_id=tid_j,
+                )
+                interaction_predictions[tid_j] = BehaviorPrediction(
+                    primary_behavior=BehaviorType.FIGHTING,
+                    confidence=0.92,
+                    threat_level=ThreatLevel.CRITICAL,
+                    threat_score=0.92,
+                    role="victim",
+                    reasoning=f"Victim of physical assault / taking strikes from Subject #{tid_i}",
+                    interacting_with_track_id=tid_i,
+                )
+                continue
+
+            if is_asymmetric_assault_j:
+                interaction_predictions[tid_j] = BehaviorPrediction(
+                    primary_behavior=BehaviorType.FIGHTING,
+                    confidence=0.96,
+                    threat_level=ThreatLevel.CRITICAL,
+                    threat_score=0.98,
+                    role="attacker",
+                    reasoning=f"Direct physical assault / punching strikes targeting Subject #{tid_i} (strike vel: {w_vel_j:.0f}px/s)",
+                    interacting_with_track_id=tid_i,
+                )
+                interaction_predictions[tid_i] = BehaviorPrediction(
+                    primary_behavior=BehaviorType.FIGHTING,
+                    confidence=0.92,
+                    threat_level=ThreatLevel.CRITICAL,
+                    threat_score=0.92,
+                    role="victim",
+                    reasoning=f"Victim of physical assault / taking strikes from Subject #{tid_j}",
+                    interacting_with_track_id=tid_j,
+                )
+                continue
+
+            if is_heavy_brawl:
                 interaction_predictions[tid_i] = BehaviorPrediction(
                     primary_behavior=BehaviorType.FIGHTING,
                     confidence=0.95,
                     threat_level=ThreatLevel.CRITICAL,
                     threat_score=0.96,
+                    role="mutual_combatant",
                     reasoning=f"Violent physical confrontation / striking with ID #{tid_j} (wrist energy: {total_wrist_energy:.0f}px/s)",
                     interacting_with_track_id=tid_j,
                 )
@@ -134,6 +256,7 @@ def analyze_multi_person_interactions(
                     confidence=0.95,
                     threat_level=ThreatLevel.CRITICAL,
                     threat_score=0.96,
+                    role="mutual_combatant",
                     reasoning=f"Violent physical confrontation / striking with ID #{tid_i} (wrist energy: {total_wrist_energy:.0f}px/s)",
                     interacting_with_track_id=tid_i,
                 )
@@ -241,5 +364,29 @@ def analyze_multi_person_interactions(
                     interacting_with_track_id=tid_i,
                 )
                 continue
+
+    # Priority 3: Explicit Attribution of Bystanders in Multi-Person Scenes (>= 3 subjects)
+    if num_poses >= 3 and interaction_predictions:
+        active_combat_ids = [
+            tid for tid, pred in interaction_predictions.items()
+            if pred.primary_behavior in (
+                BehaviorType.FIGHTING,
+                BehaviorType.RESTRAINING,
+                BehaviorType.SURROUNDING,
+                BehaviorType.SNATCHING,
+            )
+        ]
+        if active_combat_ids:
+            for p in poses:
+                if p.track_id not in interaction_predictions:
+                    interaction_predictions[p.track_id] = BehaviorPrediction(
+                        primary_behavior=BehaviorType.NORMAL,
+                        confidence=0.95,
+                        threat_level=ThreatLevel.LOW,
+                        threat_score=0.10,
+                        role="bystander",
+                        reasoning=f"Bystander observing scene (non-combatant near #{active_combat_ids[0]})",
+                        interacting_with_track_id=None,
+                    )
 
     return interaction_predictions
