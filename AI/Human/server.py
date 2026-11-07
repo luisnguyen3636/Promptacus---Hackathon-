@@ -105,6 +105,12 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
         default="auto",
         help=f"Target webhook URL to forward detected incidents (default: 'auto' routes to {HARDCODED_MODEL_URL})",
     )
+    parser.add_argument(
+        "--tunnel",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable automatic Cloudflare Tunnel for public remote access (default: True)",
+    )
     return parser.parse_args(args)
 
 
@@ -123,6 +129,7 @@ def main() -> int:
         device=args.device,
         output_dir=args.output_dir,
         webhook_url=webhook_url,
+        enable_tunnel=bool(args.tunnel),
     )
     server.start(blocking=True)
     return 0

@@ -524,6 +524,7 @@ class InferenceServer:
         webhook_min_threat: str = "ALL",
         webhook_cooldown: float = 3.0,
         webhook_filter_noise: bool = True,
+        enable_tunnel: bool = True,
     ) -> None:
         self.host = host
         self.port = port
@@ -532,11 +533,22 @@ class InferenceServer:
         self.conf_threshold = conf_threshold
         self.output_dir = os.path.abspath(output_dir)
         self.webhook_url = webhook_url
+        self.enable_tunnel = enable_tunnel
 
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Context manager for multi-tenant isolation
         self.context_manager = CameraContextManager(output_dir=self.output_dir)
+
+        # Cloudflare Tunnel Manager for native remote external access
+        self.public_tunnel_url: Optional[str] = None
+        self.tunnel_manager = None
+        if self.enable_tunnel:
+            try:
+                from urbansoc.server.tunnel import CloudflareTunnelManager
+                self.tunnel_manager = CloudflareTunnelManager(local_port=self.port, local_host="127.0.0.1")
+            except Exception as e:
+                logger.warning(f"Could not initialize CloudflareTunnelManager: {e}")
 
         # Shared YOLO detector instance
         logger.info("Initializing shared YOLOv11-Pose engine on server...")
@@ -796,11 +808,24 @@ class InferenceServer:
         self._httpd.inference_server = self
         local_ip = self.get_local_ip()
 
+        # Start Cloudflare Tunnel if enabled
+        if self.tunnel_manager is not None:
+            print("🌐 [Cloudflare Tunnel] Đang tự động kết nối Quick Tunnel...")
+            self.public_tunnel_url = self.tunnel_manager.start(timeout_seconds=12.0)
+
         print("=" * 76)
         print("🌐 [URBAN SAFETY AI-SOC] CENTRAL MULTI-CAMERA INFERENCE SERVER RUNNING")
         print("=" * 76)
         print(f"• Server Listening: http://{self.host}:{self.port}")
         print(f"• LAN Dashboard:    http://{local_ip}:{self.port}")
+        if self.public_tunnel_url:
+            print("----------------------------------------------------------------------------")
+            print("🌍 PUBLIC CLOUDFLARE TUNNEL (TRUY CẬP TỪ MỌI NƠI QUA INTERNET):")
+            print(f"• 🔗 Public Domain:     {self.public_tunnel_url}")
+            print(f"• 📹 Live MJPEG Stream: {self.public_tunnel_url}/api/v1/cameras/LAPTOP_01/stream")
+            print(f"• ⚡ Direct Stream Link:{self.public_tunnel_url}/stream.mjpg")
+            print(f"• 🖥️ Web SOC Dashboard: {self.public_tunnel_url}/dashboard")
+            print("----------------------------------------------------------------------------")
         print(f"• Live MJPEG Stream:http://{local_ip}:{self.port}/api/v1/cameras/LAPTOP_01/stream")
         print(f"• Direct Short Stream: http://{local_ip}:{self.port}/stream.mjpg")
         print(f"• Status API:       http://{local_ip}:{self.port}/api/v1/cameras")
@@ -834,6 +859,8 @@ class InferenceServer:
             self._httpd.shutdown()
             self._httpd.server_close()
             self._httpd = None
+        if self.tunnel_manager is not None:
+            self.tunnel_manager.stop()
         if self.webhook_dispatcher is not None:
             self.webhook_dispatcher.close()
         logger.info("InferenceServer shut down cleanly.")

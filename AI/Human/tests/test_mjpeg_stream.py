@@ -26,6 +26,7 @@ def mock_server(tmp_path):
         port=port,
         output_dir=str(tmp_path),
         model_weights="yolo/yolo11n-pose.pt",
+        enable_tunnel=False,
     )
     server.start(blocking=False)
     time.sleep(0.3)
