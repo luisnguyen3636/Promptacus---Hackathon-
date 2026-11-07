@@ -1,7 +1,9 @@
 """Edge Camera Client designed for deployment on other laptops/PCs without GPU requirements."""
 
+import getpass
 import logging
 import os
+import socket
 import sys
 import time
 from typing import Any, Dict, Optional, Tuple, Union
@@ -20,15 +22,32 @@ except ImportError:
 logger = logging.getLogger("urbansoc.client.edge_client")
 
 
+def get_auto_camera_id() -> str:
+    """Generate an automatic friendly camera ID based on machine hostname."""
+    raw_host = socket.gethostname()
+    clean_host = "".join(c if c.isalnum() else "_" for c in raw_host).upper().strip("_")
+    clean_host = clean_host[:14] if clean_host else "DEVICE"
+    return f"LAPTOP_{clean_host}"
+
+
+def get_auto_camera_name() -> str:
+    """Generate an automatic friendly camera name based on system user and machine."""
+    try:
+        user = getpass.getuser().capitalize()
+        return f"Laptop {user} ({socket.gethostname()})"
+    except Exception:
+        return f"Laptop ({socket.gethostname()})"
+
+
 class EdgeCameraClient:
     """Lightweight zero-GPU camera client streaming webcam frames to an intermediate AI-SOC server."""
 
     def __init__(
         self,
         server_url: str = "http://localhost:8000",
-        camera_id: str = "LAPTOP_01",
-        camera_name: str = "Laptop Client 01",
-        camera_index: Union[int, str] = 0,
+        camera_id: Optional[str] = None,
+        camera_name: Optional[str] = None,
+        camera_index: Union[int, str] = "auto",
         fps: float = 15.0,
         resolution: Tuple[int, int] = (640, 480),
         quality: int = 80,
@@ -39,8 +58,8 @@ class EdgeCameraClient:
         test_action: Optional[str] = None,
     ) -> None:
         self.server_url = server_url.rstrip("/")
-        self.camera_id = camera_id
-        self.camera_name = camera_name
+        self.camera_id = camera_id if camera_id else get_auto_camera_id()
+        self.camera_name = camera_name if camera_name else get_auto_camera_name()
         self.camera_index = camera_index
         self.fps = fps
         self.resolution = resolution
@@ -56,36 +75,65 @@ class EdgeCameraClient:
         self._cap: Optional[cv2.VideoCapture] = None
         self._simulated = False
         self.frame_count = 0
+        self.latest_server_result: Optional[Dict[str, Any]] = None
 
         self._init_source()
 
     def _init_source(self) -> None:
-        """Initialize physical camera capture or fallback to synthetic diagnostic stream."""
+        """Initialize physical camera capture with auto-probing or fallback to synthetic diagnostic stream."""
+        target_idx: Union[int, str] = self.camera_index
+        if isinstance(target_idx, str) and target_idx.lower() == "auto":
+            target_idx = 0
+
+        # 1. Try CameraSource queue grabber if available
         if CameraSource is not None:
             try:
-                self._source = CameraSource(
-                    camera_index=self.camera_index,
+                source = CameraSource(
+                    camera_index=target_idx,
                     resolution=self.resolution,
                     fps=self.fps,
                 )
-                logger.info("Initialized CameraSource for device index '%s'", self.camera_index)
-                return
+                if not getattr(source, "is_simulated", False):
+                    self._source = source
+                    logger.info("Opened physical CameraSource on device index '%s'", target_idx)
+                    return
             except Exception as e:
-                logger.warning("CameraSource initialization failed: %s. Using direct OpenCV fallback.", e)
+                logger.warning("CameraSource initialization failed: %s", e)
 
-        # Direct OpenCV capture fallback
+        # 2. Try direct OpenCV VideoCapture on target index
         try:
-            target = int(self.camera_index) if str(self.camera_index).isdigit() else self.camera_index
-            self._cap = cv2.VideoCapture(target)
-            if self._cap.isOpened():
-                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-                logger.info("Direct cv2.VideoCapture opened on index %s", target)
-                return
+            int_idx = int(target_idx) if str(target_idx).isdigit() else target_idx
+            cap = cv2.VideoCapture(int_idx)
+            if cap.isOpened():
+                ret, _ = cap.read()
+                if ret:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+                    self._cap = cap
+                    logger.info("Direct cv2.VideoCapture successfully opened physical webcam on index %s", int_idx)
+                    return
+                cap.release()
         except Exception as e:
-            logger.warning("Direct VideoCapture failed: %s", e)
+            logger.warning("Direct VideoCapture error: %s", e)
 
-        logger.info("No physical webcam available. Using synthetic simulation stream.")
+        # 3. If target was 0 or auto and failed, auto-probe alternative camera indices [1, 2]
+        if str(self.camera_index).lower() in ("0", "auto"):
+            for alt_idx in [1, 2]:
+                try:
+                    cap = cv2.VideoCapture(alt_idx)
+                    if cap.isOpened():
+                        ret, _ = cap.read()
+                        if ret:
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+                            self._cap = cap
+                            logger.info("Auto-detected alternative physical webcam at index %d", alt_idx)
+                            return
+                        cap.release()
+                except Exception:
+                    pass
+
+        logger.info("No physical optical webcam sensor available on this machine. Using synthetic simulation stream.")
         self._simulated = True
 
     def _read_frame(self) -> Tuple[bool, np.ndarray]:
@@ -181,6 +229,48 @@ class EdgeCameraClient:
         logger.warning("Server responded with HTTP %d: %s", resp.status_code, resp.text)
         return None
 
+    def _draw_client_hud(self, frame: np.ndarray, current_fps: float) -> np.ndarray:
+        """Render standard real-time Urban Safety AI-SOC HUD overlay onto local camera feed."""
+        display = frame.copy()
+        h, w = display.shape[:2]
+        res = self.latest_server_result
+
+        threat = res.get("highest_threat", "LOW") if res else "STANDBY"
+        action = res.get("primary_action", "NORMAL") if res else "CONNECTING"
+        score = res.get("highest_threat_score", 0.0) if res else 0.0
+        humans = res.get("human_count", 0) if res else 0
+
+        threat_colors = {
+            "LOW": (70, 180, 50),       # Green
+            "MEDIUM": (30, 160, 240),    # Amber
+            "HIGH": (20, 100, 240),      # Orange
+            "CRITICAL": (40, 40, 230),   # Red
+        }
+        banner_color = threat_colors.get(threat, (100, 100, 100))
+
+        # 1. Top HUD Header Bar
+        top_bar_h = 42
+        overlay = display.copy()
+        cv2.rectangle(overlay, (0, 0), (w, top_bar_h), (15, 20, 30), -1)
+        cv2.rectangle(overlay, (0, top_bar_h - 3), (w, top_bar_h), banner_color, -1)
+        cv2.addWeighted(overlay, 0.78, display, 0.22, 0, display)
+
+        title = f"AI-SOC CLIENT | {self.camera_id}: {self.camera_name}"
+        cv2.putText(display, title, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+
+        badge = f"{threat} | {action} ({current_fps:.1f} FPS)"
+        cv2.putText(display, badge, (max(12, w - 320), 26), cv2.FONT_HERSHEY_SIMPLEX, 0.55, banner_color, 2, cv2.LINE_AA)
+
+        # 2. Bottom Status Bar
+        bot_bar_h = 28
+        overlay = display.copy()
+        cv2.rectangle(overlay, (0, h - bot_bar_h), (w, h), (10, 15, 25), -1)
+        cv2.addWeighted(overlay, 0.82, display, 0.18, 0, display)
+
+        bot_text = f"Server: {self.server_url} | Frame #{self.frame_count} | Humans: {humans} | [q]: Thoat | [s]: Chup anh"
+        cv2.putText(display, bot_text, (10, h - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 200, 220), 1, cv2.LINE_AA)
+        return display
+
     def stream_loop(self, max_frames: Optional[int] = None) -> None:
         """Continuous streaming loop sending camera frames to server."""
         self._running = True
@@ -214,6 +304,7 @@ class EdgeCameraClient:
                 try:
                     result = self.send_frame(frame, now_ms)
                     if result:
+                        self.latest_server_result = result
                         threat = result.get("highest_threat", "LOW")
                         action = result.get("primary_action", "NORMAL")
                         humans = result.get("human_count", 0)
@@ -226,8 +317,8 @@ class EdgeCameraClient:
 
                 # Log periodic status
                 now = time.time()
+                inst_fps = frames_since_log / max(0.001, now - last_log_time) if frames_since_log > 0 else self.fps
                 if now - last_log_time >= 5.0:
-                    inst_fps = frames_since_log / (now - last_log_time)
                     print(
                         f"📡 [{self.camera_id}] Streaming active: Frame #{self.frame_count} | ~{inst_fps:.1f} FPS -> {self.server_url}",
                         flush=True,
@@ -235,13 +326,26 @@ class EdgeCameraClient:
                     last_log_time = now
                     frames_since_log = 0
 
-                # Local GUI preview
+                # Local GUI camera window with SOC HUD overlay
                 if not self.headless:
-                    cv2.imshow(f"UrbanSOC Edge Camera Client - {self.camera_id}", frame)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == 27 or key == ord("q"):
-                        print(f"\nUser requested shutdown on client '{self.camera_id}'.")
-                        break
+                    hud_frame = self._draw_client_hud(frame, inst_fps)
+                    window_title = f"Urban Safety AI-SOC - Camera [{self.camera_id}]"
+                    try:
+                        cv2.imshow(window_title, hud_frame)
+                        key = cv2.waitKey(1) & 0xFF
+                        if key == 27 or key == ord("q"):
+                            print(f"\nUser requested shutdown on client '{self.camera_id}'.")
+                            break
+                        elif key == ord("s"):
+                            snap_dir = os.path.join("output", "snapshots")
+                            os.makedirs(snap_dir, exist_ok=True)
+                            snap_path = os.path.join(snap_dir, f"snapshot_{self.camera_id}_{int(time.time())}.jpg")
+                            cv2.imwrite(snap_path, hud_frame)
+                            print(f"\n📸 [SNAPSHOT SAVED]: {snap_path}")
+                    except cv2.error as e:
+                        # Fallback to headless if no X11/Wayland display server is available
+                        self.headless = True
+                        logger.info("Running in headless terminal mode (display server unavailable: %s)", e)
 
                 if max_frames is not None and self.frame_count >= max_frames:
                     break

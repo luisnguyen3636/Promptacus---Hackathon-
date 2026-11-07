@@ -73,20 +73,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera",
         type=str,
-        default="0",
-        help="Webcam device index (default: 0) or path to a video file",
+        default="auto",
+        help="Webcam device index (default: auto - probes and selects physical camera)",
     )
     parser.add_argument(
         "--camera-id",
         type=str,
-        default="LAPTOP_01",
-        help="Unique Camera ID for this laptop (default: LAPTOP_01)",
+        default=None,
+        help="Unique Camera ID (default: auto - detected from machine hostname)",
     )
     parser.add_argument(
         "--camera-name",
         type=str,
-        default="Laptop Client 01",
-        help="Descriptive name of this laptop client (default: Laptop Client 01)",
+        default=None,
+        help="Descriptive name (default: auto - detected from username & hostname)",
     )
     parser.add_argument(
         "--fps",
@@ -144,17 +144,6 @@ def main() -> int:
     args = parse_args()
     cam_index = int(args.camera) if args.camera.isdigit() else args.camera
 
-    print("=" * 70)
-    print("URBAN SAFETY AI-SOC: EDGE LAPTOP CAMERA CLIENT")
-    print("=" * 70)
-    print(f"• Server URL:    {args.server_url}")
-    print(f"• Camera ID:     {args.camera_id} ({args.camera_name})")
-    print(f"• Device Index:  {cam_index}")
-    print(f"• Target FPS:    {args.fps} (JPEG Quality: {args.quality}%)")
-    print(f"• GPS Location:  Lat={args.lat}, Lon={args.lon}")
-    print(f"• Mode:          {'HEADLESS (No local GUI)' if args.headless else 'GUI (Press q to exit)'}")
-    print("=" * 70)
-
     client = EdgeCameraClient(
         server_url=args.server_url,
         camera_id=args.camera_id,
@@ -168,6 +157,19 @@ def main() -> int:
         headless=args.headless,
         test_action=args.test_action,
     )
+
+    print("=" * 70)
+    print("URBAN SAFETY AI-SOC: EDGE LAPTOP CAMERA CLIENT")
+    print("=" * 70)
+    print(f"• Server URL:    {client.server_url}")
+    print(f"• Camera ID:     {client.camera_id} ({client.camera_name})")
+    print(f"• Device Index:  {client.camera_index}")
+    print(f"• Target FPS:    {client.fps} (JPEG Quality: {client.quality}%)")
+    print(f"• GPS Location:  Lat={client.lat}, Lon={client.lon}")
+    print(f"• Mode:          {'HEADLESS (No local GUI)' if client.headless else 'CAMERA WINDOW (Interactive HUD - [q] to exit, [s] to snapshot)'}")
+    if client.test_action:
+        print(f"• Sim Action:    {client.test_action}")
+    print("=" * 70)
 
     client.stream_loop(max_frames=args.max_frames)
     return 0
