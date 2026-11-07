@@ -231,3 +231,69 @@ def test_independent_camera_throttling(tmp_path: pytest.TempPathFactory) -> None
     # Event on CAM_02 with SAME track_id is NOT throttled because CAM_02 has its own isolated throttler!
     assert ctx2.throttler.should_dispatch(1, "WEAPON_THREAT", ThreatLevel.HIGH, now + 0.1, 5.0) is True
 
+
+def test_multicam_concurrent_action_detection(tmp_path: pytest.TempPathFactory) -> None:
+    """Verify that multiple cameras independently detect distinct dangerous human actions in parallel."""
+    test_port = get_free_port()
+    server = InferenceServer(host="127.0.0.1", port=test_port, output_dir=str(tmp_path))
+    server.start(blocking=False)
+    time.sleep(0.4)
+
+    base_url = f"http://127.0.0.1:{test_port}"
+
+    try:
+        # Camera A streams WEAPON_THREAT
+        client_a = EdgeCameraClient(
+            server_url=base_url,
+            camera_id="CAM_WEAPON",
+            camera_name="Cam Weapon Stance",
+            camera_index=991,
+            fps=25.0,
+            headless=True,
+            test_action="WEAPON_THREAT",
+        )
+        client_a.stream_loop(max_frames=10)
+
+        # Camera B streams FALLEN
+        client_b = EdgeCameraClient(
+            server_url=base_url,
+            camera_id="CAM_FALLEN",
+            camera_name="Cam Fallen Subject",
+            camera_index=992,
+            fps=25.0,
+            headless=True,
+            test_action="FALLEN",
+        )
+        client_b.stream_loop(max_frames=10)
+
+        # Camera C streams HANDS_UP
+        client_c = EdgeCameraClient(
+            server_url=base_url,
+            camera_id="CAM_HANDS_UP",
+            camera_name="Cam Hands Up",
+            camera_index=993,
+            fps=25.0,
+            headless=True,
+            test_action="HANDS_UP",
+        )
+        client_c.stream_loop(max_frames=10)
+
+        resp = requests.get(f"{base_url}/api/v1/cameras", timeout=2.0)
+        cams = resp.json().get("cameras", [])
+
+        cam_weapon = next(c for c in cams if c["camera_id"] == "CAM_WEAPON")
+        cam_fallen = next(c for c in cams if c["camera_id"] == "CAM_FALLEN")
+        cam_hands = next(c for c in cams if c["camera_id"] == "CAM_HANDS_UP")
+
+        assert cam_weapon["primary_action"] == "WEAPON_THREAT"
+        assert cam_weapon["highest_threat"] == "CRITICAL"
+
+        assert cam_fallen["primary_action"] == "FALLEN"
+        assert cam_fallen["highest_threat"] == "CRITICAL"
+
+        assert cam_hands["primary_action"] == "HANDS_UP"
+        assert cam_hands["highest_threat"] == "HIGH"
+    finally:
+        server.stop()
+
+

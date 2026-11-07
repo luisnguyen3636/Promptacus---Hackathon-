@@ -125,6 +125,13 @@ def parse_args() -> argparse.Namespace:
         help="Run without local GUI preview window (default: False)",
     )
     parser.add_argument(
+        "--test-action",
+        type=str,
+        default=None,
+        choices=["WEAPON_THREAT", "FALLEN", "HANDS_UP", "CROUCHING", "RUNNING", "FIGHTING", "NORMAL"],
+        help="Simulate a specific human behavior action for test verification",
+    )
+    parser.add_argument(
         "--max-frames",
         type=int,
         default=None,
@@ -159,6 +166,7 @@ def main() -> int:
         lon=args.lon,
         address=args.address,
         headless=args.headless,
+        test_action=args.test_action,
     )
 
     client.stream_loop(max_frames=args.max_frames)

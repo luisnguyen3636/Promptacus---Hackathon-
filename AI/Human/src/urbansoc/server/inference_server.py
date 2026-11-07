@@ -220,26 +220,55 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         if camera_name and ctx.config.name != camera_name:
             ctx.config.name = camera_name
 
-        # Perform centralized YOLO inference under thread lock
-        detections = None
-        raw_kpts = None
-        raw_boxes = None
-        t_infer = 0.0
+        # Check if client requested a simulated behavior action via header
+        test_action_hdr = self.headers.get("X-Test-Action")
+        if test_action_hdr:
+            from urbansoc.domain.synthetic import create_synthetic_pose
 
-        if self.soc.detector is not None:
-            with self.soc.model_lock:
-                detections, raw_kpts, raw_boxes, t_infer = self.soc.detector.extract_raw_detections(frame_bgr)
+            action_name = test_action_hdr.strip().upper()
+            step_idx = ctx.frame_count
+            if action_name == "WEAPON_THREAT":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="two_handed_aim", step=step_idx)
+            elif action_name == "FALLEN":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="fallen", step=step_idx)
+            elif action_name == "HANDS_UP":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="hands_up", step=step_idx)
+            elif action_name == "CROUCHING":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="crouching", step=step_idx)
+            elif action_name == "FIGHTING":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="fighting", step=step_idx)
+            elif action_name == "RUNNING":
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", step=step_idx, speed_offset_x=float(step_idx * 45))
+            else:
+                sim_pose = create_synthetic_pose(track_id=1, spine_mode="upright", wrists_mode="normal", step=step_idx)
 
-        # Process detections inside isolated CameraContext (own tracker & behavior engine)
-        timestamp_sec = timestamp_ms / 1000.0
-        analysis, display_frame = ctx.process_detections(
-            frame_bgr=frame_bgr,
-            detections=detections,
-            raw_kpts_data=raw_kpts,
-            raw_boxes_xyxy=raw_boxes,
-            t_infer=t_infer,
-            timestamp=timestamp_sec,
-        )
+            timestamp_sec = timestamp_ms / 1000.0
+            analysis, display_frame = ctx.process_poses(
+                frame_bgr=frame_bgr,
+                poses=[sim_pose],
+                timestamp=timestamp_sec,
+            )
+        else:
+            # Perform centralized YOLO inference under thread lock
+            detections = None
+            raw_kpts = None
+            raw_boxes = None
+            t_infer = 0.0
+
+            if self.soc.detector is not None:
+                with self.soc.model_lock:
+                    detections, raw_kpts, raw_boxes, t_infer = self.soc.detector.extract_raw_detections(frame_bgr)
+
+            # Process detections inside isolated CameraContext (own tracker & behavior engine)
+            timestamp_sec = timestamp_ms / 1000.0
+            analysis, display_frame = ctx.process_detections(
+                frame_bgr=frame_bgr,
+                detections=detections,
+                raw_kpts_data=raw_kpts,
+                raw_boxes_xyxy=raw_boxes,
+                t_infer=t_infer,
+                timestamp=timestamp_sec,
+            )
 
         # Dispatch webhook if incident occurs and webhook dispatcher is configured
         if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:

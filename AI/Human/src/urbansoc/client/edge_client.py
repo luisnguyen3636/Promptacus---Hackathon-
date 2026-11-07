@@ -36,6 +36,7 @@ class EdgeCameraClient:
         lon: float = 106.700806,
         address: str = "Laptop Client",
         headless: bool = False,
+        test_action: Optional[str] = None,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.camera_id = camera_id
@@ -48,6 +49,7 @@ class EdgeCameraClient:
         self.lon = lon
         self.address = address
         self.headless = headless
+        self.test_action = test_action
 
         self._running = False
         self._source = None
@@ -170,6 +172,8 @@ class EdgeCameraClient:
             "X-Timestamp-Ms": str(timestamp_ms),
             "Content-Length": str(len(raw_bytes)),
         }
+        if self.test_action:
+            headers["X-Test-Action"] = str(self.test_action)
 
         resp = requests.post(url, data=raw_bytes, headers=headers, timeout=timeout)
         if resp.status_code == 200:
