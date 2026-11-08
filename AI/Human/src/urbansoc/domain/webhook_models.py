@@ -105,6 +105,7 @@ class WebhookIncidentPayload:
     action_confirmed: bool = True
     ai_verified: bool = True
     action_validation: Dict[str, Any] = field(default_factory=dict)
+    nvidia_vlm_analysis: Dict[str, Any] = field(default_factory=dict)
     global_subject_id: Optional[str] = None
     travel_path: str = ""
     batch_summary: Optional[Dict[str, Any]] = None
@@ -174,6 +175,7 @@ class WebhookIncidentPayload:
             "action_confirmed": self.action_confirmed,
             "ai_verified": self.ai_verified,
             "action_validation": self.action_validation,
+            "nvidia_vlm_analysis": self.nvidia_vlm_analysis,
             "reasoning": self.reasoning,
             "weapon_info": self.weapon,
             "batch_summary": self.batch_summary,
@@ -198,6 +200,7 @@ class WebhookIncidentPayload:
                 "action_confirmed": self.action_confirmed,
                 "ai_verified": self.ai_verified,
                 "action_validation": self.action_validation,
+                "nvidia_vlm_analysis": self.nvidia_vlm_analysis,
                 "primary_action": self.primary_action,
                 "threat_level": self.threat_level,
                 "threat_score": round(self.threat_score, 4),

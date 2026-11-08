@@ -49,3 +49,14 @@
 ---
 
 [PLAN AUTO-APPROVED]
+
+## 3. PLAN BỔ SUNG — ALERT PROVENANCE & ASYNC NVIDIA VLM
+
+1. `AI/Human/src/urbansoc/ai/nvidia_vlm.py`: stamp NVIDIA provenance only after a valid remote analysis response; mark local and fallback results separately.
+2. `AI/Human/src/urbansoc/server/inference_server.py`: keep cloud VLM on the background worker and publish its final status with the analysis event.
+3. `AI/Human/src/urbansoc/domain/webhook_models.py` and `AI/Human/src/urbansoc/telemetry/webhook_dispatcher.py`: preserve the structured VLM result in webhook payloads.
+4. `Dashboard/Back End/server.js`: consume the AI server SSE feed; create alerts only from completed, unsuppressed NVIDIA results. Remove heuristic and test-action alert creation.
+5. `Dashboard/Back End/src/incidentManager.js` and `src/hitlDispatcher.js`: persist provenance and reject dispatch of incidents without a qualified NVIDIA result.
+6. `Dashboard/Back End/tests/test_backend_suite.py` and `AI/Human/tests/test_nvidia_vlm.py`: cover real-result provenance, local/fallback rejection, and candidate gating.
+
+**[PLAN AUTO-APPROVED]**

@@ -91,6 +91,8 @@ def test_nvidia_client_schema_and_metadata() -> None:
     assert result["camera_id"] == "TEST_CAM_01"
     assert "location" in result
     assert result["location"]["address"] == "Khu phố 1, Quận 1"
+    assert result["source"] == "local_vlm_engine"
+    assert result["analysis_status"] == "local_only"
 
 
 def test_nvidia_client_sanitization_robustness() -> None:
@@ -124,14 +126,19 @@ def test_server_nvidia_analyze_endpoint(tmp_path: Any) -> None:
     output_dir = str(tmp_path / "server_test_out")
     os.makedirs(output_dir, exist_ok=True)
 
-    server = InferenceServer(
-        host="127.0.0.1",
-        port=8089,
-        output_dir=output_dir,
-        enable_tunnel=False,
-        webhook_url=None,
-        mock_vlm=True,
-    )
+    with patch("urbansoc.server.inference_server.YOLOPoseDetector") as detector_factory:
+        detector = MagicMock()
+        detector.device = "cpu"
+        detector.extract_raw_detections.return_value = (None, None, None, 0.0)
+        detector_factory.return_value = detector
+        server = InferenceServer(
+            host="127.0.0.1",
+            port=8089,
+            output_dir=output_dir,
+            enable_tunnel=False,
+            webhook_url=None,
+            mock_vlm=True,
+        )
     server.start(blocking=False)
     time.sleep(0.3)
 
@@ -233,4 +240,28 @@ def test_nvidia_vlm_timeout_30s_configuration_and_call() -> None:
         call_kwargs = mock_urlopen.call_args[1]
         assert call_kwargs.get("timeout") == 30.0
         assert res["action_type"] == "NORMAL"
+        assert res["source"] == "nvidia_nim_vlm"
+        assert res["analysis_status"] == "completed"
+        assert res["model"] == configured_client.model
+
+
+def test_invalid_remote_vlm_json_is_marked_as_fallback_not_nvidia() -> None:
+    client = NvidiaVisionClient(api_key="real-valid-api-key-test-12345", timeout_seconds=1.0)
+    fake_resp = MagicMock()
+    fake_resp.read.return_value = json.dumps({
+        "choices": [{"message": {"content": "not valid analysis JSON"}}]
+    }).encode("utf-8")
+    fake_resp.__enter__.return_value = fake_resp
+
+    with patch("urllib.request.urlopen", return_value=fake_resp):
+        result = client.analyze_frame(
+            image_input=np.zeros((20, 20, 3), dtype=np.uint8),
+            camera_id="INVALID_JSON_CAM",
+            ai_max_retries=1,
+            ai_retry_delay=0,
+        )
+
+    assert result["source"] == "vlm_local_fallback (AI retries exhausted)"
+    assert result["analysis_status"] == "fallback"
+    assert result["source"] != "nvidia_nim_vlm"
 

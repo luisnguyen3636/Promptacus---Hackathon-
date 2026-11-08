@@ -99,3 +99,12 @@ flowchart TD
 
 ---
 [SPEC AUTO-APPROVED]
+
+## BỔ SUNG SPEC — NVIDIA VLM ALERT PROVENANCE (2026-11-08)
+
+- Only a successfully parsed NVIDIA NIM response may carry `source: "nvidia_nim_vlm"` and `analysis_status: "completed"`.
+- Local tactical results use `source: "local_vlm_engine"`; exhausted remote calls use `source: "vlm_local_fallback (AI retries exhausted)"` and `analysis_status: "fallback"`.
+- The AI server returns local CV/tactical results immediately, queues deep NVIDIA analysis in its background worker, and publishes the completed result to its dashboard SSE stream.
+- Downstream alerting must use the NVIDIA result, not the preliminary local result. Invalid model JSON is a fallback, never verified NVIDIA output.
+
+**[SPEC AUTO-APPROVED]**

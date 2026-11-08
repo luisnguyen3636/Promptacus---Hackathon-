@@ -187,23 +187,6 @@ export function saveCameraFrame(cameraId, frameBuffer, metadata = {}) {
     cam.fps = measuredFps;
     cam.bitrateKbps = Math.round((frameBuffer.length * measuredFps * 8) / 1000);
 
-    // Xử lý AI alert nếu có gửi kèm trong frame metadata
-    if (metadata.testAction || metadata.action || metadata.primaryAction) {
-      const action = String(metadata.testAction || metadata.action || metadata.primaryAction).toUpperCase();
-      const isCritical = action.includes("WEAPON") || action.includes("KNIFE") || action.includes("FIGHT");
-      const isHigh = action.includes("FALLEN") || action.includes("INTRUSION") || action.includes("LOITERING");
-
-      if (isCritical || isHigh) {
-        cam.aiAlert = {
-          hasAlert: true,
-          type: action,
-          severity: isCritical ? "CRITICAL" : "HIGH",
-          message: `Phát hiện hành vi ${action}`,
-          confidence: metadata.confidence || 0.95,
-          timestamp: now
-        };
-      }
-    }
   }
 
   return cam;

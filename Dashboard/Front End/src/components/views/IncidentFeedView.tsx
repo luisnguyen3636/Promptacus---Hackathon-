@@ -187,17 +187,21 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
 
                 <button
                   onClick={() => onSelectPlayback(inc)}
-                  className="bg-[#161E29] border border-[#2D3748] text-white hover:bg-[#1E2631] hover:border-[#10B981] hover:text-[#10B981] font-mono text-xs font-bold px-3 py-1.5 inline-flex items-center gap-2 cursor-pointer transition-colors shrink-0"
+                  disabled={!inc.aiVerified}
+                  title={inc.aiVerified ? undefined : 'Cần kết quả NVIDIA VLM hoàn tất trước khi xác minh và điều phối.'}
+                  className="bg-[#161E29] border border-[#2D3748] text-white hover:bg-[#1E2631] hover:border-[#10B981] hover:text-[#10B981] font-mono text-xs font-bold px-3 py-1.5 inline-flex items-center gap-2 cursor-pointer transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-[#2D3748] disabled:hover:text-white"
                 >
                   <Play className="w-3 h-3 fill-current" />
-                  <span>XEM LẠI BẰNG CHỨNG & DISPATCH</span>
+                  <span>{inc.aiVerified ? 'XEM BẰNG CHỨNG & DISPATCH' : 'CHỜ NVIDIA VLM'}</span>
                 </button>
               </div>
 
               {/* VLM Analysis Context */}
               {inc.vlmAnalysis && (
                 <div className="bg-[#121822] p-3 border-l-2 border-[#10B981] text-xs text-slate-300 leading-relaxed font-sans">
-                  <strong className="text-[#10B981] font-mono">VLM Hành vi Suy luận: </strong>
+                  <strong className="text-[#10B981] font-mono">
+                    {inc.aiVerified ? `${inc.aiProvider || 'NVIDIA NIM'} · ĐÃ XÁC THỰC: ` : 'VLM Hành vi Suy luận: '}
+                  </strong>
                   {inc.vlmAnalysis}
                 </div>
               )}

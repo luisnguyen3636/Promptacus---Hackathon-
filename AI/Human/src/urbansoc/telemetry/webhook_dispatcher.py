@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -844,6 +844,7 @@ class WebhookDispatcher:
             action_confirmed=True,
             ai_verified=True,
             action_validation=verif_details,
+            nvidia_vlm_analysis=vlm_result or {},
             reasoning=ai_reasoning,
             weapon=weapon_info,
             subjects=subject_crop_list,

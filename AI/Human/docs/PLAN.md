@@ -52,3 +52,13 @@
   - `tests/test_knife_threat_and_deepseek.py`: 6/6 PASSED (100%)
   - `tests/test_webhook.py`: 11/11 PASSED (100%)
 - **Trạng thái:** [COMPLETED & FULLY VERIFIED]
+
+## 4. KẾ HOẠCH BỔ SUNG — PROVENANCE CHO ALERT NVIDIA
+
+- Phân biệt kết quả NVIDIA đã hoàn tất với kết quả local/mock/fallback bằng `source`, `analysis_status` và `model`.
+- Đưa kết quả nền qua SSE hiện có để Dashboard cập nhật alert mà không block nhận frame.
+- Bảo toàn toàn bộ `nvidia_vlm_analysis` trong webhook; chỉ kết quả NVIDIA hợp lệ, không bị suppress và mức HIGH/CRITICAL mới tạo alert.
+- Chặn `CONFIRM_AND_DISPATCH` khi incident chưa được xác thực bởi NVIDIA.
+- Xác minh bằng các test nguồn NVIDIA thành công, JSON không hợp lệ, test-action giả lập, và candidate chưa xác thực.
+
+**[PLAN AUTO-APPROVED]**

@@ -29,9 +29,9 @@ export function addIncidentFromDetect(payload) {
 
   const eventId = String(payload.event_id || payload.id || `EVT-${Date.now()}`);
   const primaryAction = String(payload.primary_action || payload.action_type || 'ANOMALY_DETECTED').toUpperCase();
-  const severity = String(payload.severity || payload.threat_level || 'HIGH').toUpperCase();
+  const severity = String(payload.severity || payload.threat_level || 'LOW').toUpperCase();
   
-  let threatScore = 80;
+  let threatScore = 0;
   if (typeof payload.threat_score === 'number') {
     threatScore = payload.threat_score <= 1.0 ? Math.round(payload.threat_score * 100) : Math.round(payload.threat_score);
   }
@@ -57,7 +57,24 @@ export function addIncidentFromDetect(payload) {
   // Chuẩn bị tiêu đề & vlm analysis
   const title = payload.title || `Cảnh báo: ${primaryAction} (${severity})`;
   const subTitle = `PHYSICAL_CAMERA / ${cameraName}`;
-  const vlmAnalysis = payload.vlmAnalysis || payload.reasoning || payload.detection?.reasoning || 'AI VLM đã xác thực hành vi bất thường tại hiện trường.';
+  const nvidiaVlmAnalysis = payload.nvidia_vlm_analysis || payload.detection?.nvidia_vlm_analysis || null;
+  const nvidiaAction = String(nvidiaVlmAnalysis?.action_type || '').toUpperCase();
+  const nvidiaSeverity = String(nvidiaVlmAnalysis?.severity || '').toUpperCase();
+  const nvidiaSuppressed = Boolean(
+    nvidiaVlmAnalysis?.false_positive_suppressed ||
+    nvidiaVlmAnalysis?.anti_false_positive_audit?.false_positive_suppressed ||
+    (Array.isArray(nvidiaVlmAnalysis?.evaluated_subjects) &&
+      nvidiaVlmAnalysis.evaluated_subjects.some(subject => subject?.false_positive_suppressed))
+  );
+  const aiVerified = Boolean(
+    nvidiaVlmAnalysis?.source === 'nvidia_nim_vlm' &&
+    nvidiaVlmAnalysis?.analysis_status === 'completed' &&
+    ['HIGH', 'CRITICAL'].includes(nvidiaSeverity) &&
+    !['', 'NORMAL', 'UNKNOWN'].includes(nvidiaAction) &&
+    Boolean(nvidiaVlmAnalysis?.reasoning || nvidiaVlmAnalysis?.description) &&
+    !nvidiaSuppressed
+  );
+  const vlmAnalysis = payload.vlmAnalysis || payload.reasoning || nvidiaVlmAnalysis?.reasoning || '';
   const forensicHash = payload.forensic_hash || payload.crop_image_sha256 || payload.detection?.full_image?.sha256_hash || null;
 
   // Ảnh bằng chứng Full & Crop
@@ -88,6 +105,9 @@ export function addIncidentFromDetect(payload) {
     playbackUrl: payload.playbackUrl || payload.image_url || `/evidence/${eventId}.mp4`,
     status: payload.status || 'PENDING_VERIFICATION',
     vlmAnalysis,
+    aiVerified,
+    aiProvider: aiVerified ? 'NVIDIA NIM' : null,
+    nvidiaVlmAnalysis,
     forensicHash,
     weaponInfo: payload.weapon_info || payload.weapon || payload.detection?.weapon || null,
     subjects: payload.subjects || payload.detection?.subjects || [],

@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from typing import Any, Dict
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
@@ -22,8 +23,8 @@ from test_receiver_server import TestReceiverHandler, ThreadedReceiverServer
 from urbansoc.server.inference_server import InferenceServer
 
 
-def test_always_vlm_and_receiver_dispatch(tmp_path: Any) -> None:
-    """End-to-End test: Camera POST -> AI Server (Always-VLM) -> Test Receiver Server."""
+def test_mock_vlm_does_not_claim_nvidia_or_dispatch(tmp_path: Any) -> None:
+    """Mock analysis is labeled local and cannot be dispatched as a verified alert."""
     receiver_port = 9095
     ai_server_port = 8095
 
@@ -40,15 +41,20 @@ def test_always_vlm_and_receiver_dispatch(tmp_path: Any) -> None:
     receiver_thread.start()
 
     # 2. Start Central AI Server with always_vlm=True and webhook pointing to Test Receiver
-    ai_server = InferenceServer(
-        host="127.0.0.1",
-        port=ai_server_port,
-        output_dir=output_dir,
-        enable_tunnel=False,
-        webhook_url=f"http://127.0.0.1:{receiver_port}/api/v1/test/receive",
-        always_vlm=True,
-        mock_vlm=True,
-    )
+    with patch("urbansoc.server.inference_server.YOLOPoseDetector") as detector_factory:
+        detector = MagicMock()
+        detector.device = "cpu"
+        detector.extract_raw_detections.return_value = (None, None, None, 0.0)
+        detector_factory.return_value = detector
+        ai_server = InferenceServer(
+            host="127.0.0.1",
+            port=ai_server_port,
+            output_dir=output_dir,
+            enable_tunnel=False,
+            webhook_url=f"http://127.0.0.1:{receiver_port}/api/v1/test/receive",
+            always_vlm=True,
+            mock_vlm=True,
+        )
     ai_server.start(blocking=False)
     time.sleep(0.4)
 
@@ -87,17 +93,15 @@ def test_always_vlm_and_receiver_dispatch(tmp_path: Any) -> None:
         assert isinstance(data["actors"], list)
         assert "visual_cues" in data
         assert "nvidia_vlm_analysis" in data
+        assert data["nvidia_vlm_analysis"]["source"] == "local_vlm_engine"
+        assert data["nvidia_vlm_analysis"]["analysis_status"] == "local_only"
 
-        # 5. Verify Test Receiver Server received metadata payload
-        time.sleep(1.0)  # Wait for non-blocking webhook queue dispatch
+        # 5. Mock output must not be sent to the incident receiver as NVIDIA-verified.
+        time.sleep(0.3)
         resp_events = requests.get(f"http://127.0.0.1:{receiver_port}/events")
         assert resp_events.status_code == 200
         events_data = resp_events.json()
-        assert events_data["count"] >= 1
-
-        last_event = events_data["events"][-1]
-        assert "severity" in last_event or "threat_level" in last_event
-        assert "action_type" in last_event or "primary_action" in last_event
+        assert events_data["count"] == 0
 
     finally:
         ai_server.stop()

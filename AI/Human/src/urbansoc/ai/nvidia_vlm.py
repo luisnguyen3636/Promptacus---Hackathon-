@@ -341,7 +341,14 @@ class NvidiaVisionClient:
                 choice = raw_data.get("choices", [{}])[0]
                 content = choice.get("message", {}).get("content", "")
                 parsed_json = self._clean_and_parse_json(content)
-                return self._normalize_vlm_output(
+                if not isinstance(parsed_json, dict) or not parsed_json:
+                    raise ValueError("NVIDIA NIM returned an empty or invalid analysis object")
+                has_analysis_fields = any(
+                    key in parsed_json for key in ("evaluated_subjects", "action_type", "primary_action")
+                )
+                if not has_analysis_fields:
+                    raise ValueError("NVIDIA NIM response is missing recognized analysis fields")
+                result = self._normalize_vlm_output(
                     data=parsed_json,
                     camera_id=camera_id,
                     camera_name=cam_name,
@@ -350,6 +357,10 @@ class NvidiaVisionClient:
                     timestamp=now_iso,
                     frame_id=frame_id,
                 )
+                result["source"] = "nvidia_nim_vlm"
+                result["analysis_status"] = "completed"
+                result["model"] = self.model
+                return result
 
         def _execute_fallback_after_retry() -> Dict[str, Any]:
             res = self._build_mock_vlm_analysis(
@@ -368,6 +379,8 @@ class NvidiaVisionClient:
                 **mock_kwargs,
             )
             res["source"] = "vlm_local_fallback (AI retries exhausted)"
+            res["analysis_status"] = "fallback"
+            res["model"] = None
             return res
 
         retry_delay = float(kwargs.get("ai_retry_delay", 3.0))
@@ -626,7 +639,11 @@ class NvidiaVisionClient:
             },
             "camera_id": camera_id,
             "location": location if location is not None else camera_name,
-            "source": "nvidia_nim_vlm" if self.is_configured else "local_vlm_engine",
+            # Configuration alone does not prove that NVIDIA analyzed this frame.
+            # The remote HTTP path stamps NVIDIA provenance only after a response.
+            "source": "local_vlm_engine",
+            "analysis_status": "local_only",
+            "model": None,
         }
         return result
 

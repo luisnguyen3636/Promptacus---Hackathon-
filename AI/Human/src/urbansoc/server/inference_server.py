@@ -29,6 +29,14 @@ from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher, compute_for
 logger = logging.getLogger("urbansoc.server.inference_server")
 
 
+def _is_completed_nvidia_analysis(result: Optional[Dict[str, Any]]) -> bool:
+    return bool(
+        isinstance(result, dict)
+        and result.get("source") == "nvidia_nim_vlm"
+        and result.get("analysis_status") == "completed"
+    )
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """Multi-threaded HTTP server allowing concurrent frame ingestion from multiple laptops."""
 
@@ -1100,6 +1108,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                     image_input=keyframe_bgr,
                     **vlm_kwargs,
                 )
+                response_data["vlm_analysis_status"] = vlm_res.get("analysis_status", "unknown")
             else:
                 # Fast local tactical reasoning for instantaneous response (<5ms, zero camera lag)
                 vlm_res = self.soc.nvidia_vlm.analyze_frame(
@@ -1108,12 +1117,13 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                     **vlm_kwargs,
                 )
                 # Dispatch deep cloud NVIDIA NIM VLM asynchronously without blocking frame ingestion
-                self.soc.submit_vlm_task(
+                task_queued = self.soc.submit_vlm_task(
                     camera_id=camera_id,
                     frame_bgr=keyframe_bgr,
                     vlm_kwargs=vlm_kwargs,
                     base_response=response_data,
                 )
+                response_data["vlm_analysis_status"] = "pending" if task_queued else "queue_unavailable"
 
             with ctx._lock:
                 ctx.latest_vlm_analysis = vlm_res
@@ -1152,7 +1162,12 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         # If the action is FALSE (false positive, benign action, or suppressed), DO NOT SEND POST!
         dispatched_to_webhook = False
         disable_webhook_hdr = self.headers.get("X-Disable-Webhook", "").lower() in ("true", "1", "yes")
-        if not disable_webhook_hdr and self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
+        if (
+            not disable_webhook_hdr
+            and _is_completed_nvidia_analysis(vlm_res)
+            and self.soc.webhook_dispatcher is not None
+            and self.soc.webhook_dispatcher.is_enabled
+        ):
             is_confirmed, verif_reason, verif_details = is_ai_action_confirmed(
                 vlm_result=vlm_res,
                 primary_action=primary_action,
@@ -1178,6 +1193,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         if (
             not dispatched_to_webhook
             and getattr(self.soc, "always_vlm", False)
+            and _is_completed_nvidia_analysis(vlm_res)
             and self.soc.webhook_dispatcher is not None
             and self.soc.webhook_dispatcher.is_enabled
         ):
@@ -1434,7 +1450,12 @@ class InferenceServer:
 
                     # Merge VLM results into dashboard event
                     dashboard_payload = dict(base_response)
+                    dashboard_payload.setdefault(
+                        "event_id",
+                        f"EVT_NVIDIA_{camera_id}_{base_response.get('frame_index', 'UNKNOWN')}",
+                    )
                     dashboard_payload["nvidia_vlm_analysis"] = vlm_res
+                    dashboard_payload["vlm_analysis_status"] = vlm_res.get("analysis_status", "unknown")
                     dashboard_payload["severity"] = vlm_res.get("severity", dashboard_payload.get("severity", "low"))
                     dashboard_payload["action_type"] = vlm_res.get("action_type", dashboard_payload.get("primary_action"))
                     dashboard_payload["primary_action"] = vlm_res.get("action_type", dashboard_payload.get("primary_action"))
@@ -1447,7 +1468,11 @@ class InferenceServer:
 
                     # Dispatch to dashboard and webhook (only if confirmed valid)
                     self.record_dashboard_event(dashboard_payload)
-                    if self.webhook_dispatcher is not None and self.webhook_dispatcher.is_enabled:
+                    if (
+                        _is_completed_nvidia_analysis(vlm_res)
+                        and self.webhook_dispatcher is not None
+                        and self.webhook_dispatcher.is_enabled
+                    ):
                         is_conf, _, _ = is_ai_action_confirmed(vlm_res, dashboard_payload.get("primary_action", "NORMAL"))
                         if is_conf:
                             self.webhook_dispatcher.dispatch_raw_payload(dashboard_payload)

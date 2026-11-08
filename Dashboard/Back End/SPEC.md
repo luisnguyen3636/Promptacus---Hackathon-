@@ -68,3 +68,14 @@
          ├── Hiển thị Viền cảnh báo đỏ nhấp nháy khi có Alert
          └── Vẽ Bounding Box đè lên luồng video thực tế
 ```
+
+## 3. SPEC BỔ SUNG — NVIDIA VLM VERIFIED ALERTS (2026-11-08)
+
+- YOLO/kinematic output and `X-Test-Action` are candidate signals only; they must never create `aiAlert`, emit `INCIDENT_ALERT`, or authorize dispatch.
+- The Dashboard forwards frames to `/api/v1/ingest/frame` without waiting synchronously for the cloud VLM. The AI server runs NVIDIA NIM analysis on its bounded background worker and publishes completed results through `/api/v1/dashboard/events`.
+- An alert requires `nvidia_vlm_analysis.source == "nvidia_nim_vlm"`, `analysis_status == "completed"`, a non-normal action, `HIGH` or `CRITICAL` severity, a reasoning summary, and no false-positive suppression flag.
+- Local-only, mock, queued, malformed, timed-out, and fallback results remain candidates and cannot trigger camera alerts or `CONFIRM_AND_DISPATCH`.
+- External `POST /api/v1/incidents` payloads are untrusted candidates even if they claim NVIDIA provenance; only the Dashboard's connection to the configured AI inference SSE stream can promote a completed model result to an alert.
+- Incident records retain the VLM result and provider/model provenance. Dispatch continues to require an operator ID and a VLM-verified incident.
+
+**[SPEC AUTO-APPROVED]**

@@ -49,6 +49,8 @@ export interface IAiCameraAlert {
   message?: string;
   confidence?: number;
   timestamp?: number;
+  aiProvider?: string | null;
+  model?: string | null;
 }
 
 export interface ICameraDevice {
@@ -82,7 +84,10 @@ export interface IIncidentItem {
   cameraSnapshots?: ICameraSnapshots | null;
   playbackUrl?: string | null;
   vlmAnalysis?: string;
-  status: 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED' | 'DOWNGRADED_MONITORING';
+  aiVerified?: boolean;
+  aiProvider?: string | null;
+  nvidiaVlmAnalysis?: Record<string, unknown> | null;
+  status: 'AI_VERIFICATION_PENDING' | 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED' | 'DOWNGRADED_MONITORING';
 }
 
 export interface IPtzCommandPayload {

@@ -21,6 +21,9 @@ export function processHitlVerification({ incidentId, operatorId, decision, note
   const incident = getIncidentById(incidentId);
 
   if (decision === 'CONFIRM_AND_DISPATCH') {
+    if (!incident || incident.aiVerified !== true) {
+      throw new Error('SECURITY VIOLATION: Dispatch requires a completed NVIDIA NIM VLM analysis.');
+    }
     updateIncidentStatus(incidentId, 'OPERATOR_CONFIRMED');
 
     // Đóng gói hồ sơ sự cố tác chiến an ninh (Automated Incident Packaging - CD-04)

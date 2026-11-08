@@ -89,6 +89,7 @@ export const CameraSlot: React.FC<CameraSlotProps> = ({ camera, onOpenPlayback }
           <div className="flex items-center gap-1 bg-[#EF4444] text-white font-mono text-[9px] font-bold px-2 py-0.5 tracking-wider shadow-md animate-bounce">
             <ShieldAlert className="w-3 h-3" />
             <span>ALERT: {camera.aiAlert?.type}</span>
+            {camera.aiAlert?.aiProvider && <span className="border-l border-white/40 pl-1">{camera.aiAlert.aiProvider}</span>}
           </div>
         ) : (
           <div className="flex items-center gap-1 bg-[#DC2626] text-white font-mono text-[9px] font-bold px-1.5 py-0.5 tracking-wider shrink-0">

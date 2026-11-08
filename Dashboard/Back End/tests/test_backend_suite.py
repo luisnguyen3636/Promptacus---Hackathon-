@@ -16,12 +16,15 @@ import os
 import re
 import socket
 import base64
+import queue
 import subprocess
 import sys
+import threading
 import time
-from typing import Any, Dict, Generator
+from typing import Any, Dict, Generator, List, Optional
 import urllib.request
 import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import requests
@@ -49,14 +52,79 @@ BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TEST_PORT = 8019
 BASE_URL = f"http://127.0.0.1:{TEST_PORT}"
 WS_URL = f"ws://127.0.0.1:{TEST_PORT}/ws/live-stream"
+TEST_AI_EVENT_PORT = 8020
+AI_EVENT_QUEUE: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+AI_SSE_CONNECTED = threading.Event()
+
+
+def completed_nvidia_analysis(action: str, severity: str, reasoning: str, confidence: float = 0.95) -> Dict[str, Any]:
+    return {
+        "source": "nvidia_nim_vlm",
+        "analysis_status": "completed",
+        "model": "meta/llama-3.2-90b-vision-instruct",
+        "action_type": action,
+        "severity": severity,
+        "threat_score": confidence,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "evaluated_subjects": [],
+    }
+
+
+class MockAIEventHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/api/v1/dashboard/events":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        AI_SSE_CONNECTED.set()
+        self.wfile.write(b'data: {"type":"init"}\n\n')
+        self.wfile.flush()
+        while True:
+            try:
+                payload = AI_EVENT_QUEUE.get(timeout=0.5)
+            except queue.Empty:
+                payload = None
+            try:
+                if payload is None:
+                    self.wfile.write(b": keepalive\n\n")
+                else:
+                    message = json.dumps({"type": "incident", "payload": payload})
+                    self.wfile.write(f"data: {message}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                break
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
 
 
 @pytest.fixture(scope="module")
-def backend_server() -> Generator[subprocess.Popen, None, None]:
+def ai_event_source():
+    AI_SSE_CONNECTED.clear()
+    while not AI_EVENT_QUEUE.empty():
+        AI_EVENT_QUEUE.get_nowait()
+    server = ThreadingHTTPServer(("127.0.0.1", TEST_AI_EVENT_PORT), MockAIEventHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    AI_EVENT_QUEUE.put(None)
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.fixture(scope="module")
+def backend_server(ai_event_source) -> Generator[subprocess.Popen, None, None]:
     """Launch backend Node.js server on TEST_PORT for isolated integration testing."""
     env = os.environ.copy()
     env["PORT"] = str(TEST_PORT)
     env["NODE_ENV"] = "production"
+    env["AI_INFERENCE_URL"] = f"http://127.0.0.1:{TEST_AI_EVENT_PORT}"
 
     server_js = os.path.join(BACKEND_DIR, "server.js")
     proc = subprocess.Popen(
@@ -84,6 +152,10 @@ def backend_server() -> Generator[subprocess.Popen, None, None]:
         out, err = proc.communicate()
         raise RuntimeError(f"Backend server failed to start on port {TEST_PORT}.\nSTDOUT: {out.decode()}\nSTDERR: {err.decode()}")
 
+    for _ in range(30):
+        if AI_SSE_CONNECTED.wait(0.1):
+            break
+
     yield proc
 
     proc.terminate()
@@ -91,6 +163,35 @@ def backend_server() -> Generator[subprocess.Popen, None, None]:
         proc.wait(timeout=3)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+def publish_nvidia_event(
+    event_id: str,
+    camera_id: str,
+    action: str,
+    severity: str,
+    reasoning: str,
+    confidence: float = 0.95,
+    humans: Optional[List[Dict[str, Any]]] = None,
+    wait_for_alert: bool = True,
+) -> None:
+    if not AI_SSE_CONNECTED.wait(2.0):
+        raise AssertionError("Dashboard did not connect to the AI inference SSE stream")
+    AI_EVENT_QUEUE.put({
+        "event_id": event_id,
+        "camera_id": camera_id,
+        "camera_name": f"Camera {camera_id}",
+        "frame_index": int(time.time() * 1000),
+        "humans": humans or [],
+        "nvidia_vlm_analysis": completed_nvidia_analysis(action, severity, reasoning, confidence),
+    })
+    if wait_for_alert:
+        for _ in range(60):
+            incidents = requests.get(f"{BASE_URL}/api/incidents/recent", timeout=2.0).json()
+            if any(incident.get("id") == event_id and incident.get("aiVerified") for incident in incidents):
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"NVIDIA-verified event {event_id} was not published by the Dashboard")
 
 
 # ==============================================================================
@@ -446,15 +547,14 @@ def test_tc21_ingest_updates_camera_bounding_boxes(backend_server):
 
 def test_tc22_ingest_updates_system_threat_score(backend_server):
     """TC-22: Ingest with high threat score escalates system threat overview."""
-    payload = {
-        "event_id": f"EVT-ESCALATE-{int(time.time())}",
-        "primary_action": "WEAPON_THREAT",
-        "severity": "CRITICAL",
-        "threat_score": 0.98,
-        "camera_id": "cam_01",
-    }
-    resp = requests.post(f"{BASE_URL}/api/v1/incidents", json=payload, timeout=2.0)
-    assert resp.status_code == 200
+    publish_nvidia_event(
+        f"EVT-ESCALATE-{int(time.time())}",
+        "cam_01",
+        "WEAPON_THREAT",
+        "CRITICAL",
+        "NVIDIA NIM confirms a weapon threat.",
+        confidence=0.98,
+    )
 
     overview = requests.get(f"{BASE_URL}/api/soc/overview").json()
     assert overview["threatScore"] >= 75
@@ -536,7 +636,7 @@ def test_tc29_hitl_confirm_and_dispatch_success(backend_server):
     """TC-29: Operator CONFIRM_AND_DISPATCH updates status to OPERATOR_CONFIRMED."""
     # Create fresh incident
     evt_id = f"EVT-CONFIRM-{int(time.time())}"
-    requests.post(f"{BASE_URL}/api/v1/incidents", json={"event_id": evt_id, "primary_action": "WEAPON_THREAT", "camera_id": "cam_01"})
+    publish_nvidia_event(evt_id, "cam_01", "WEAPON_THREAT", "CRITICAL", "NVIDIA NIM confirmed a weapon threat.")
 
     resp = requests.post(
         f"{BASE_URL}/api/incidents/{evt_id}/verify",
@@ -561,7 +661,7 @@ def test_tc29_hitl_confirm_and_dispatch_success(backend_server):
 def test_tc30_hitl_confirm_generates_incident_package(backend_server):
     """TC-30: Automated Incident Evidence Package is generated upon CONFIRM_AND_DISPATCH."""
     evt_id = f"EVT-PKG-{int(time.time())}"
-    requests.post(f"{BASE_URL}/api/v1/incidents", json={"event_id": evt_id, "primary_action": "INTRUSION", "camera_id": "cam_01"})
+    publish_nvidia_event(evt_id, "cam_01", "INTRUSION", "HIGH", "NVIDIA NIM confirmed a restricted area intrusion.")
 
     resp = requests.post(
         f"{BASE_URL}/api/incidents/{evt_id}/verify",
@@ -651,12 +751,7 @@ def test_tc36_websocket_broadcasts_incident_alert_on_ingest(backend_server):
 
     # Ingest incident
     test_evt_id = f"EVT-WS-ALERT-{int(time.time())}"
-    resp = requests.post(
-        f"{BASE_URL}/api/v1/incidents",
-        json={"event_id": test_evt_id, "primary_action": "WEAPON_THREAT", "camera_id": "cam_01"},
-        timeout=2.0,
-    )
-    assert resp.status_code == 200
+    publish_nvidia_event(test_evt_id, "cam_01", "WEAPON_THREAT", "CRITICAL", "NVIDIA NIM confirms a weapon threat.")
 
     # Socket receives broadcast frame
     data_received = False
@@ -664,7 +759,7 @@ def test_tc36_websocket_broadcasts_incident_alert_on_ingest(backend_server):
     for _ in range(5):
         try:
             chunk = sock.recv(4096)
-            if test_evt_id.encode() in chunk or b"INCIDENT_ALERT" in chunk or b"TELEMETRY_AND_AI_TICK" in chunk:
+            if test_evt_id.encode() in chunk and b"INCIDENT_ALERT" in chunk:
                 data_received = True
                 break
         except Exception:
@@ -735,8 +830,8 @@ def test_tc40_get_camera_mjpeg_stream(backend_server):
     assert b"--frame" in first_chunk or b"image/jpeg" in first_chunk
 
 
-def test_tc41_camera_client_stream_triggers_ai_alert(backend_server):
-    """TC-41: Streaming a frame with X-Test-Action: WEAPON_THREAT activates aiAlert on camera."""
+def test_tc41_test_action_alone_does_not_trigger_ai_alert(backend_server):
+    """TC-41: A synthetic detector hint cannot alert without NVIDIA VLM confirmation."""
     client_cam_id = "cam_02"
     raw_jpeg = base64.b64decode("/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=")
     headers = {
@@ -748,13 +843,10 @@ def test_tc41_camera_client_stream_triggers_ai_alert(backend_server):
     resp = requests.post(f"{BASE_URL}/api/v1/cameras/{client_cam_id}/stream", data=raw_jpeg, headers=headers, timeout=2.0)
     assert resp.status_code == 200
 
-    # Verify camera state now has active aiAlert
+    # Detector hints remain candidates until the NVIDIA VLM completes analysis.
     cams = requests.get(f"{BASE_URL}/api/devices/cameras").json()
     cam2 = next(c for c in cams if c["id"] == client_cam_id)
-    assert cam2["aiAlert"] is not None
-    assert cam2["aiAlert"]["hasAlert"] is True
-    assert cam2["aiAlert"]["type"] == "WEAPON_THREAT"
-    assert cam2["aiAlert"]["severity"] == "CRITICAL"
+    assert cam2["aiAlert"] is None
 
 
 def test_tc42_ingest_incident_escalates_camera_alert_state(backend_server):
@@ -767,9 +859,15 @@ def test_tc42_ingest_incident_escalates_camera_alert_state(backend_server):
         "threat_score": 0.88,
         "camera_id": target_cam,
         "reasoning": "Nạn nhân ngã quỵ bất tỉnh cần hỗ trợ y tế khẩn cấp",
+        "nvidia_vlm_analysis": completed_nvidia_analysis("FALLEN", "HIGH", "NVIDIA NIM confirms a person is motionless on the ground."),
     }
-    resp = requests.post(f"{BASE_URL}/api/v1/incidents", json=incident_payload, timeout=2.0)
-    assert resp.status_code == 200
+    publish_nvidia_event(
+        incident_payload["event_id"],
+        target_cam,
+        "FALLEN",
+        "HIGH",
+        "NVIDIA NIM confirms a person is motionless on the ground.",
+    )
 
     # Verify camera aiAlert state
     cams = requests.get(f"{BASE_URL}/api/devices/cameras").json()
@@ -803,7 +901,7 @@ def test_tc44_zero_dummy_incident_origins_guarantee(backend_server):
         # Check that incidents are not hardcoded mock artifacts without action
         assert "id" in inc
         assert "severity" in inc
-        assert inc["status"] in ("PENDING_VERIFICATION", "OPERATOR_CONFIRMED", "DOWNGRADED_MONITORING", "DISMISSED")
+        assert inc["status"] in ("AI_VERIFICATION_PENDING", "PENDING_VERIFICATION", "OPERATOR_CONFIRMED", "DOWNGRADED_MONITORING", "DISMISSED")
 
 
 def test_tc45_100_percent_ai_alert_pipeline_flow(backend_server):
@@ -824,26 +922,22 @@ def test_tc45_100_percent_ai_alert_pipeline_flow(backend_server):
     assert len(target.get("boundingBoxes", [])) == 0
 
     # Simulate AI Server delivering a verified detection
-    ai_alert_payload = {
-        "event_id": f"EVT-NVIDIA-{int(time.time())}",
-        "primary_action": "KNIFE_THREAT",
-        "severity": "CRITICAL",
-        "threat_score": 0.95,
-        "confidence": 0.95,
-        "camera_id": test_cam,
-        "reasoning": "NVIDIA VLM xác nhận đối tượng cầm dao tấn công lúc 16:40",
-        "boxes": [
-            {
-                "id": "box_ai_1",
-                "label": "KNIFE_THREAT 95%",
-                "subLabel": "SUSPECT",
-                "severity": "CRITICAL",
-                "bbox": [100, 150, 400, 600]
-            }
-        ]
-    }
-    post_resp = requests.post(f"{BASE_URL}/api/v1/incidents", json=ai_alert_payload, timeout=2.0)
-    assert post_resp.status_code == 200
+    event_id = f"EVT-NVIDIA-{int(time.time())}"
+    publish_nvidia_event(
+        event_id,
+        test_cam,
+        "KNIFE_THREAT",
+        "CRITICAL",
+        "NVIDIA NIM confirms a knife threat in the frame.",
+        confidence=0.95,
+        humans=[{
+            "id": "box_ai_1",
+            "label": "KNIFE_THREAT 95%",
+            "subLabel": "SUSPECT",
+            "severity": "CRITICAL",
+            "bbox": [100, 150, 400, 600],
+        }],
+    )
 
     # Verify camera now has 100% AI-derived alert and bounding boxes
     cams_after = requests.get(f"{BASE_URL}/api/devices/cameras").json()
@@ -869,21 +963,60 @@ def test_tc46_ai_alert_all_six_critical_classes(backend_server):
     ]
     for action, expected_sev in classes:
         cam_id = f"cam_cls_{action.lower()}"
-        resp = requests.post(
-            f"{BASE_URL}/api/v1/incidents",
-            json={
-                "event_id": f"EVT-CLS-{action}-{int(time.time())}",
-                "primary_action": action,
-                "severity": expected_sev,
-                "camera_id": cam_id,
-                "reasoning": f"NVIDIA NIM VLM phân tích lớp hành vi {action}",
-            },
-            timeout=2.0
+        event_id = f"EVT-CLS-{action}-{int(time.time())}"
+        publish_nvidia_event(
+            event_id,
+            cam_id,
+            action,
+            expected_sev,
+            f"NVIDIA NIM confirms {action} in the frame.",
+            wait_for_alert=expected_sev in ("HIGH", "CRITICAL"),
         )
-        assert resp.status_code == 200
         cams = requests.get(f"{BASE_URL}/api/devices/cameras").json()
-        c = next(cam for cam in cams if cam["id"] == cam_id)
-        assert c["aiAlert"] is not None
-        assert c["aiAlert"]["type"] == action
+        c = next((cam for cam in cams if cam["id"] == cam_id), None)
+        if expected_sev in ("HIGH", "CRITICAL"):
+            assert c is not None
+            assert c["aiAlert"] is not None
+            assert c["aiAlert"]["type"] == action
+        else:
+            assert c is None or c["aiAlert"] is None
+
+
+def test_tc47_unverified_candidates_cannot_alert_or_dispatch(backend_server):
+    """A candidate without completed NVIDIA analysis stays pending and cannot dispatch."""
+    event_id = f"EVT-UNVERIFIED-{int(time.time())}"
+    camera_id = f"cam_unverified_{int(time.time())}"
+    response = requests.post(
+        f"{BASE_URL}/api/v1/incidents",
+        json={
+            "event_id": event_id,
+            "primary_action": "WEAPON_THREAT",
+            "severity": "CRITICAL",
+            "camera_id": camera_id,
+            "reasoning": "Untrusted client supplied this text.",
+            "nvidia_vlm_analysis": completed_nvidia_analysis(
+                "WEAPON_THREAT", "CRITICAL", "Forged NVIDIA claim from an external webhook."
+            ),
+        },
+        timeout=2.0,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "CANDIDATE_PENDING_NVIDIA_VERIFICATION"
+
+    candidate = next(i for i in requests.get(f"{BASE_URL}/api/incidents/recent").json() if i["id"] == event_id)
+    assert candidate["aiVerified"] is False
+    assert candidate["nvidiaVlmAnalysis"] is None
+    assert candidate["vlmAnalysis"] == ""
+
+    camera = next(c for c in requests.get(f"{BASE_URL}/api/devices/cameras").json() if c["id"] == camera_id)
+    assert camera["aiAlert"] is None
+
+    confirm = requests.post(
+        f"{BASE_URL}/api/incidents/{event_id}/verify",
+        json={"operatorId": "OP-TEST-01", "decision": "CONFIRM_AND_DISPATCH"},
+        timeout=2.0,
+    )
+    assert confirm.status_code == 400
+    assert "NVIDIA NIM" in confirm.json().get("error", "")
 
 

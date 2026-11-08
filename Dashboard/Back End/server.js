@@ -21,7 +21,6 @@ import {
   saveCameraFrame,
   getCameraLatestFrame,
   setCameraAlert,
-  clearCameraAlert
 } from './src/cameraManager.js';
 import { getRecentIncidents, getIncidentPlayback, addIncidentFromDetect, getIncidentById } from './src/incidentManager.js';
 import { processHitlVerification, getAuditLogs } from './src/hitlDispatcher.js';
@@ -151,7 +150,6 @@ async function requestIntermediateAiAnalysis(cameraId, cameraName, frameBuffer, 
       'X-Timestamp-Ms': String(timestampMs),
       'Content-Length': String(frameBuffer.length),
       'X-Batch-AI': 'false',
-      'X-Sync-VLM': 'true',
     };
     if (cameraName) headers['X-Camera-Name'] = encodeURIComponent(cameraName);
     if (testAction) headers['X-Test-Action'] = testAction;
@@ -171,6 +169,144 @@ async function requestIntermediateAiAnalysis(cameraId, cameraName, frameBuffer, 
     // Khi AI Server ngoài chưa bật hoặc đang bận, fallback xử lý an toàn
   }
   return null;
+}
+
+const processedNvidiaEvents = new Set();
+
+function getCompletedNvidiaAnalysis(payload) {
+  const analysis = payload?.nvidia_vlm_analysis || payload?.detection?.nvidia_vlm_analysis;
+  if (
+    !analysis ||
+    analysis.source !== 'nvidia_nim_vlm' ||
+    analysis.analysis_status !== 'completed'
+  ) {
+    return null;
+  }
+  return analysis;
+}
+
+function isNvidiaAlertEligible(analysis) {
+  if (!analysis) return false;
+  const action = String(analysis.action_type || '').trim().toUpperCase();
+  const severity = String(analysis.severity || '').trim().toUpperCase();
+  const hasSuppression = Boolean(
+    analysis.false_positive_suppressed ||
+    analysis.anti_false_positive_audit?.false_positive_suppressed ||
+    (Array.isArray(analysis.evaluated_subjects) && analysis.evaluated_subjects.some(subject => subject?.false_positive_suppressed))
+  );
+  const reasoning = String(analysis.reasoning || analysis.description || '').trim();
+  return !hasSuppression && Boolean(action && reasoning) &&
+    !['NORMAL', 'UNKNOWN'].includes(action) && ['HIGH', 'CRITICAL'].includes(severity);
+}
+
+function publishNvidiaVerifiedAlert(payload) {
+  const analysis = getCompletedNvidiaAnalysis(payload);
+  if (!isNvidiaAlertEligible(analysis)) return false;
+
+  const action = String(analysis.action_type || '').trim().toUpperCase();
+  const severity = String(analysis.severity || '').trim().toUpperCase();
+  const reasoning = String(analysis.reasoning || analysis.description || '').trim();
+
+  const cameraId = String(payload.camera_id || payload.cameraId || payload.camera?.camera_id || 'CAM_01');
+  const eventId = String(
+    payload.event_id ||
+    `EVT-NVIDIA-${cameraId}-${payload.frame_index ?? analysis.frame_id ?? analysis.timestamp ?? Date.now()}`
+  );
+  if (processedNvidiaEvents.has(eventId)) return false;
+  processedNvidiaEvents.add(eventId);
+  if (processedNvidiaEvents.size > 5000) {
+    processedNvidiaEvents.delete(processedNvidiaEvents.values().next().value);
+  }
+
+  const confidenceValue = Number(analysis.confidence);
+  const confidence = Number.isFinite(confidenceValue)
+    ? (confidenceValue > 1 ? confidenceValue / 100 : confidenceValue)
+    : undefined;
+  const cameraName = payload.camera_name || payload.camera?.name || `Camera ${cameraId}`;
+  const alert = {
+    hasAlert: true,
+    type: action,
+    severity,
+    message: reasoning,
+    confidence,
+    timestamp: Date.now(),
+    aiProvider: 'NVIDIA NIM',
+    model: analysis.model || null,
+    nvidiaVlmAnalysis: analysis
+  };
+
+  registerOrUpdateCamera({ id: cameraId, name: cameraName });
+  if (Array.isArray(payload.humans)) updateCameraBoundingBoxes(cameraId, payload.humans);
+  setCameraAlert(cameraId, alert);
+
+  const incident = addIncidentFromDetect({
+    event_id: eventId,
+    primary_action: action,
+    severity,
+    threat_score: analysis.threat_score,
+    confidence,
+    camera_id: cameraId,
+    camera_name: cameraName,
+    reasoning,
+    vlmAnalysis: reasoning,
+    nvidia_vlm_analysis: analysis,
+    aiProvider: 'NVIDIA NIM',
+    subjects: payload.humans || analysis.actors || []
+  });
+  updateThreatScore(incident.threatScore);
+
+  try {
+    const logFile = path.join(LOGS_DIR, `incident_${Date.now()}_${cameraId}.json`);
+    fs.writeFileSync(logFile, JSON.stringify(incident, null, 2), 'utf-8');
+  } catch {
+    // Incident remains available in memory if audit-log storage is unavailable.
+  }
+
+  broadcastWs({ type: 'INCIDENT_ALERT', incident, timestamp: Date.now() });
+  broadcastWs({ type: 'TELEMETRY_AND_AI_TICK', cameras: getCameras(), timestamp: Date.now() });
+  return true;
+}
+
+async function consumeAiInferenceEvents(signal) {
+  const eventsUrl = `${AI_INFERENCE_URL}/api/v1/dashboard/events`;
+  while (!signal.aborted) {
+    try {
+      const response = await fetch(eventsUrl, { signal, headers: { Accept: 'text/event-stream' } });
+      if (!response.ok || !response.body) throw new Error(`AI event stream returned ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = block.split('\n')
+            .filter(line => line.startsWith('data:'))
+            .map(line => line.slice(5).trimStart())
+            .join('\n');
+          if (data) {
+            try {
+              const message = JSON.parse(data);
+              if (message.type === 'incident' && message.payload) {
+                publishNvidiaVerifiedAlert(message.payload);
+              }
+            } catch {
+              // Ignore malformed SSE events and keep the camera pipeline running.
+            }
+          }
+          boundary = buffer.indexOf('\n\n');
+        }
+      }
+    } catch {
+      if (signal.aborted) break;
+    }
+    if (!signal.aborted) await new Promise(resolve => setTimeout(resolve, 1500));
+  }
 }
 
 // 2.3 Tiếp nhận Frame JPEG trực tiếp từ Camera Client qua HTTP POST
@@ -220,23 +356,16 @@ const handleIngestFrame = async (req, res) => {
       aiAnalysis?.primary_action || aiAnalysis?.action_type || testAction || 'NORMAL'
     ).toUpperCase();
 
-    const isWeapon = primaryAction.includes('WEAPON');
-    const isKnife = primaryAction.includes('KNIFE') || primaryAction.includes('SHARP');
-    const isFallen = primaryAction.includes('FALLEN');
-    const isFighting = primaryAction.includes('FIGHT');
-    const isLoitering = primaryAction.includes('LOITER');
-    const isIntrusion = primaryAction.includes('INTRUSION');
-
-    const isCritical = isWeapon || isKnife || isFighting || (aiAnalysis?.highest_threat === 'CRITICAL');
-    const isHigh = isFallen || isLoitering || isIntrusion || (aiAnalysis?.highest_threat === 'HIGH');
-
-    let detectedAction = primaryAction;
-    if (isWeapon) detectedAction = 'WEAPON_THREAT';
-    else if (isKnife) detectedAction = 'KNIFE_THREAT';
-    else if (isFallen) detectedAction = 'FALLEN';
-    else if (isFighting) detectedAction = 'FIGHTING';
-    else if (isIntrusion) detectedAction = 'INTRUSION';
-    else if (isLoitering) detectedAction = 'LOITERING';
+    const nvidiaAnalysis = aiAnalysis?.nvidia_vlm_analysis;
+    const detectedAction = String(nvidiaAnalysis?.action_type || primaryAction).toUpperCase();
+    const alertCreated = aiAnalysis
+      ? publishNvidiaVerifiedAlert({
+          ...aiAnalysis,
+          camera_id: cameraId,
+          camera_name: cameraName || cam?.name,
+          timestamp_ms: timestampMs
+        })
+      : false;
 
     // 3. Luôn cập nhật Bounding Box từ kết quả AI phát hiện đối tượng để bám vết liên tục trên Dashboard
     if (aiAnalysis?.humans && Array.isArray(aiAnalysis.humans)) {
@@ -244,52 +373,6 @@ const handleIngestFrame = async (req, res) => {
     }
 
     // 4. Nếu AI phát hiện hành vi nguy cấp: Gắn nhãn aiAlert, cập nhật Bounding Box, đẩy Incident & Lưu Log
-    if (isCritical || isHigh) {
-      const severity = isCritical ? 'CRITICAL' : 'HIGH';
-      const confidence = aiAnalysis?.confidence || (aiAnalysis?.highest_threat_score || 0.96);
-      const reasoning = aiAnalysis?.reasoning || `AI VLM đã nhận diện hành vi ${detectedAction} trên luồng camera.`;
-
-      // Cập nhật trường aiAlert trực tiếp trên Camera
-      setCameraAlert(cameraId, {
-        hasAlert: true,
-        type: detectedAction,
-        severity,
-        message: reasoning,
-        confidence: confidence <= 1.0 ? confidence : confidence / 100,
-        timestamp: Date.now()
-      });
-
-      // Đẩy sự cố lên Dashboard & Lưu vào Log kiểm toán
-      const incidentPayload = {
-        event_id: `EVT-AI-${detectedAction}-${cameraId}-${Date.now()}`,
-        primary_action: detectedAction,
-        severity,
-        threat_score: confidence <= 1.0 ? Math.round(confidence * 100) : confidence,
-        camera_id: cameraId,
-        camera_name: cameraName || cam?.name,
-        reasoning,
-        vlmAnalysis: reasoning,
-        subjects: aiAnalysis?.humans || []
-      };
-
-      const addedIncident = addIncidentFromDetect(incidentPayload);
-
-      // Lưu log kiểm toán vào tệp disk
-      try {
-        const logFile = path.join(LOGS_DIR, `incident_${Date.now()}_${cameraId}.json`);
-        fs.writeFileSync(logFile, JSON.stringify(addedIncident, null, 2), 'utf-8');
-      } catch {
-        // bỏ qua lỗi ghi disk nếu có
-      }
-
-      // Phát thông điệp cảnh báo thời gian thực qua WebSocket
-      broadcastWs({
-        type: 'INCIDENT_ALERT',
-        incident: addedIncident,
-        timestamp: Date.now()
-      });
-    }
-
     // Phát broadcast cập nhật telemetry & camera state tới WebSocket client
     broadcastWs({
       type: 'TELEMETRY_AND_AI_TICK',
@@ -302,7 +385,9 @@ const handleIngestFrame = async (req, res) => {
       camera_id: cameraId,
       timestamp_ms: timestampMs,
       action_detected: detectedAction,
-      threat_level: (isCritical ? "CRITICAL" : isHigh ? "HIGH" : "LOW"),
+      threat_level: nvidiaAnalysis?.severity || aiAnalysis?.highest_threat || "LOW",
+      alert_status: alertCreated ? "NVIDIA_VERIFIED" : (primaryAction === 'NORMAL' ? "NO_CANDIDATE" : "AWAITING_NVIDIA_VLM"),
+      vlm_analysis_status: aiAnalysis?.vlm_analysis_status || nvidiaAnalysis?.analysis_status || "unavailable",
       ai_analyzed: Boolean(aiAnalysis),
       fps: cam?.fps || 30
     });
@@ -456,8 +541,15 @@ const handleIngestDetection = (req, res) => {
       return res.status(400).json({ success: false, error: 'Empty or invalid JSON payload' });
     }
 
-    // 1. Ghi nhận sự cố vào Incident Manager
-    const incident = addIncidentFromDetect(payload);
+    // External webhook payloads cannot assert NVIDIA provenance. The trusted path
+    // for completed analysis is the private AI server SSE bridge above.
+    const incident = addIncidentFromDetect({
+      ...payload,
+      status: 'AI_VERIFICATION_PENDING',
+      reasoning: '',
+      vlmAnalysis: '',
+      nvidia_vlm_analysis: null
+    });
 
     // 2. Cập nhật hoặc đăng ký Camera nếu có
     if (payload.camera || payload.camera_id) {
@@ -472,40 +564,8 @@ const handleIngestDetection = (req, res) => {
       );
     }
 
-    // 4. Nhận diện các lớp hành vi nguy cấp & Gắn nhãn Cảnh báo AI (aiAlert):
-    // WEAPON_THREAT, KNIFE_THREAT, FALLEN, FIGHTING, LOITERING, INTRUSION
-    const action = String(incident.primary_action || incident.action_type || incident.title).toUpperCase();
-    const isWeapon = action.includes('WEAPON');
-    const isKnife = action.includes('KNIFE') || action.includes('SHARP');
-    const isFallen = action.includes('FALLEN');
-    const isFighting = action.includes('FIGHT');
-    const isLoitering = action.includes('LOITER');
-    const isIntrusion = action.includes('INTRUSION');
-
-    const isCritical = incident.severity === 'CRITICAL' || isWeapon || isKnife || isFighting;
-    const isHigh = incident.severity === 'HIGH' || isFallen || isIntrusion || isLoitering;
-
-    if (isCritical || isHigh) {
-      let normAction = incident.primary_action;
-      if (isWeapon) normAction = 'WEAPON_THREAT';
-      else if (isKnife) normAction = 'KNIFE_THREAT';
-      else if (isFallen) normAction = 'FALLEN';
-      else if (isFighting) normAction = 'FIGHTING';
-      else if (isIntrusion) normAction = 'INTRUSION';
-      else if (isLoitering) normAction = 'LOITERING';
-
-      setCameraAlert(incident.cameraId, {
-        hasAlert: true,
-        type: normAction,
-        severity: isCritical ? 'CRITICAL' : 'HIGH',
-        message: incident.vlmAnalysis || `Cảnh báo AI: ${normAction}`,
-        confidence: incident.threatScore ? (incident.threatScore > 1 ? incident.threatScore / 100 : incident.threatScore) : 0.96,
-        timestamp: Date.now()
-      });
-    }
-
-    // 5. Đồng bộ điểm rủi ro Threat Score
-    updateThreatScore(incident.threatScore);
+    // 4. This endpoint records untrusted candidates only. NVIDIA results arrive
+    // through the AI server event bridge and are applied by publishNvidiaVerifiedAlert.
 
     // 6. Ghi log sự cố ra file audit log trên đĩa
     try {
@@ -515,27 +575,15 @@ const handleIngestDetection = (req, res) => {
       // bỏ qua lỗi disk
     }
 
-    // 7. Phát thông điệp cảnh báo lập tức qua WebSocket & SSE
-    broadcastWs({
-      type: 'INCIDENT_ALERT',
-      incident,
-      timestamp: Date.now()
-    });
-
     broadcastWs({
       type: 'TELEMETRY_AND_AI_TICK',
       cameras: getCameras(),
       timestamp: Date.now()
     });
 
-    broadcastSse({
-      event: 'incident',
-      data: incident
-    });
-
     res.status(200).json({
       success: true,
-      status: 'RECEIVED_AND_INDEXED',
+      status: 'CANDIDATE_PENDING_NVIDIA_VERIFICATION',
       event_id: incident.id,
       threat_level: incident.severity,
       threat_score: incident.threatScore,
@@ -669,17 +717,22 @@ const telemetryInterval = setInterval(() => {
   });
 }, 300);
 
+const aiInferenceBridgeAbort = new AbortController();
+
 process.on('SIGTERM', () => {
+  aiInferenceBridgeAbort.abort();
   clearInterval(telemetryInterval);
   server.close();
 });
 process.on('SIGINT', () => {
+  aiInferenceBridgeAbort.abort();
   clearInterval(telemetryInterval);
   server.close();
 });
 
 if (process.env.NODE_ENV !== 'test') {
   server.listen(PORT, () => {
+    void consumeAiInferenceEvents(aiInferenceBridgeAbort.signal);
     console.log(`====================================================`);
     console.log(` CYBERGUARD AI · SOC v2.1 BACKEND RUNNING ON :${PORT}`);
     console.log(` Web App:   http://localhost:${PORT}/dashboard/`);
