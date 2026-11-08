@@ -73,6 +73,20 @@ export function useSocTelemetry() {
             const msg = JSON.parse(event.data);
             if (msg.type === 'TELEMETRY_AND_AI_TICK' && Array.isArray(msg.cameras)) {
               setCameras(msg.cameras);
+            } else if (msg.type === 'INCIDENT_ALERT' && msg.incident) {
+              setIncidents((prev) => [
+                msg.incident,
+                ...prev.filter((item) => item.id !== msg.incident.id),
+              ]);
+              fetchData();
+            } else if (msg.type === 'DECISION_PROCESSED' && msg.incidentId) {
+              setIncidents((prev) =>
+                prev.map((item) =>
+                  item.id === msg.incidentId
+                    ? { ...item, status: msg.newStatus || item.status }
+                    : item
+                )
+              );
             }
           } catch {
             // bỏ qua gói tin lỗi

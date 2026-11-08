@@ -3,22 +3,24 @@
  * Tính toán động các chỉ số mạng và rủi ro thời gian thực
  */
 
-let systemState = {
-  baseLatency: 42,
+const INITIAL_SYSTEM_STATE = {
+  baseLatency: 35,
   baseDownloadMbps: 9744.0,
   baseUploadMbps: 4824.2,
   activeNodes: 43,
-  camerasOnline: 40,
-  camerasTotal: 43,
+  camerasOnline: 4,
+  camerasTotal: 4,
   packetLossPercent: 0.00,
-  nvrStoragePercent: 82,
+  nvrStoragePercent: 78,
   poeLoadWatts: 410,
-  threatScore: 12,
+  threatScore: 0,
   threatLevel: 'LOW',
   status: 'SAFE'
 };
 
-export function getTelemetryOverview(activeThreatCount = 4, criticalThreatCount = 1) {
+let systemState = JSON.parse(JSON.stringify(INITIAL_SYSTEM_STATE));
+
+export function getTelemetryOverview(activeThreatCount = 0, criticalThreatCount = 0) {
   // Biến thiên tự nhiên nhẹ để tạo cảm giác hệ thống sống (live network jitter)
   const jitterLatency = Math.floor(systemState.baseLatency + (Math.random() * 4 - 2));
   const jitterDownload = parseFloat((systemState.baseDownloadMbps + (Math.random() * 30 - 15)).toFixed(1));
@@ -29,16 +31,19 @@ export function getTelemetryOverview(activeThreatCount = 4, criticalThreatCount 
   let calculatedLevel = 'LOW';
   let calculatedStatus = 'SAFE';
 
-  if (systemState.threatScore > 75) {
+  if (systemState.threatScore >= 75) {
     calculatedLevel = 'CRITICAL';
     calculatedStatus = 'SEVERE';
-  } else if (systemState.threatScore > 50) {
+  } else if (systemState.threatScore >= 50) {
     calculatedLevel = 'HIGH';
     calculatedStatus = 'ELEVATED';
-  } else if (systemState.threatScore > 25) {
+  } else if (systemState.threatScore >= 25) {
     calculatedLevel = 'MEDIUM';
     calculatedStatus = 'GUARDED';
   }
+
+  systemState.threatLevel = calculatedLevel;
+  systemState.status = calculatedStatus;
 
   return {
     threatLevel: calculatedLevel,
@@ -46,7 +51,7 @@ export function getTelemetryOverview(activeThreatCount = 4, criticalThreatCount 
     status: calculatedStatus,
     timestampUtc: new Date().toISOString(),
     metrics: {
-      latencyMs: Math.max(20, jitterLatency),
+      latencyMs: Math.max(15, jitterLatency),
       downloadMbps: jitterDownload,
       uploadMbps: jitterUpload,
       activeNodes: systemState.activeNodes,
@@ -62,5 +67,23 @@ export function getTelemetryOverview(activeThreatCount = 4, criticalThreatCount 
 }
 
 export function updateThreatScore(newScore) {
-  systemState.threatScore = Math.max(0, Math.min(100, newScore));
+  if (typeof newScore !== 'number' || isNaN(newScore)) return;
+  
+  // Hỗ trợ chuẩn hóa float 0.0 - 1.0 từ AI sang thang điểm 0 - 100
+  let normalized = newScore;
+  if (normalized > 0 && normalized <= 1.0) {
+    normalized = Math.round(normalized * 100);
+  }
+  
+  systemState.threatScore = Math.max(0, Math.min(100, Math.round(normalized)));
+}
+
+export function updateSystemMetrics(metrics = {}) {
+  if (metrics.camerasOnline !== undefined) systemState.camerasOnline = metrics.camerasOnline;
+  if (metrics.camerasTotal !== undefined) systemState.camerasTotal = metrics.camerasTotal;
+  if (metrics.activeNodes !== undefined) systemState.activeNodes = metrics.activeNodes;
+}
+
+export function resetTelemetry() {
+  systemState = JSON.parse(JSON.stringify(INITIAL_SYSTEM_STATE));
 }

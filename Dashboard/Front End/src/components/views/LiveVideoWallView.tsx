@@ -17,63 +17,18 @@ export const LiveVideoWallView: React.FC<LiveVideoWallViewProps> = ({
   const [layoutMode, setLayoutMode] = useState<'3x2' | '2x2' | '1x1'>('3x2');
   const [filterMode, setFilterMode] = useState<'IR' | 'RGB'>('IR');
 
-  const wallCameras: ICameraDevice[] = [
-    ...cameras,
-    {
-      id: "cam_05",
-      name: "Lobby Reception Area",
-      ip: "172.16.2.14",
-      fps: 30,
-      bitrateKbps: 42,
-      status: "ONLINE",
-      streamUrl: "",
-      ptzEnabled: true,
-      boundingBoxes: [
-        {
-          id: "box_05",
-          label: "PERSON 95%",
-          subLabel: "VISITOR",
-          severity: "NORMAL",
-          x: 0.4,
-          y: 0.3,
-          w: 0.2,
-          h: 0.55
-        }
-      ]
-    },
-    {
-      id: "cam_06",
-      name: "Underground Parking Bay",
-      ip: "172.16.3.28",
-      fps: 30,
-      bitrateKbps: 38,
-      status: "ONLINE",
-      streamUrl: "",
-      ptzEnabled: true,
-      boundingBoxes: [
-        {
-          id: "box_06",
-          label: "VEHICLE 97%",
-          subLabel: "ENTRY",
-          severity: "NORMAL",
-          x: 0.25,
-          y: 0.35,
-          w: 0.4,
-          h: 0.45
-        }
-      ]
-    }
-  ];
+  const wallCameras: ICameraDevice[] = cameras;
 
   const handleCaptureAll = () => {
-    onToast?.('[SNAPSHOT CAPTURED] Đã lưu 6 khung hình bằng chứng đồng loạt vào Rolling Buffer');
+    onToast?.(`[SNAPSHOT CAPTURED] Đã lưu ${cameras.length} khung hình bằng chứng đồng loạt vào Rolling Buffer`);
   };
 
   const handleApplyPreset = (camId: string, presetName: string) => {
     onToast?.(`[PTZ PRESET] ${camId} -> Chuyển sang vị trí mẫu: ${presetName}`);
   };
 
-  let gridColsClass = 'grid-cols-3';
+  let gridColsClass = 'grid-cols-2';
+  if (layoutMode === '3x2') gridColsClass = cameras.length > 4 ? 'grid-cols-3' : 'grid-cols-2';
   if (layoutMode === '2x2') gridColsClass = 'grid-cols-2';
   if (layoutMode === '1x1') gridColsClass = 'grid-cols-1 max-w-4xl mx-auto';
 
@@ -84,10 +39,10 @@ export const LiveVideoWallView: React.FC<LiveVideoWallViewProps> = ({
         <div className="flex items-center gap-3 min-w-0 truncate">
           <Camera className="w-4 h-4 text-[#10B981] shrink-0" />
           <span className="font-bold text-xs uppercase tracking-wider text-white truncate">
-            ENTERPRISE LIVE VIDEO WALL MATRIX (6 ACTIVE STREAMS)
+            ENTERPRISE LIVE VIDEO WALL MATRIX ({cameras.length} ACTIVE STREAMS)
           </span>
           <span className="bg-[#112224] border border-[#10B981] text-[#10B981] font-mono text-[10px] font-bold px-2 py-0.5 shrink-0">
-            6/6 ENCRYPTED H.264
+            {cameras.length}/{cameras.length} ENCRYPTED H.264
           </span>
         </div>
 

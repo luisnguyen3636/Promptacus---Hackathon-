@@ -133,14 +133,14 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--server-url",
         type=str,
-        default="http://localhost:8000",
-        help="Intermediate server URL for client streaming (default: http://localhost:8000)",
+        default="http://localhost:7777",
+        help="Intermediate server URL for client streaming (default: http://localhost:7777)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Server port to bind when running in --mode server (default: 8000)",
+        default=7777,
+        help="Server port to bind when running in --mode server (default: 7777)",
     )
     parser.add_argument(
         "--headless",

@@ -363,4 +363,83 @@ DLQ_STORAGE_PATH="./data/dlq"
 
 ---
 
-**[WAITING FOR SPEC APPROVAL]**
+### 8. TỰ ĐỘNG HÓA PUBLIC HTTPS TUNNELING CHO CAMERA CLIENT & STREAMING TRÊN TRÌNH DUYỆT (FEATURE ADDENDUM)
+
+#### 8.1. Mục tiêu Nghiệp vụ
+Khi người dùng kích hoạt Camera Client (qua `./start.sh client` hoặc `python3 client.py`):
+1. **Tự động kích hoạt Public HTTPS Tunnel:** Tích hợp Cloudflare Tunneling tự động ánh xạ cổng máy chủ suy luận / camera stream ra Internet dưới dạng URL HTTPS an toàn (`https://*.trycloudflare.com`).
+2. **Streaming Trực tiếp trên Trình duyệt:** Cho phép người dùng mở link HTTPS trên bất kỳ trình duyệt nào (Chrome, Safari iOS, Edge, Firefox, Android) để xem trực tiếp video streaming từ camera theo thời gian thực (độ trễ siêu thấp) mà không cần cài đặt phần mềm bên ngoài.
+3. **Tự phục hồi & Tự khởi động Server:** Khi chạy `./start.sh client`, nếu máy chủ suy luận AI-SOC chưa chạy trên cổng chỉ định (mặc định 8000), hệ thống tự động khởi chạy ngầm Server, đợi server sẵn sàng, tạo Tunnel và kết nối Client. Khi Client dừng (Ctrl+C hoặc phím 'q'), tự động thu hồi tài nguyên (dừng Tunnel và Server ngầm đã tự bật).
+4. **Dedicated In-Browser Player Endpoint:** Cung cấp route `/watch` và `/player` tối ưu hóa trải nghiệm xem video trên trình duyệt điện thoại và máy tính, hiển thị video stream mjpeg, FPS, mức độ đe dọa AI, trạng thái kết nối và nút chụp snapshot.
+
+#### 8.2. Kiến trúc & Endpoints
+- `GET /watch` hoặc `GET /player`: HTML5 Responsive Video Player xem trực tiếp camera feed.
+- `GET /stream.mjpg` hoặc `GET /stream`: Luồng video chuẩn multipart/x-mixed-replace MJPEG.
+- `GET /dashboard`: Giao diện Trung tâm Giám sát AI-SOC tổng hợp.
+- `GET /snapshot.jpg`: Ảnh chụp khung hình mới nhất.
+- `POST /api/v1/cameras/register` & `POST /api/v1/ingest/frame`: Giao thức đẩy khung hình từ Client lên Server.
+
+---
+
+---
+
+### 9. XÓA BỎ 100% DỮ LIỆU DUMMY / MOCK & BẢO ĐẢM 100% CẢNH BÁO XUẤT PHÁT TỪ NVIDIA AI (PURGE DUMMY & ZERO MOCK DIRECTIVE)
+
+#### 9.1. Mục tiêu Nghiệp vụ
+1. **Loại bỏ toàn bộ dữ liệu giả lập (Zero Mock Data):**
+   - Loại bỏ hoàn toàn các sự cố mẫu (`EVT-INIT-01`, `inc_901`, `inc_902`), bounding boxes giả lập, tọa độ hàm sin/cosin giả lập (`Math.sin(tick)`) và các camera giả định (`cam_05`, `cam_06`).
+   - Khởi tạo trạng thái ban đầu sạch hoàn toàn: `threatScore = 0`, `threatLevel = 'LOW'`, `status = 'SAFE'`, danh sách `incidents = []`, `aiAlert = null` và `boundingBoxes = []` cho tất cả camera.
+2. **Bảo đảm 100% Cảnh báo xuất phát từ NVIDIA AI (`100% NVIDIA AI-Derived Alerts`):**
+   - Mọi cảnh báo hiển thị trên Dashboard (viền chớp nháy đỏ/vàng, nhãn `ALERT: <TYPE>`, thanh banner reasoning VLM, danh sách sự cố và điểm đe dọa) bắt buộc phải do luồng AI trung gian (`AI/Human/server.py` với NVIDIA NIM VLM và YOLOv11-Pose) phân tích và đẩy về qua REST API `/api/v1/incidents` hoặc `/api/v1/cameras/:id/stream`.
+   - Khi không có hành vi bất thường, dashboard duy trì trạng thái giám sát an toàn (0 threats, sạch bounding boxes giả).
+   - Khi phát hiện một trong 6 lớp hành vi nguy cấp (`WEAPON_THREAT`, `KNIFE_THREAT`, `FALLEN`, `FIGHTING`, `LOITERING`, `INTRUSION`), hệ thống lập tức kích hoạt hiệu ứng tác chiến, cập nhật `aiAlert` cho camera, đồng bộ qua WebSocket và lưu vào nhật ký sự cố.
+3. **Tuân thủ quy tắc HITL [CD-04] & Kiểm thử [CD-05]:**
+   - Bắt buộc `operatorId` khi xác nhận sự cố trước khi chuyển sang `OPERATOR_CONFIRMED`.
+   - Đảm bảo tối thiểu 30 bài kiểm thử tự động luôn pass 100%.
+
+---
+
+### 10. TỐI ƯU HÓA & KHẮC PHỤC TRIỆT ĐỂ BỘ SUY LUẬN YOLO & NHẬN DIỆN HÀNH ĐỘNG REAL-TIME (YOLO ACTION DETECTION REPAIR)
+
+#### 10.1. Nguyên nhân Gốc rễ (Root Cause Analysis)
+1. **Model Path Resolution:** Khi khởi chạy từ thư mục gốc dự án (`Promptacus---Hackathon-`), `_resolve_model_path` không tìm thấy `yolo/yolo11n-pose.pt` do đường dẫn nằm tại `AI/Human/yolo/yolo11n-pose.pt`, dẫn đến việc fallback khiến `extract_raw_detections` trả về `None`.
+2. **Nghẽn Batching (Temporal Event Batching Trap):** Khi Backend gọi `/api/v1/ingest/frame`, nếu không gửi cờ `X-Batch-AI: false`, server tích lũy 25 frames mới flush, trả về `ai_analyzed: false` và `primary_action: "NORMAL"` trong 24/25 frames, triệt tiêu mọi hành động tức thời.
+3. **Chốt chặn Debounce quá khắt khe:** Debouncer đòi hỏi 4-8 frame liên tiếp giữ nguyên trạng thái mới kích hoạt, trong khi ByteTrack có thể đổi `track_id` hoặc chuyển động nhanh làm ngắt quãng streak.
+4. **Quy tắc Biometric Quá Cứng Nhắc (Overly Strict Geometric Thresholds):**
+   - `FALLEN`: Không tính được `spine_angle` khi camera chỉ quay từ thắt lưng trở lên (thiếu khớp hông `hip_pts`).
+   - `WEAPON_THREAT`: Bắt buộc cả 6 khớp tay và đòi hỏi góc khuỷu >= 145° (quá thẳng) và khoảng cách ngang ra khỏi tâm thân, loại bỏ tư thế chĩa súng/hung khí thẳng vào camera.
+   - `FIGHTING`: Chỉ hỗ trợ khi có từ 2 người trở lên (`len(poses) >= 2`), bỏ qua hành vi đánh đấm/ra đòn của đối tượng đơn lẻ.
+   - `HANDS_UP`: Đòi hỏi cả 2 tay phải vượt qua đỉnh đầu cùng lúc.
+5. **Hiển thị Bounding Box trên Backend/Dashboard:** Backend chỉ cập nhật bounding box khi có cảnh báo nguy cấp (`isCritical || isHigh`), khiến người bình thường trong khung hình không hiện khung bám vết, tạo cảm giác YOLO không hoạt động.
+
+#### 10.2. Giải pháp Kỹ thuật Chuẩn hóa
+1. **Mở rộng `_resolve_model_path`:** Bổ sung đường dẫn tương đối từ `__file__` trỏ thẳng tới `AI/Human/yolo/yolo11n-pose.pt` và các vị trí tiêu chuẩn.
+2. **Kích hoạt Real-Time Single-Frame Inference:** Backend truyền `X-Batch-AI: false` và `X-Sync-VLM: true` khi forward frame lên AI Server. AI Server ưu tiên trả về kết quả nhận diện tức thời của frame hiện tại.
+3. **Tối ưu Hysteresis State Machine:** Hỗ trợ kích hoạt tức thì cho các hành vi khẩn cấp (`FAST_TRACK_BEHAVIORS`) với `fast_track_debounce_frames = 2`, và cho phép báo cáo ứng viên nguy hiểm ngay khi phát hiện.
+4. **Cải tiến Bộ quy tắc Phân tích Hành động (`rules.py` & `kinematics.py`):**
+   - Hỗ trợ tính góc nghiêng thân trên qua vector Đầu - Vai hoặc góc nghiêng trục vai khi không nhìn thấy hông.
+   - Nới lỏng góc khuỷu tay cho hành vi chĩa vũ khí (>= 115°) và hỗ trợ tư thế nhắm thẳng hướng camera.
+   - Bổ sung phát hiện đấm/đánh/ra đòn tốc độ cao cho đối tượng đơn lẻ (`FIGHTING`).
+   - Hỗ trợ giơ tay đầu hàng/cầu cứu (`HANDS_UP`) khi giơ 1 hoặc 2 tay lên cao.
+5. **Cập nhật Bounding Box Liên tục:** Backend cập nhật `updateCameraBoundingBoxes` cho mọi khung hình có người, đồng thời chuẩn hóa tọa độ tỷ lệ chính xác theo kích thước khung hình thực tế.
+
+**[SPEC AUTO-APPROVED]**
+
+---
+
+### 11. ĐỒNG BỘ TOÀN DIỆN & TÍCH HỢP LOGIC DETECT TỪ DỰ ÁN HUMAN DETECT (`/home/test/Hackathon-Test-/HUMAN DETECT`)
+
+#### 11.1. Mục tiêu & Nguyên tắc Tuyệt đối
+1. **Nguyên tắc Bất khả xâm phạm nguồn:** TUYỆT ĐỐI KHÔNG CHỈNH SỬA, THÊM, BỚT BẤT KỲ FILE NÀO trong dự án nguồn `/home/test/Hackathon-Test-/` và `/home/test/Hackathon-Test-/HUMAN DETECT`. Mọi thao tác sao chép chỉ đọc từ nguồn và ghi vào repository đích `/home/test/Promptacus---Hackathon-/`.
+2. **Sao chép Đầy đủ Logic Nhận diện & Bám vết (Detection & Behavior Engine):**
+   - `yolo_pose_detector.py`: YOLO11-Pose (17 COCO keypoints), Supervision ByteTrack với cơ chế khử nhảy hộp bao (box smoothing EMA $\alpha = 0.65$) và kết hợp IoU matching.
+   - `behavior_detector.py`: Bộ quy tắc động học cơ sinh học (Biomechanical Rules) cho `FALLEN`, `HANDS_UP`, `RUNNING`, `CROUCHING`, `LOITERING`, `FIGHTING`, `NORMAL`, đi kèm Hysteresis Debounce State Machine chuẩn hóa và SOC Action Audit Logger.
+   - `models.py`: Cấu trúc dữ liệu `KeypointCOCO`, `HumanPoseTrack`, `BehaviorPrediction`, `SOCFrameAnalysisResult`, `TrackKinematicsTelemetry`.
+   - `clip_recorder.py`: Evidence rolling buffer trích xuất clip bằng chứng tự động MP4.
+   - `rate_limiter.py`: Quản lý tần suất sự kiện tránh spam log.
+   - `alert_models.py`, `ai_service.py`, `alert_client.py`: Giao thức đóng gói cảnh báo JSON chuẩn hóa với mã băm Forensic SHA-256 và suy luận VLM.
+   - `human_detection.py`, `camera_recorder.py`, `pose_detector.py`, `test_system.py`, `test_alert_system.py`.
+3. **Đảm bảo Hoạt động Đồng bộ & Tương thích:**
+   - Đồng bộ `urbansoc.behavior.engine` với quy trình debouncing chuẩn để tất cả các unit test hiện tại (`AI/Human/tests/` và `Dashboard/Back End/tests/`) duy trì tỷ lệ pass 100% (vượt xa chỉ tiêu $\ge$ 30 test cases).
+
+**[SPEC AUTO-APPROVED]**

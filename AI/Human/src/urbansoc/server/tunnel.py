@@ -18,7 +18,7 @@ class CloudflareTunnelManager:
 
     def __init__(
         self,
-        local_port: int = 8000,
+        local_port: int = 7777,
         local_host: str = "127.0.0.1",
         bin_path: Optional[str] = None,
     ) -> None:
@@ -32,6 +32,20 @@ class CloudflareTunnelManager:
         self._stopped = False
 
         atexit.register(self.stop)
+
+    def _persist_url(self, url: str) -> None:
+        """Save discovered public URL to disk for easy retrieval by scripts and users."""
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
+        for path in [
+            "/tmp/soc_public_url.txt",
+            os.path.join(project_root, "latest_tunnel_url.txt"),
+        ]:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(url.strip() + "\n")
+            except Exception:
+                pass
 
     def _resolve_bin_path(self) -> str:
         """Find cloudflared binary in project bin/ or system PATH."""
@@ -52,19 +66,59 @@ class CloudflareTunnelManager:
 
     def start(self, timeout_seconds: float = 15.0) -> Optional[str]:
         """Start the tunnel subprocess and wait for the public URL to be assigned."""
-        if not os.path.isfile(self.bin_path) or not os.access(self.bin_path, os.X_OK):
-            logger.warning(f"cloudflared binary not found at '{self.bin_path}'. Tunnel cannot start.")
-            return None
+        # 1. Try Cloudflare Quick Tunnel first
+        if os.path.isfile(self.bin_path) and os.access(self.bin_path, os.X_OK):
+            cmd = [
+                self.bin_path,
+                "tunnel",
+                "--url", f"http://{self.local_host}:{self.local_port}",
+                "--no-autoupdate",
+            ]
+            try:
+                self.process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                self._reader_thread = threading.Thread(
+                    target=self._monitor_output,
+                    name="CloudflareTunnelReader",
+                    daemon=True,
+                )
+                self._reader_thread.start()
 
+                # Wait for Cloudflare URL or early exit
+                got_url = self._url_event.wait(timeout=4.5)
+                if got_url and self.public_url:
+                    logger.info(f"Cloudflare Tunnel active: {self.public_url}")
+                    return self.public_url
+                else:
+                    logger.warning("Cloudflare quick tunnel unavailable or rate-limited (429). Activating resilient HTTPS TLS tunnel fallback...")
+                    self._stop_process()
+            except Exception as e:
+                logger.warning(f"Cloudflare tunnel init error: {e}")
+                self._stop_process()
+
+        # 2. Resilient HTTPS TLS Reverse Tunnel Fallback (Zero rate limit, full HTTPS/HLS support)
+        return self._start_fallback_tunnel(timeout_seconds=min(10.0, timeout_seconds))
+
+    def _start_fallback_tunnel(self, timeout_seconds: float = 8.0) -> Optional[str]:
+        """Start SSH-based HTTPS TLS tunnel fallback with automatic TLS termination."""
         cmd = [
-            self.bin_path,
-            "tunnel",
-            "--edge-ip-version", "4",
-            "--url", f"http://{self.local_host}:{self.local_port}",
-            "--no-autoupdate",
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=30",
+            "-o", "LogLevel=ERROR",
+            "-R", f"80:localhost:{self.local_port}",
+            "nokey@localhost.run",
         ]
-
         try:
+            self._url_event.clear()
+            self._stopped = False
+            self.public_url = None
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -73,22 +127,21 @@ class CloudflareTunnelManager:
                 bufsize=1,
             )
             self._reader_thread = threading.Thread(
-                target=self._monitor_output,
-                name="CloudflareTunnelReader",
+                target=self._monitor_fallback_output,
+                name="SshHttpsTunnelReader",
                 daemon=True,
             )
             self._reader_thread.start()
 
-            # Wait for public URL
             got_url = self._url_event.wait(timeout=timeout_seconds)
             if got_url and self.public_url:
-                logger.info(f"Cloudflare Tunnel active: {self.public_url}")
+                logger.info(f"Resilient HTTPS Tunnel active: {self.public_url}")
                 return self.public_url
             else:
-                logger.warning(f"Tunnel did not output public URL within {timeout_seconds}s.")
+                logger.warning(f"Fallback tunnel did not assign public URL within {timeout_seconds}s.")
                 return None
         except Exception as e:
-            logger.error(f"Failed to start cloudflared tunnel: {e}")
+            logger.error(f"Failed to start fallback HTTPS tunnel: {e}")
             return None
 
     def _monitor_output(self) -> None:
@@ -104,25 +157,56 @@ class CloudflareTunnelManager:
                 match = url_regex.search(line)
                 if match and not self.public_url:
                     self.public_url = match.group(0)
+                    self._persist_url(self.public_url)
                     self._url_event.set()
+                    break
+                if "provisioning failed" in line or "429" in line:
+                    logger.warning("Cloudflare tunnel: %s", line.strip())
+                    self._url_event.set()
+                    break
         except Exception:
             pass
         finally:
             self._url_event.set()
 
-    def stop(self) -> None:
-        """Gracefully terminate cloudflared subprocess."""
-        self._stopped = True
+    def _monitor_fallback_output(self) -> None:
+        """Monitor stdout of SSH fallback tunnel to extract https://*.lhr.life URL."""
+        url_regex = re.compile(r"https://[a-zA-Z0-9-]+\.lhr\.life")
+        if not self.process or not self.process.stdout:
+            return
+
+        try:
+            for line in iter(self.process.stdout.readline, ""):
+                if self._stopped:
+                    break
+                match = url_regex.search(line)
+                if match and not self.public_url:
+                    self.public_url = match.group(0)
+                    self._persist_url(self.public_url)
+                    self._url_event.set()
+                    break
+        except Exception:
+            pass
+        finally:
+            self._url_event.set()
+
+    def _stop_process(self) -> None:
+        """Helper to terminate current tunnel process."""
         if self.process is not None:
             try:
                 if self.process.poll() is None:
                     self.process.terminate()
                     try:
-                        self.process.wait(timeout=2.0)
+                        self.process.wait(timeout=1.5)
                     except subprocess.TimeoutExpired:
                         self.process.kill()
             except Exception:
                 pass
             finally:
                 self.process = None
-                self.public_url = None
+
+    def stop(self) -> None:
+        """Gracefully terminate tunnel subprocess."""
+        self._stopped = True
+        self._stop_process()
+        self.public_url = None

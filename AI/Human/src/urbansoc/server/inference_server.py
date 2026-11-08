@@ -22,6 +22,7 @@ from urbansoc.domain.webhook_models import CameraLocationConfig
 from urbansoc.evidence.keeper import EvidenceKeeper
 from urbansoc.server.camera_context import CameraContext, CameraContextManager
 from urbansoc.server.dashboard_html import DASHBOARD_HTML
+from urbansoc.server.watch_player_html import WATCH_PLAYER_HTML
 from urbansoc.telemetry.soc_logger import SOCLogger
 from urbansoc.telemetry.webhook_dispatcher import WebhookDispatcher, compute_forensic_sha256, is_ai_action_confirmed
 
@@ -71,6 +72,16 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             self._handle_get_hls_playlist()
             return
 
+        # 1d. Dedicated Watch / Player responsive web view
+        if clean_path in ("/watch", "/player", "/video"):
+            self._handle_serve_watch_player()
+            return
+
+        # 1e. Active Tunnel URL query endpoint
+        if clean_path in ("/tunnel", "/api/v1/tunnel/url", "/url"):
+            self._handle_get_tunnel_url()
+            return
+
         # 2. API: Get latest live visual snapshot for a specific camera
         if clean_path.startswith("/api/v1/cameras/") and clean_path.endswith("/snapshot"):
             parts = clean_path.split("/")
@@ -87,6 +98,11 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         # 2c. Real-time Dashboard State and SSE Events API
         if clean_path == "/api/v1/dashboard/state":
             self._handle_get_dashboard_state()
+            return
+
+        # 2d. Cross-Camera Re-ID Global Profiles API
+        if clean_path == "/api/v1/reid/profiles":
+            self._handle_get_reid_profiles()
             return
 
         if clean_path == "/api/v1/dashboard/events":
@@ -196,6 +212,32 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
 
     def _handle_get_camera_snapshot(self, camera_id: str) -> None:
         """Return latest JPEG annotated frame for the given camera."""
+        # HLS segment: nếu đã có trong cache thì trả về ngay (immutable, không encode lại)
+        seq: Optional[int] = None
+        try:
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            if "seq" in qs:
+                seq = int(qs["seq"][0])
+        except (ValueError, TypeError, IndexError):
+            seq = None
+
+        if seq is not None:
+            segment_cache = getattr(self.soc, "_hls_segment_cache", None)
+            segment_lock = getattr(self.soc, "_hls_lock", None)
+            if segment_cache is not None and segment_lock is not None:
+                with segment_lock:
+                    cached = segment_cache.get(seq)
+                if cached is not None:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(cached)))
+                    self.send_header("Cache-Control", "public, max-age=60, immutable")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(cached)
+                    return
+
         ctx = self.soc.context_manager.get(camera_id)
         frame_to_serve: Optional[np.ndarray] = None
 
@@ -253,22 +295,52 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         if max_hdr and max_hdr.isdigit():
             max_frames = int(max_hdr)
 
+        # Tinh chỉnh cho tunnel yếu: /stream.mjpg?fps=10 (mặc định 15 FPS thay vì 25)
+        target_fps = 15.0
+        try:
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            if "fps" in qs:
+                target_fps = float(qs["fps"][0])
+        except (ValueError, TypeError, IndexError):
+            target_fps = 15.0
+        target_fps = max(1.0, min(30.0, target_fps))
+        frame_interval = 1.0 / target_fps
+
+        # Không gửi frame trùng lặp: giảm mạnh băng thông qua tunnel khi client < 25 FPS.
+        # Tắt cơ chế này khi chạy test (X-Max-Frames) để test luôn nhận đủ số frame.
+        dedupe_frames = max_frames < 0
+
+        # Giảm độ trễ: tắt Nagle để frame đi ngay thay vì bị gom gói
+        try:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except (AttributeError, OSError):
+            pass
+
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, pre-check=0, post-check=0, max-age=0")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, no-transform, pre-check=0, post-check=0, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
+        # Buộc reverse proxy/tunnel (nginx, localhost.run, Cloudflare...) KHÔNG đệm stream,
+        # nếu không trình duyệt chỉ nhận được 1 khung hình đầu tiên.
+        self.send_header("X-Accel-Buffering", "no")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Connection", "close")
         self.end_headers()
 
+        placeholder_bytes: Optional[bytes] = None
         sent_frames = 0
+        last_frame_count = -1
         try:
             while True:
+                cycle_start = time.time()
                 ctx = self.soc.context_manager.get(target_cam_id)
                 jpeg_bytes: Optional[bytes] = None
+                frame_count = -1
                 if ctx is not None:
                     with ctx._lock:
+                        frame_count = ctx.frame_count
                         if ctx.latest_jpeg_bytes is not None:
                             jpeg_bytes = ctx.latest_jpeg_bytes
                         elif ctx.latest_display_frame is not None:
@@ -278,20 +350,28 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                                 ctx.latest_jpeg_bytes = jpeg_bytes
 
                 if jpeg_bytes is None:
-                    placeholder = np.full((360, 640, 3), 20, dtype=np.uint8)
-                    cv2.putText(
-                        placeholder,
-                        f"CAM: {target_cam_id} (WAITING FOR STREAM)",
-                        (30, 180),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 180, 255),
-                        2,
-                        cv2.LINE_AA,
-                    )
-                    success, encoded = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    if success:
-                        jpeg_bytes = encoded.tobytes()
+                    if placeholder_bytes is None:
+                        placeholder = np.full((360, 640, 3), 20, dtype=np.uint8)
+                        cv2.putText(
+                            placeholder,
+                            f"CAM: {target_cam_id} (WAITING FOR STREAM)",
+                            (30, 180),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 180, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
+                        success, encoded = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        if success:
+                            placeholder_bytes = encoded.tobytes()
+                    jpeg_bytes = placeholder_bytes
+
+                # Bỏ qua khi camera chưa có frame mới -> không nhồi frame trùng qua tunnel
+                if dedupe_frames and frame_count >= 0 and frame_count == last_frame_count:
+                    time.sleep(0.01)
+                    continue
+                last_frame_count = frame_count
 
                 if jpeg_bytes is not None:
                     part_header = (
@@ -309,7 +389,10 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 if 0 < max_frames <= sent_frames:
                     break
 
-                time.sleep(0.04)
+                # Nhịp gửi thích ứng: nếu tunnel chậm, không để độ trễ cộng dồn
+                elapsed = time.time() - cycle_start
+                if elapsed < frame_interval:
+                    time.sleep(frame_interval - elapsed)
         except (BrokenPipeError, ConnectionResetError, socket.error):
             # Client closed stream connection
             return
@@ -321,17 +404,46 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         """Serve HTTP Live Streaming (HLS) m3u8 playlist pointing to the latest snapshot frames."""
         all_cams = self.soc.context_manager.get_all_contexts()
         cam_id = list(all_cams.keys())[0] if all_cams else "LAPTOP_01"
-        seq = int(time.time() * 2)
-        m3u8_content = (
-            "#EXTM3U\n"
-            "#EXT-X-VERSION:3\n"
-            "#EXT-X-TARGETDURATION:1\n"
-            f"#EXT-X-MEDIA-SEQUENCE:{seq}\n"
-            "#EXTINF:0.5,\n"
-            f"/api/v1/cameras/{cam_id}/snapshot?seq={seq}\n"
-            "#EXTINF:0.5,\n"
-            f"/api/v1/cameras/{cam_id}/snapshot?seq={seq+1}\n"
-        ).encode("utf-8")
+
+        # Cửa sổ trượt 4 segment, mỗi segment 0.5s -> player có buffer, không bị giật
+        now = time.time()
+        window_size = 4
+        current_seq = int(now * 2)
+        start_seq = current_seq - window_size + 1
+
+        # Lấy khung hình hiện tại 1 lần duy nhất rồi chia sẻ cho các segment còn thiếu
+        current_jpeg: Optional[bytes] = None
+        ctx = self.soc.context_manager.get(cam_id)
+        if ctx is not None:
+            with ctx._lock:
+                current_jpeg = ctx.latest_jpeg_bytes
+                if current_jpeg is None and ctx.latest_display_frame is not None:
+                    success, encoded = cv2.imencode(".jpg", ctx.latest_display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if success:
+                        current_jpeg = encoded.tobytes()
+
+        segment_cache = getattr(self.soc, "_hls_segment_cache", None)
+        segment_lock = getattr(self.soc, "_hls_lock", None)
+        if segment_cache is not None and segment_lock is not None:
+            with segment_lock:
+                for seq in range(start_seq, current_seq + 1):
+                    if seq not in segment_cache and current_jpeg is not None:
+                        segment_cache[seq] = current_jpeg
+                # Dọn các segment quá cũ để bộ nhớ không tăng vô hạn
+                for seq in [s for s in segment_cache if s < start_seq - 20]:
+                    segment_cache.pop(seq, None)
+
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:3",
+            "#EXT-X-TARGETDURATION:1",
+            "#EXT-X-INDEPENDENT-SEGMENTS",
+            f"#EXT-X-MEDIA-SEQUENCE:{start_seq}",
+        ]
+        for seq in range(start_seq, current_seq + 1):
+            lines.append("#EXTINF:0.5,")
+            lines.append(f"/api/v1/cameras/{cam_id}/snapshot?seq={seq}")
+        m3u8_content = ("\n".join(lines) + "\n").encode("utf-8")
 
         self.send_response(200)
         self.send_header("Content-Type", "application/vnd.apple.mpegurl")
@@ -373,6 +485,48 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         }
         self._send_json_response(200, info)
 
+    def _handle_serve_watch_player(self) -> None:
+        """Serve responsive HTML5 Watch Player page for in-browser video streaming."""
+        raw_html = WATCH_PLAYER_HTML.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw_html)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(raw_html)
+
+    def _handle_get_tunnel_url(self) -> None:
+        """Return the current active public tunnel URL in plain text or JSON."""
+        url = getattr(self.soc, "public_tunnel_url", None)
+        if not url:
+            for p in ["/tmp/soc_public_url.txt", "latest_tunnel_url.txt"]:
+                if os.path.exists(p):
+                    try:
+                        with open(p, "r", encoding="utf-8") as f:
+                            candidate = f.read().strip()
+                            if candidate.startswith("https://"):
+                                url = candidate
+                                break
+                    except Exception:
+                        pass
+
+        accept = self.headers.get("Accept", "")
+        if "application/json" in accept or "format=json" in self.path:
+            self._send_json_response(200, {
+                "status": "active" if url else "inactive",
+                "tunnel_url": url,
+                "watch_url": f"{url}/watch" if url else None,
+                "stream_url": f"{url}/stream.mjpg" if url else None,
+            })
+        else:
+            raw = (url or "NO_ACTIVE_TUNNEL").encode("utf-8")
+            self.send_response(200 if url else 404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(raw)
+
     def _handle_serve_dashboard(self) -> None:
         """Serve rich modern responsive SOC Dashboard HTML page."""
         raw_html = DASHBOARD_HTML.encode("utf-8")
@@ -407,6 +561,16 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             "cameras": cams_info,
             "latest_incident": latest_inc,
             "recent_logs": logs,
+        })
+
+    def _handle_get_reid_profiles(self) -> None:
+        """Serve active unified global subject profiles across all cameras."""
+        coord = getattr(self.soc.context_manager, "reid_coordinator", None)
+        profiles = coord.get_all_profiles() if coord is not None else []
+        self._send_json_response(200, {
+            "status": "success",
+            "count": len(profiles),
+            "profiles": profiles,
         })
 
     def _handle_get_dashboard_events(self) -> None:
@@ -681,6 +845,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         ctx = self.soc.context_manager.get_or_create(
             camera_id,
             cooldown_seconds=getattr(self.soc, "webhook_cooldown", 0.5),
+            batch_size=getattr(self.soc, "batch_size", 25),
         )
         if camera_name and ctx.config.name != camera_name:
             ctx.config.name = camera_name
@@ -745,13 +910,27 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         if test_action_hdr:
             primary_action = test_action_hdr.strip().upper()
 
+        ih, iw = frame_bgr.shape[:2]
         humans_summary = [
             {
                 "track_id": h.track_id,
+                "global_id": getattr(h, "global_id", None),
+                "reid_confidence": round(float(getattr(h, "reid_confidence", 0.0)), 2),
                 "bbox": [int(h.bbox.x1), int(h.bbox.y1), int(h.bbox.x2), int(h.bbox.y2)],
+                "norm_bbox": [
+                    round(float(h.bbox.x1) / max(1, iw), 3),
+                    round(float(h.bbox.y1) / max(1, ih), 3),
+                    round(float(h.bbox.width) / max(1, iw), 3),
+                    round(float(h.bbox.height) / max(1, ih), 3),
+                ],
+                "x": round(float(h.bbox.x1) / max(1, iw), 3),
+                "y": round(float(h.bbox.y1) / max(1, ih), 3),
+                "w": round(float(h.bbox.width) / max(1, iw), 3),
+                "h": round(float(h.bbox.height) / max(1, ih), 3),
                 "behavior": h.behavior.primary_behavior.value,
                 "threat_level": h.behavior.threat_level.value,
                 "threat_score": round(h.behavior.threat_score, 2),
+                "confidence": round(float(getattr(h.behavior, "confidence", 0.95)), 2),
                 "role": getattr(h.behavior, "role", "individual"),
                 "interacting_with": h.behavior.interacting_with_track_id,
                 "reasoning": h.behavior.reasoning,
@@ -759,9 +938,12 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             for h in analysis.humans
         ]
 
+        primary_global_id = analysis.humans[0].global_id if (analysis.humans and getattr(analysis.humans[0], "global_id", None)) else None
+
         response_data = {
             "status": "processed",
             "camera_id": camera_id,
+            "global_subject_id": primary_global_id,
             "frame_index": ctx.frame_count,
             "human_count": analysis.human_count,
             "highest_threat": analysis.highest_threat_level.value,
@@ -771,6 +953,97 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             "humans": humans_summary,
         }
 
+        # Temporal event batching: aggregate 20-30 camera detection events before sending to AI
+        batch_hdr = self.headers.get("X-Batch-AI", "").lower()
+        sync_hdr = self.headers.get("X-Sync-VLM", "").lower() in ("true", "1", "yes")
+        enable_batch_env = os.getenv("SOC_ENABLE_DETECTION_BATCHING")
+        if batch_hdr in ("true", "1", "yes"):
+            use_batching = True
+        elif batch_hdr in ("false", "0", "no"):
+            use_batching = False
+        elif sync_hdr or test_action_hdr:
+            use_batching = False
+        elif getattr(self.soc, "always_vlm", False):
+            # Explicit always_vlm mode analyzes every frame without batching
+            use_batching = False
+        else:
+            default_enable = getattr(self.soc, "enable_batching", True)
+            if enable_batch_env is not None:
+                default_enable = enable_batch_env.lower() in ("true", "1", "yes")
+            use_batching = default_enable
+
+        batch_summary: Optional[Dict[str, Any]] = None
+        keyframe_bgr: np.ndarray = frame_bgr
+        keyframe_display: np.ndarray = display_frame
+
+        if use_batching:
+            is_ready = ctx.detection_batch.add_event(
+                analysis=analysis,
+                frame_bgr=frame_bgr,
+                display_frame=display_frame,
+                primary_action=primary_action,
+                humans_summary=humans_summary,
+                timestamp=timestamp_sec,
+            )
+            if not is_ready:
+                # Buffer not full yet (20-30 events accumulating). Return immediate lightweight 200 OK (< 3ms)
+                response_data["status"] = "processed"
+                response_data["batch_status"] = "accumulating"
+                response_data["accumulated_events"] = len(ctx.detection_batch.events)
+                response_data["target_batch_size"] = ctx.detection_batch.batch_size
+                response_data["ai_analyzed"] = False
+
+                # Provide evidence hash for stream continuity and forensic ledger
+                evt_id = f"BUF_{int(timestamp_sec * 1000)}_{camera_id}"
+                try:
+                    rec = self.soc.evidence_keeper.record_evidence(
+                        camera_id=camera_id,
+                        frame_bgr=frame_bgr,
+                        metadata=response_data,
+                        event_id=evt_id,
+                    )
+                    response_data["event_id"] = rec.event_id
+                    response_data["frame_sha256"] = rec.frame_sha256
+                    response_data["chain_hash"] = rec.chain_hash
+                    response_data["evidence"] = {
+                        "event_id": rec.event_id,
+                        "frame_sha256": rec.frame_sha256,
+                        "chain_hash": rec.chain_hash,
+                        "verification_status": "ACCUMULATING_DETECTIONS",
+                    }
+                except Exception:
+                    response_data["event_id"] = evt_id
+                    response_data["evidence"] = {
+                        "event_id": evt_id,
+                        "frame_sha256": "",
+                        "chain_hash": "",
+                        "verification_status": "ACCUMULATING_DETECTIONS",
+                    }
+
+                self.soc.record_dashboard_event(response_data)
+                self._send_json_response(200, response_data)
+                return
+
+            # Batch reached 20-30 events! Flush and proceed to AI analysis
+            batch_summary = ctx.detection_batch.flush()
+            if batch_summary.get("keyframe_bgr") is not None:
+                keyframe_bgr = batch_summary["keyframe_bgr"]
+            if batch_summary.get("keyframe_display") is not None:
+                keyframe_display = batch_summary["keyframe_display"]
+
+            response_data["status"] = "processed"
+            response_data["batch_status"] = "ai_analyzed"
+            response_data["event_batch_count"] = batch_summary.get("event_count", ctx.batch_size)
+            response_data["event_batch_summary"] = {
+                k: v for k, v in batch_summary.items() if k not in ("keyframe_bgr", "keyframe_display", "events")
+            }
+            response_data["ai_analyzed"] = True
+            primary_action = batch_summary.get("dominant_action", primary_action)
+            response_data["primary_action"] = primary_action
+        else:
+            response_data["batch_status"] = "single_frame"
+            response_data["ai_analyzed"] = True
+
         # NVIDIA NIM VLM Multimodal Analysis on frame (Always-on mode or on-demand/incident)
         vlm_res: Optional[Dict[str, Any]] = None
         vlm_hdr = self.headers.get("X-Analyze-VLM", "").lower()
@@ -779,6 +1052,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             or vlm_hdr in ("true", "1", "yes")
             or analysis.highest_threat_score >= 0.35
             or (self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled and analysis.highest_threat_level.value != "LOW")
+            or (use_batching and batch_summary is not None)
         )
 
         if self.soc.nvidia_vlm is not None and should_run_vlm:
@@ -792,7 +1066,7 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 for h in humans_summary
             ]
             # Extract normalized bbox and velocity from primary track
-            h_img, w_img = frame_bgr.shape[:2]
+            h_img, w_img = keyframe_bgr.shape[:2]
             primary_bbox_norm = (0.2, 0.2, 0.8, 0.8)
             primary_vel = (0.0, 0.0)
             if analysis.humans:
@@ -815,26 +1089,28 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                 velocity_vector=primary_vel,
                 yolov11_raw_actions=[primary_action],
             )
+            if batch_summary is not None:
+                vlm_kwargs["event_batch"] = batch_summary
+                vlm_kwargs["yolov11_raw_actions"] = list(batch_summary.get("action_frequencies", {}).keys()) or [primary_action]
 
             is_mock_mode = getattr(self.soc, "mock_vlm", False) or not self.soc.nvidia_vlm.is_configured
-            sync_hdr = self.headers.get("X-Sync-VLM", "").lower() in ("true", "1", "yes")
 
             if is_mock_mode or sync_hdr:
                 vlm_res = self.soc.nvidia_vlm.analyze_frame(
-                    image_input=frame_bgr,
+                    image_input=keyframe_bgr,
                     **vlm_kwargs,
                 )
             else:
                 # Fast local tactical reasoning for instantaneous response (<5ms, zero camera lag)
                 vlm_res = self.soc.nvidia_vlm.analyze_frame(
-                    image_input=frame_bgr,
+                    image_input=keyframe_bgr,
                     mock_mode=True,
                     **vlm_kwargs,
                 )
                 # Dispatch deep cloud NVIDIA NIM VLM asynchronously without blocking frame ingestion
                 self.soc.submit_vlm_task(
                     camera_id=camera_id,
-                    frame_bgr=frame_bgr,
+                    frame_bgr=keyframe_bgr,
                     vlm_kwargs=vlm_kwargs,
                     base_response=response_data,
                 )
@@ -874,19 +1150,22 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
         # Strict AI Action Verification Gate for Webhook Push (AGENTS.md / Operational HITL):
         # The AI MUST evaluate the image and verify whether the action is TRUE.
         # If the action is FALSE (false positive, benign action, or suppressed), DO NOT SEND POST!
-        if self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
+        dispatched_to_webhook = False
+        disable_webhook_hdr = self.headers.get("X-Disable-Webhook", "").lower() in ("true", "1", "yes")
+        if not disable_webhook_hdr and self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
             is_confirmed, verif_reason, verif_details = is_ai_action_confirmed(
                 vlm_result=vlm_res,
                 primary_action=primary_action,
                 threat_level=analysis.highest_threat_level,
             )
             if is_confirmed:
-                self.soc.webhook_dispatcher.dispatch_frame_event(
-                    frame=frame_bgr,
-                    annotated_frame=display_frame,
+                dispatched_to_webhook = self.soc.webhook_dispatcher.dispatch_frame_event(
+                    frame=keyframe_bgr,
+                    annotated_frame=keyframe_display,
                     analysis_result=analysis,
                     camera_config=ctx.config,
                     vlm_result=vlm_res,
+                    batch_summary=batch_summary,
                 )
             else:
                 logger.info(
@@ -895,8 +1174,13 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
                     verif_reason,
                 )
 
-        # Forward raw metadata if explicit always_vlm mode is enabled
-        if getattr(self.soc, "always_vlm", False) and self.soc.webhook_dispatcher is not None and self.soc.webhook_dispatcher.is_enabled:
+        # Forward raw metadata only if not already dispatched (prevent duplicate POST requests)
+        if (
+            not dispatched_to_webhook
+            and getattr(self.soc, "always_vlm", False)
+            and self.soc.webhook_dispatcher is not None
+            and self.soc.webhook_dispatcher.is_enabled
+        ):
             self.soc.webhook_dispatcher.dispatch_raw_payload(response_data)
 
         # Record into Forensic Evidence Ledger (SHA-256 / HMAC / Merkle Hash Chain)
@@ -904,10 +1188,21 @@ class SOCMultiCameraHandler(SimpleHTTPRequestHandler):
             evt_id = f"EVT_{int(timestamp_sec * 1000)}_{camera_id}"
             rec = self.soc.evidence_keeper.record_evidence(
                 camera_id=camera_id,
-                frame_bgr=frame_bgr,
+                frame_bgr=keyframe_bgr,
                 metadata=response_data,
                 event_id=evt_id,
             )
+            response_data["event_id"] = rec.event_id
+            response_data["frame_sha256"] = rec.frame_sha256
+            response_data["chain_hash"] = rec.chain_hash
+            response_data["evidence"] = {
+                "event_id": rec.event_id,
+                "frame_sha256": rec.frame_sha256,
+                "chain_hash": rec.chain_hash,
+                "verification_status": rec.verification_status,
+            }
+        except Exception as ev_err:
+            logger.debug("Evidence recording notice: %s", ev_err)
             response_data["event_id"] = rec.event_id
             response_data["frame_sha256"] = rec.frame_sha256
             response_data["chain_hash"] = rec.chain_hash
@@ -1003,7 +1298,7 @@ class InferenceServer:
     def __init__(
         self,
         host: str = "0.0.0.0",
-        port: int = 8000,
+        port: int = 7777,
         model_weights: str = "yolo/yolo11n-pose.pt",
         device: Optional[str] = None,
         conf_threshold: float = 0.25,
@@ -1016,6 +1311,8 @@ class InferenceServer:
         enable_tunnel: bool = True,
         always_vlm: bool = False,
         mock_vlm: bool = False,
+        enable_batching: bool = True,
+        batch_size: int = 25,
     ) -> None:
         self.host = host
         self.port = port
@@ -1030,10 +1327,22 @@ class InferenceServer:
         self.always_vlm = always_vlm or os.getenv("ALWAYS_ANALYZE_VLM", "").lower() in ("true", "1", "yes")
         self.mock_vlm = mock_vlm or os.getenv("MOCK_VLM", "").lower() in ("true", "1", "yes")
 
+        batch_env = os.getenv("SOC_ENABLE_DETECTION_BATCHING")
+        self.enable_batching = (batch_env.lower() in ("true", "1", "yes")) if batch_env is not None else enable_batching
+        batch_size_env = os.getenv("SOC_DETECTION_BATCH_SIZE")
+        if batch_size_env and batch_size_env.isdigit():
+            self.batch_size = max(20, min(30, int(batch_size_env)))
+        else:
+            self.batch_size = max(20, min(30, int(batch_size)))
+
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Context manager for multi-tenant isolation
         self.context_manager = CameraContextManager(output_dir=self.output_dir)
+
+        # Cache segment HLS (seq -> JPEG bytes) giúp phát video mượt hơn, tránh encode lặp
+        self._hls_segment_cache: Dict[int, bytes] = {}
+        self._hls_lock = threading.Lock()
 
         # Cloudflare Tunnel Manager for native remote external access
         self.public_tunnel_url: Optional[str] = None
@@ -1252,10 +1561,13 @@ class InferenceServer:
         print(f"• VLM Analysis Mode:  {'ALWAYS-ON (Phân tích mọi request frame)' if self.always_vlm else 'ON-DEMAND'}")
         print(f"• Live MJPEG Stream:  http://{local_ip}:{self.port}/api/v1/cameras/LAPTOP_01/stream")
         print(f"• Direct Short Stream:http://{local_ip}:{self.port}/stream.mjpg")
+        print(f"• HLS Playlist URL:   http://{local_ip}:{self.port}/stream.m3u8")
         if self.public_tunnel_url:
             print("------------------------------------------------------------------------------")
             print("🌍 PUBLIC CLOUDFLARE TUNNEL (TRUY CẬP TỪ MỌI NƠI QUA INTERNET):")
             print(f"• 🔗 Public Base URL:   {self.public_tunnel_url}")
+            print(f"• 📺 In-Browser Player: {self.public_tunnel_url}/watch")
+            print(f"• 📡 Public HLS Stream: {self.public_tunnel_url}/stream.m3u8")
             print(f"• 📹 Public Stream:     {self.public_tunnel_url}/api/v1/cameras/LAPTOP_01/stream")
             print(f"• ⚡ Direct Short Stream:{self.public_tunnel_url}/stream.mjpg")
             print(f"• 🧠 Public VLM API:    POST {self.public_tunnel_url}/api/v1/analyze/nvidia")

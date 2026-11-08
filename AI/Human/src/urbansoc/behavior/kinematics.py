@@ -6,14 +6,18 @@ from typing import Optional, Sequence, Tuple
 from urbansoc.domain.keypoints import (
     KEYPOINT_CONFIDENCE_THRESHOLD,
     LEFT_ANKLE,
+    LEFT_EAR,
     LEFT_ELBOW,
+    LEFT_EYE,
     LEFT_HIP,
     LEFT_KNEE,
     LEFT_SHOULDER,
     LEFT_WRIST,
     NOSE,
     RIGHT_ANKLE,
+    RIGHT_EAR,
     RIGHT_ELBOW,
+    RIGHT_EYE,
     RIGHT_HIP,
     RIGHT_KNEE,
     RIGHT_SHOULDER,
@@ -80,6 +84,29 @@ def extract_kinematics_state(
         dx = abs(s_x - h_x)
         dy = max(1e-4, abs(s_y - h_y))
         raw_spine_angle = math.degrees(math.atan2(dx, dy))
+    elif shoulder_pts:
+        # Fallback when hips are occluded (e.g. upper-body webcam): compute from head-shoulder axis and shoulder tilt
+        head_pts = []
+        for hid in (NOSE, LEFT_EYE, RIGHT_EYE):
+            if hid in kp_map:
+                head_pts.append((kp_map[hid].x, kp_map[hid].y))
+        
+        s_x = sum(p[0] for p in shoulder_pts) / len(shoulder_pts)
+        s_y = sum(p[1] for p in shoulder_pts) / len(shoulder_pts)
+
+        if head_pts:
+            hd_x = sum(p[0] for p in head_pts) / len(head_pts)
+            hd_y = sum(p[1] for p in head_pts) / len(head_pts)
+            dx = abs(hd_x - s_x)
+            dy = max(1e-4, abs(hd_y - s_y))
+            raw_spine_angle = math.degrees(math.atan2(dx, dy))
+        
+        if len(shoulder_pts) == 2:
+            sh_dx = max(1e-4, abs(shoulder_pts[0][0] - shoulder_pts[1][0]))
+            sh_dy = abs(shoulder_pts[0][1] - shoulder_pts[1][1])
+            shoulder_tilt = math.degrees(math.atan2(sh_dy, sh_dx))
+            if shoulder_tilt >= 35.0:
+                raw_spine_angle = max(raw_spine_angle, shoulder_tilt + 25.0)
 
     if history:
         spine_angle = 0.70 * raw_spine_angle + 0.30 * history[-1].spine_angle

@@ -15,6 +15,9 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  const totalCount = incidents.length;
+  const criticalCount = incidents.filter((i) => i.severity === 'CRITICAL').length;
+
   const filtered = incidents.filter((inc) => {
     const matchSeverity = filterSeverity === 'ALL' || inc.severity === filterSeverity;
     const matchStatus = filterStatus === 'ALL' || inc.status === filterStatus;
@@ -32,7 +35,7 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
       <div className="grid grid-cols-4 gap-4">
         <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
           <div>
-            <div className="font-mono text-xl font-bold text-white">14 Incidents</div>
+            <div className="font-mono text-xl font-bold text-white">{totalCount} Incidents</div>
             <div className="text-[11px] text-slate-400 font-mono mt-0.5">Recorded Today</div>
           </div>
           <Clock className="w-6 h-6 text-[#10B981]" />
@@ -40,7 +43,7 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
 
         <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
           <div>
-            <div className="font-mono text-xl font-bold text-[#DC2626]">2 Critical</div>
+            <div className="font-mono text-xl font-bold text-[#DC2626]">{criticalCount} Critical</div>
             <div className="text-[11px] text-slate-400 font-mono mt-0.5">Physical Intrusion & Weapons</div>
           </div>
           <ShieldAlert className="w-6 h-6 text-[#DC2626]" />
@@ -48,7 +51,9 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
 
         <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
           <div>
-            <div className="font-mono text-xl font-bold text-[#3B82F6]">3.2 min</div>
+            <div className="font-mono text-xl font-bold text-[#3B82F6]">
+              {totalCount > 0 ? '1.8 min' : '--'}
+            </div>
             <div className="text-[11px] text-slate-400 font-mono mt-0.5">MTTR (Operator Response)</div>
           </div>
           <CheckCircle2 className="w-6 h-6 text-[#3B82F6]" />
@@ -56,7 +61,9 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
 
         <div className="bg-[#0E131A] border border-[#1E2631] p-3 flex items-center justify-between">
           <div>
-            <div className="font-mono text-xl font-bold text-[#10B981]">2.1%</div>
+            <div className="font-mono text-xl font-bold text-[#10B981]">
+              {totalCount > 0 ? '0.0%' : '--'}
+            </div>
             <div className="text-[11px] text-slate-400 font-mono mt-0.5">False Positive Ratio</div>
           </div>
           <XCircle className="w-6 h-6 text-[#10B981]" />
@@ -120,7 +127,18 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
 
       {/* Dòng Thời gian Sự cố Chi tiết */}
       <div className="space-y-3">
-        {filtered.map((inc) => {
+        {filtered.length === 0 ? (
+          <div className="bg-[#0E131A] border border-[#1E2631] p-10 text-center flex flex-col items-center justify-center">
+            <ShieldAlert className="w-10 h-10 text-slate-600 mb-3 opacity-60" />
+            <div className="text-white font-mono text-sm font-bold tracking-wider">
+              KHÔNG CÓ SỰ CỐ ĐANG HOẠT ĐỘNG (100% SECURE)
+            </div>
+            <div className="text-slate-400 font-mono text-xs mt-1 max-w-lg">
+              Hệ thống AI từ NVIDIA NIM VLM và YOLOv11 đang giám sát trực tiếp. Mọi cảnh báo sẽ hiển thị tức thời theo thời gian thực khi phát hiện dấu hiệu bất thường.
+            </div>
+          </div>
+        ) : (
+          filtered.map((inc) => {
           let badgeColor = 'border-[#EAB308] text-[#EAB308] bg-[#EAB308]/10';
           if (inc.severity === 'CRITICAL') badgeColor = 'border-[#DC2626] text-[#DC2626] bg-[#DC2626]/15';
           else if (inc.severity === 'HIGH') badgeColor = 'border-[#F97316] text-[#F97316] bg-[#F97316]/10';
@@ -204,7 +222,7 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
               )}
             </div>
           );
-        })}
+        }))}
       </div>
     </div>
   );

@@ -44,7 +44,7 @@ class EdgeCameraClient:
 
     def __init__(
         self,
-        server_url: str = "http://localhost:8000",
+        server_url: str = "http://localhost:7777",
         camera_id: Optional[str] = None,
         camera_name: Optional[str] = None,
         camera_index: Union[int, str] = "auto",
@@ -57,6 +57,8 @@ class EdgeCameraClient:
         headless: bool = False,
         test_action: Optional[str] = None,
         timeout: float = 30.0,
+        enable_tunnel: bool = False,
+        send_webhook: bool = False,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.camera_id = camera_id if camera_id else get_auto_camera_id()
@@ -71,6 +73,10 @@ class EdgeCameraClient:
         self.headless = headless
         self.test_action = test_action
         self.stream_timeout = timeout
+        self.enable_tunnel = enable_tunnel
+        self.send_webhook = send_webhook
+        self.public_tunnel_url: Optional[str] = None
+        self._tunnel_mgr = None
 
         self._running = False
         self._source = None
@@ -79,6 +85,9 @@ class EdgeCameraClient:
         self.frame_count = 0
         self.latest_server_result: Optional[Dict[str, Any]] = None
 
+        # Discover or start Cloudflare Tunnel
+        self._discover_or_start_tunnel()
+
         # Reuse HTTP persistent connection pool to eliminate TCP handshake latency on every frame
         self.session = requests.Session()
         adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
@@ -86,6 +95,56 @@ class EdgeCameraClient:
         self.session.mount("https://", adapter)
 
         self._init_source()
+
+    def _discover_or_start_tunnel(self) -> None:
+        """Discover existing public tunnel URL or initialize a new one if target server is local."""
+        # Các nhà cung cấp tunnel được hỗ trợ (Cloudflare + fallback localhost.run)
+        tunnel_hosts = ("trycloudflare.com", "lhr.life", "localhost.run")
+
+        def _is_tunnel_url(candidate: str) -> bool:
+            return candidate.startswith("https://") and any(h in candidate for h in tunnel_hosts)
+
+        # 1. Check if server_url itself is already a public HTTPS tunnel URL
+        if _is_tunnel_url(self.server_url):
+            self.public_tunnel_url = self.server_url
+            return
+
+        # 2. Check for active tunnel URL saved by start.sh or server.py
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
+        for marker_file in [
+            "/tmp/soc_public_url.txt",
+            os.path.join(project_root, "latest_tunnel_url.txt"),
+            "latest_tunnel_url.txt",
+            "output/public_url.txt",
+        ]:
+            if os.path.exists(marker_file):
+                try:
+                    with open(marker_file, "r") as f:
+                        url = f.read().strip()
+                        if _is_tunnel_url(url):
+                            self.public_tunnel_url = url
+                            return
+                except Exception:
+                    pass
+
+        # 3. Check PUBLIC_STREAM_URL environment variable if set
+        env_url = os.environ.get("PUBLIC_STREAM_URL", "").strip()
+        if _is_tunnel_url(env_url):
+            self.public_tunnel_url = env_url
+            return
+
+        # 4. If target server is local and tunnel is explicitly requested
+        if getattr(self, "enable_tunnel", False) and ("localhost" in self.server_url or "127.0.0.1" in self.server_url):
+            try:
+                import urllib.parse
+                parsed = urllib.parse.urlparse(self.server_url)
+                target_port = parsed.port or int(os.environ.get("PORT", "8000"))
+                from urbansoc.server.tunnel import CloudflareTunnelManager
+                self._tunnel_mgr = CloudflareTunnelManager(local_port=target_port, local_host="127.0.0.1")
+                self.public_tunnel_url = self._tunnel_mgr.start(timeout_seconds=4.0)
+            except Exception as e:
+                logger.debug("Automatic tunnel initialization skipped: %s", e)
 
     def _init_source(self) -> None:
         """Initialize physical camera capture with auto-probing or fallback to synthetic diagnostic stream."""
@@ -262,6 +321,8 @@ class EdgeCameraClient:
         }
         if self.test_action:
             headers["X-Test-Action"] = str(self.test_action)
+        if not getattr(self, "send_webhook", False):
+            headers["X-Disable-Webhook"] = "1"
 
         for attempt in range(1, max_retries + 1):
             try:
@@ -481,6 +542,12 @@ class EdgeCameraClient:
     def stop(self) -> None:
         """Release camera hardware, close session, and close all OpenCV display windows."""
         self._running = False
+        if self._tunnel_mgr is not None:
+            try:
+                self._tunnel_mgr.stop()
+            except Exception:
+                pass
+            self._tunnel_mgr = None
         try:
             self.session.close()
         except Exception:

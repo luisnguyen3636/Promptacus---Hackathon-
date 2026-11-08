@@ -54,7 +54,7 @@ def main() -> int:
         description="Urban Safety AI-SOC: All-in-One Central Server & Client Launcher",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
+    parser.add_argument("--port", type=int, default=7777, help="Server port (default: 7777)")
     parser.add_argument("--camera", type=str, default="auto", help="Webcam device index or video file (default: auto)")
     parser.add_argument("--camera-id", type=str, default=None, help="Camera ID (default: auto from hostname)")
     parser.add_argument("--camera-name", type=str, default=None, help="Camera Name (default: auto)")

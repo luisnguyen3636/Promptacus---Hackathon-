@@ -3,7 +3,7 @@
 
 Cách sử dụng:
     python3 scripts/test_post_endpoint.py
-    python3 scripts/test_post_endpoint.py --url https://urbanstrike.tech/api/incidents
+    python3 scripts/test_post_endpoint.py --url https://urbanstrike.tech/api/incident
     python3 scripts/test_post_endpoint.py --action KNIFE_THREAT
 """
 

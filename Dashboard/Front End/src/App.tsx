@@ -78,7 +78,12 @@ export const App: React.FC = () => {
         item.id === incidentId
           ? {
               ...item,
-              status: decision === 'DISMISS_FALSE_POSITIVE' ? 'DISMISSED' : 'OPERATOR_CONFIRMED',
+              status:
+                decision === 'DISMISS_FALSE_POSITIVE'
+                  ? 'DISMISSED'
+                  : decision === 'DOWNGRADE_MONITOR'
+                  ? 'DOWNGRADED_MONITORING'
+                  : 'OPERATOR_CONFIRMED',
             }
           : item
       )

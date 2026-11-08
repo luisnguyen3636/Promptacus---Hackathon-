@@ -62,6 +62,11 @@ if src_dir not in sys.path:
 from urbansoc.config import HARDCODED_MODEL_URL
 from urbansoc.server.inference_server import InferenceServer
 
+try:
+    from alert_server import AlertServer
+except ImportError:
+    AlertServer = None
+
 
 def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -125,20 +130,34 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     parser.add_argument(
         "--tunnel",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable automatic Cloudflare Tunnel for public remote access (default: True)",
+        default=False,
+        help="DEPRECATED: public tunnel is now created by the camera client only (default: False)",
     )
     parser.add_argument(
         "--always-vlm",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Always analyze every incoming camera request with NVIDIA VLM (default: True)",
+        default=False,
+        help="Always analyze every incoming camera request with NVIDIA VLM without batching (default: False)",
     )
     parser.add_argument(
         "--mock-vlm",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Use master local reasoning engine for VLM instead of external WAN API (default: False)",
+    )
+    parser.add_argument(
+        "--batch",
+        "--batch-ai",
+        dest="batch",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Batch 20-30 detects before sending to AI and dispatching webhook (default: True)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=25,
+        help="Number of detects to batch (range 20-30) before AI analysis (default: 25)",
     )
     return parser.parse_args(args)
 
@@ -151,6 +170,12 @@ def main() -> int:
     elif webhook_url and webhook_url.lower() in ("none", "disabled", "false", "off"):
         webhook_url = None
 
+    if args.tunnel:
+        print(
+            "⚠️  Cờ --tunnel của server đã bị tắt: tunnel công khai chỉ do CAMERA CLIENT tạo.\n"
+            "    Hãy chạy: ./start.sh client   (client sẽ tự tạo URL HLS để stream video)"
+        )
+
     server = InferenceServer(
         host=args.host,
         port=args.port,
@@ -160,9 +185,12 @@ def main() -> int:
         webhook_url=webhook_url,
         webhook_cooldown=args.webhook_cooldown,
         max_requests_per_minute=args.max_rpm,
-        enable_tunnel=bool(args.tunnel),
+        # Tunnel công khai chỉ do camera client quản lý -> server luôn tắt tunnel
+        enable_tunnel=False,
         always_vlm=bool(args.always_vlm),
         mock_vlm=bool(args.mock_vlm),
+        enable_batching=bool(args.batch),
+        batch_size=args.batch_size,
     )
     server.start(blocking=True)
     return 0

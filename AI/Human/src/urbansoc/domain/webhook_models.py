@@ -48,10 +48,17 @@ class SubjectCropData:
     crop_image_sha256: str          # Cryptographic SHA-256 (RawJPEGBytes + TimestampMs)
     crop_image_size_bytes: int
     interacting_with_track_id: Optional[int] = None
+    global_id: Optional[str] = None
+    reid_confidence: float = 0.0
+    travel_path: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "track_id": self.track_id,
+            "global_id": self.global_id,
+            "global_subject_id": self.global_id,
+            "reid_confidence": round(self.reid_confidence, 2),
+            "travel_path": self.travel_path,
             "role": self.role,
             "behavior": self.behavior,
             "interacting_with_track_id": self.interacting_with_track_id,
@@ -98,6 +105,9 @@ class WebhookIncidentPayload:
     action_confirmed: bool = True
     ai_verified: bool = True
     action_validation: Dict[str, Any] = field(default_factory=dict)
+    global_subject_id: Optional[str] = None
+    travel_path: str = ""
+    batch_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         full_b64 = self.full_image.get("image_base64", "")
@@ -107,6 +117,8 @@ class WebhookIncidentPayload:
         if suspect_subject is None:
             suspect_subject = max(self.subjects, key=lambda s: s.threat_score) if self.subjects else None
         subject_b64 = suspect_subject.crop_image_base64 if suspect_subject else ""
+        global_sub_id = self.global_subject_id or (getattr(suspect_subject, "global_id", None) if suspect_subject else None)
+        travel_p = self.travel_path or (getattr(suspect_subject, "travel_path", "") if suspect_subject else self.camera.camera_id)
 
         # Multi-person interaction summary
         multi_person_summary = ""
@@ -157,11 +169,14 @@ class WebhookIncidentPayload:
             "threat_level": self.threat_level,
             "threat_score": round(self.threat_score, 4),
             "is_urgent": self.is_urgent,
+            "global_subject_id": global_sub_id,
+            "travel_path": travel_p,
             "action_confirmed": self.action_confirmed,
             "ai_verified": self.ai_verified,
             "action_validation": self.action_validation,
             "reasoning": self.reasoning,
             "weapon_info": self.weapon,
+            "batch_summary": self.batch_summary,
 
             # Direct top-level image fields for DeepSeek & VLM consumers
             "image": full_b64,

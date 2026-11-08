@@ -176,3 +176,61 @@ def test_server_nvidia_analyze_endpoint(tmp_path: Any) -> None:
 
     finally:
         server.stop()
+
+
+def test_nvidia_vlm_timeout_30s_configuration_and_call() -> None:
+    """Test that default timeout is 30s and properly applied to HTTP requests."""
+    # 1. Default timeout is 30.0s when env vars are absent or 30.0
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("NVIDIA_TIMEOUT_SECONDS", None)
+        os.environ.pop("NVIDIA_VLM_TIMEOUT", None)
+        client = NvidiaVisionClient(api_key="mock_key")
+        assert client.timeout_seconds == 30.0
+
+    # 2. Configurable via NVIDIA_TIMEOUT_SECONDS
+    with patch.dict(os.environ, {"NVIDIA_TIMEOUT_SECONDS": "35.5"}):
+        client2 = NvidiaVisionClient(api_key="mock_key")
+        assert client2.timeout_seconds == 35.5
+
+    # 3. Configurable via NVIDIA_VLM_TIMEOUT
+    with patch("urbansoc.ai.nvidia_vlm.load_env_file", return_value={}):
+        with patch.dict(os.environ, {"NVIDIA_VLM_TIMEOUT": "40.0"}):
+            os.environ.pop("NVIDIA_TIMEOUT_SECONDS", None)
+            client3 = NvidiaVisionClient(api_key="mock_key")
+            assert client3.timeout_seconds == 40.0
+
+    # 4. Explicit parameter overrides env
+    client4 = NvidiaVisionClient(api_key="mock_key", timeout_seconds=30.0)
+    assert client4.timeout_seconds == 30.0
+
+    # 5. Verify timeout passed into urllib.request.urlopen
+    configured_client = NvidiaVisionClient(api_key="real-valid-api-key-test-12345", timeout_seconds=30.0)
+    assert configured_client.is_configured is True
+
+    fake_resp = MagicMock()
+    fake_resp.read.return_value = json.dumps({
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "action_type": "NORMAL",
+                    "severity": "low",
+                    "threat_score": 0.05,
+                    "confidence": 0.95,
+                    "reasoning": "Normal scene",
+                })
+            }
+        }]
+    }).encode("utf-8")
+    fake_resp.__enter__.return_value = fake_resp
+
+    with patch("urllib.request.urlopen", return_value=fake_resp) as mock_urlopen:
+        dummy_frame = np.zeros((30, 30, 3), dtype=np.uint8)
+        res = configured_client.analyze_frame(
+            image_input=dummy_frame,
+            camera_id="TIMEOUT_CAM_01",
+        )
+        assert mock_urlopen.called
+        call_kwargs = mock_urlopen.call_args[1]
+        assert call_kwargs.get("timeout") == 30.0
+        assert res["action_type"] == "NORMAL"
+

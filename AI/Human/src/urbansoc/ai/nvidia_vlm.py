@@ -106,7 +106,8 @@ class NvidiaVisionClient:
         raw_base = base_url or os.getenv("NVIDIA_BASE_URL", DEFAULT_NVIDIA_BASE_URL).strip()
         self.base_url = raw_base.rstrip("/")
         self.model = model or os.getenv("NVIDIA_MODEL", DEFAULT_NVIDIA_MODEL).strip()
-        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else float(os.getenv("NVIDIA_TIMEOUT_SECONDS", "20.0"))
+        env_timeout_str = os.getenv("NVIDIA_TIMEOUT_SECONDS") or os.getenv("NVIDIA_VLM_TIMEOUT") or "30.0"
+        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else float(env_timeout_str)
 
         # Sub-engines
         self.registry = NamedCameraRegistry()

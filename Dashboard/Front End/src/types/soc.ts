@@ -42,6 +42,15 @@ export interface IAiBoundingBox {
   h: number; // 0.0 - 1.0 (relative)
 }
 
+export interface IAiCameraAlert {
+  hasAlert: boolean;
+  type: string;
+  severity: 'NORMAL' | 'HIGH' | 'CRITICAL';
+  message?: string;
+  confidence?: number;
+  timestamp?: number;
+}
+
 export interface ICameraDevice {
   id: string;
   name: string;
@@ -50,7 +59,9 @@ export interface ICameraDevice {
   bitrateKbps: number;
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
   streamUrl: string;
+  snapshotUrl?: string;
   ptzEnabled: boolean;
+  aiAlert?: IAiCameraAlert | null;
   boundingBoxes: IAiBoundingBox[];
 }
 
@@ -71,7 +82,7 @@ export interface IIncidentItem {
   cameraSnapshots?: ICameraSnapshots | null;
   playbackUrl?: string | null;
   vlmAnalysis?: string;
-  status: 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED';
+  status: 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED' | 'DOWNGRADED_MONITORING';
 }
 
 export interface IPtzCommandPayload {

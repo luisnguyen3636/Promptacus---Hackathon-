@@ -67,8 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--server-url",
         type=str,
-        default="http://localhost:8000",
-        help="Intermediate AI Inference Server URL (default: http://localhost:8000)",
+        default="http://localhost:7777",
+        help="Intermediate AI Inference Server URL (default: http://localhost:7777)",
     )
     parser.add_argument(
         "--camera",
@@ -143,6 +143,18 @@ def parse_args() -> argparse.Namespace:
         default=30.0,
         help="HTTP POST stream timeout in seconds (default: 30.0)",
     )
+    parser.add_argument(
+        "--tunnel",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable automatic Cloudflare Tunnel for in-browser video streaming (default: True)",
+    )
+    parser.add_argument(
+        "--send-webhook",
+        action="store_true",
+        default=False,
+        help="Forward detection events to external webhook endpoint (default: False - only local/tunnel streaming)",
+    )
     return parser.parse_args()
 
 
@@ -163,6 +175,8 @@ def main() -> int:
         headless=args.headless,
         test_action=args.test_action,
         timeout=args.timeout,
+        enable_tunnel=bool(args.tunnel),
+        send_webhook=bool(args.send_webhook),
     )
 
     print("=" * 70)
@@ -174,6 +188,15 @@ def main() -> int:
     print(f"• Target FPS:    {client.fps} (JPEG Quality: {client.quality}%)")
     print(f"• GPS Location:  Lat={client.lat}, Lon={client.lon}")
     print(f"• Mode:          {'HEADLESS (No local GUI)' if client.headless else 'CAMERA WINDOW (Interactive HUD - [q] to exit, [s] to snapshot)'}")
+    if client.public_tunnel_url:
+        print("----------------------------------------------------------------------")
+        print("🌍 PUBLIC HTTPS TUNNEL (XEM VIDEO TRÊN TRÌNH DUYỆT):")
+        print(f"• 🔗 Xem trực tiếp:    {client.public_tunnel_url}/watch")
+        print(f"• 📹 MJPEG Stream:     {client.public_tunnel_url}/stream.mjpg")
+        print(f"• 📊 SOC Dashboard:    {client.public_tunnel_url}/dashboard")
+        print("----------------------------------------------------------------------")
+    else:
+        print("• 🌍 Public Tunnel:   (chưa có URL - chạy ./start.sh url để kiểm tra lại)")
     if client.test_action:
         print(f"• Sim Action:    {client.test_action}")
     print("=" * 70)

@@ -78,12 +78,21 @@ class YOLOPoseDetector(PoseDetector):
         self._init_yolo_and_bytetrack()
 
     def _resolve_model_path(self, path: str) -> Optional[str]:
-        """Check candidate paths for the model weights."""
+        """Check candidate paths for the model weights across both root and AI/Human working directories."""
+        current_file_dir = os.path.dirname(os.path.abspath(__file__))
+        ai_human_dir = os.path.abspath(os.path.join(current_file_dir, "..", "..", ".."))
+
         candidates = [
+            os.environ.get("YOLO_MODEL_PATH"),
             path,
+            os.path.join(ai_human_dir, "yolo", os.path.basename(path)),
+            os.path.join(ai_human_dir, path),
             os.path.join("yolo", os.path.basename(path)),
+            os.path.join("AI", "Human", "yolo", os.path.basename(path)),
+            os.path.join("AI", "Human", path),
             os.path.join("models", os.path.basename(path)),
             os.path.basename(path),
+            os.path.join("/home/test/Promptacus---Hackathon-/AI/Human/yolo", os.path.basename(path)),
             os.path.join("/home/test/Hackathon-Test-", os.path.basename(path)),
         ]
         for candidate in candidates:

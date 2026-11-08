@@ -36,7 +36,7 @@ class BehaviorEngine:
         fight_distance_norm: float = 1.35,
         enter_debounce_frames: int = 8,
         exit_debounce_frames: int = 12,
-        fast_track_debounce_frames: int = 6,
+        fast_track_debounce_frames: int = 2,
         bbox_ema_alpha: float = 0.65,
         output_dir: str = "output",
         heartbeat_interval: float = 1.0,
@@ -253,7 +253,7 @@ class BehaviorEngine:
                 confidence=raw_pred.confidence,
                 threat_level=deb_state.confirmed_threat_level,
                 threat_score=deb_state.confirmed_threat_score,
-                reasoning=deb_state.confirmed_reasoning,
+                reasoning=deb_state.confirmed_reasoning if deb_state.confirmed_reasoning else raw_pred.reasoning,
                 interacting_with_track_id=deb_state.confirmed_interacting_id,
                 role=getattr(deb_state, "confirmed_role", "individual"),
             )

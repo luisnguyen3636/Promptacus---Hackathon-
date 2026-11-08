@@ -565,6 +565,7 @@ class WebhookDispatcher:
         self.filtered_noise_count = 0
         self.last_status_code: Optional[int] = None
         self.last_error_message: Optional[str] = None
+        self._dns_error_until: float = 0.0
 
         # Start dedicated background worker thread
         self._worker_thread = threading.Thread(
@@ -596,6 +597,7 @@ class WebhookDispatcher:
         audio_result: Optional[Any] = None,
         camera_config: Optional[CameraLocationConfig] = None,
         vlm_result: Optional[Dict[str, Any]] = None,
+        batch_summary: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Extract metadata, filter noise, crop subjects, compute SHA-256, and enqueue non-blocking.
 
@@ -749,6 +751,9 @@ class WebhookDispatcher:
                 crop_image_sha256=crop_sha256,
                 crop_image_size_bytes=crop_size,
                 interacting_with_track_id=track.behavior.interacting_with_track_id,
+                global_id=getattr(track, "global_id", None),
+                reid_confidence=float(getattr(track, "reid_confidence", 0.0)),
+                travel_path=getattr(track, "travel_path", ""),
             )
             subject_crop_list.append(subject_data)
 
@@ -820,6 +825,13 @@ class WebhookDispatcher:
             )
             return False
 
+        clean_batch_summary = None
+        if batch_summary:
+            clean_batch_summary = {
+                k: v for k, v in batch_summary.items()
+                if k not in ("keyframe_bgr", "keyframe_display", "events")
+            }
+
         payload = WebhookIncidentPayload(
             event_id=event_id,
             timestamp=iso_timestamp,
@@ -839,6 +851,7 @@ class WebhookDispatcher:
             hand_crop_image_base64=hand_crop_b64,
             hand_crop_image_sha256=hand_crop_sha256,
             audio=audio_info,
+            batch_summary=clean_batch_summary,
             audit={
                 "frame_index": analysis_result.frame_index,
                 "human_count": analysis_result.human_count,
@@ -940,9 +953,27 @@ class WebhookDispatcher:
             self._send_post_with_retry(payload_dict)
             self.queue.task_done()
 
+    def _spool_offline_payload(self, payload: Dict[str, Any]) -> None:
+        """Persist incident payload locally when remote webhook endpoint is unreachable."""
+        try:
+            spool_dir = os.path.abspath(os.path.join("output", "spool"))
+            os.makedirs(spool_dir, exist_ok=True)
+            spool_path = os.path.join(spool_dir, "offline_incidents.jsonl")
+            with open(spool_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception as spool_err:
+            logger.debug("Failed to spool offline incident: %s", spool_err)
+
     def _send_post_with_retry(self, payload: Dict[str, Any]) -> bool:
         """Send HTTP POST with exponential backoff and timeout."""
         if not self.server_url:
+            return False
+
+        # If DNS failure circuit breaker is active, spool locally without spamming network requests
+        now = time.time()
+        if now < getattr(self, "_dns_error_until", 0.0):
+            self._spool_offline_payload(payload)
+            self.failed_count += 1
             return False
 
         headers = {
@@ -986,6 +1017,24 @@ class WebhookDispatcher:
 
             except Exception as e:
                 self.last_error_message = str(e)
+                err_str = str(e).lower()
+                is_dns_failure = (
+                    "nameresolutionerror" in err_str
+                    or "gaierror" in err_str
+                    or "failed to resolve" in err_str
+                    or "temporary failure in name resolution" in err_str
+                )
+                if is_dns_failure:
+                    self._dns_error_until = time.time() + 60.0  # 60s cooldown
+                    logger.info(
+                        "🌐 [OFFLINE SPOOL] Remote webhook host '%s' is unreachable (DNS resolution failed). Spooling incident %s locally (cooldown: 60s).",
+                        self.server_url,
+                        payload.get("event_id"),
+                    )
+                    self._spool_offline_payload(payload)
+                    self.failed_count += 1
+                    return False
+
                 logger.warning(
                     "Webhook POST failed to %s on attempt %d/%d: %s",
                     self.server_url, attempt, self.max_retries + 1, e,

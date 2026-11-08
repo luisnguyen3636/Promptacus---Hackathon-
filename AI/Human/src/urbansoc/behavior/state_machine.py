@@ -40,7 +40,7 @@ class HysteresisDebouncer:
         self,
         enter_debounce_frames: int = 8,
         exit_debounce_frames: int = 12,
-        fast_track_debounce_frames: int = 4,
+        fast_track_debounce_frames: int = 2,
     ) -> None:
         self.enter_debounce_frames = enter_debounce_frames
         self.exit_debounce_frames = exit_debounce_frames

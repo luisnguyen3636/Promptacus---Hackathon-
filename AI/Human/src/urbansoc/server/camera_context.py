@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from collections import Counter
 import cv2
 
 from urbansoc.behavior.engine import BehaviorEngine
@@ -31,6 +32,101 @@ from urbansoc.telemetry.webhook_dispatcher import EventThrottler
 logger = logging.getLogger("urbansoc.server.camera_context")
 
 
+class CameraDetectionBatch:
+    """Temporal buffer aggregating 20-30 camera detection events before sending to AI for consolidated analysis."""
+
+    def __init__(self, batch_size: int = 25) -> None:
+        # Clamped between 20 and 30 according to specification
+        self.batch_size = max(20, min(30, batch_size))
+        self.events: List[Dict[str, Any]] = []
+        self.best_frame: Optional[np.ndarray] = None
+        self.best_display_frame: Optional[np.ndarray] = None
+        self.highest_threat_score: float = -1.0
+        self.start_timestamp: float = 0.0
+        self._lock = threading.Lock()
+
+    def add_event(
+        self,
+        analysis: SOCFrameAnalysisResult,
+        frame_bgr: np.ndarray,
+        display_frame: Optional[np.ndarray],
+        primary_action: str,
+        humans_summary: List[Dict[str, Any]],
+        timestamp: float,
+    ) -> bool:
+        """Record a camera detection event. Returns True if batch is full (20-30 events) and ready for AI analysis."""
+        with self._lock:
+            if not self.events:
+                self.start_timestamp = timestamp
+                self.highest_threat_score = -1.0
+                self.best_frame = frame_bgr.copy()
+                self.best_display_frame = display_frame.copy() if display_frame is not None else None
+
+            event_entry = {
+                "frame_index": analysis.frame_index,
+                "timestamp": timestamp,
+                "human_count": analysis.human_count,
+                "primary_action": primary_action,
+                "threat_level": analysis.highest_threat_level.value,
+                "threat_score": float(analysis.highest_threat_score),
+                "humans": humans_summary,
+            }
+            self.events.append(event_entry)
+
+            # Keep the keyframe with the highest threat score (or most active subject)
+            if analysis.highest_threat_score > self.highest_threat_score or self.best_frame is None:
+                self.highest_threat_score = float(analysis.highest_threat_score)
+                self.best_frame = frame_bgr.copy()
+                if display_frame is not None:
+                    self.best_display_frame = display_frame.copy()
+
+            return len(self.events) >= self.batch_size
+
+    def flush(self) -> Dict[str, Any]:
+        """Aggregate and return the 20-30 events batch report, clearing the buffer for next cycle."""
+        with self._lock:
+            if not self.events:
+                return {}
+
+            actions = [ev["primary_action"] for ev in self.events]
+            freqs = dict(Counter(actions))
+            dominant_action = Counter(actions).most_common(1)[0][0] if actions else "NORMAL"
+
+            max_score = max((ev["threat_score"] for ev in self.events), default=0.0)
+            threat_ranks = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+            max_threat = max((ev["threat_level"] for ev in self.events), key=lambda x: threat_ranks.get(x, 0), default="LOW")
+
+            dur_ms = (self.events[-1]["timestamp"] - self.events[0]["timestamp"]) * 1000.0 if len(self.events) > 1 else 0.0
+
+            all_track_ids = set()
+            for ev in self.events:
+                for h in ev.get("humans", []):
+                    if "track_id" in h:
+                        all_track_ids.add(h["track_id"])
+
+            summary = {
+                "event_count": len(self.events),
+                "duration_ms": round(dur_ms, 1),
+                "first_frame_index": self.events[0]["frame_index"],
+                "last_frame_index": self.events[-1]["frame_index"],
+                "action_frequencies": freqs,
+                "dominant_action": dominant_action,
+                "highest_threat": max_threat,
+                "highest_threat_score": round(max_score, 2),
+                "tracked_subjects_count": len(all_track_ids),
+                "keyframe_bgr": self.best_frame,
+                "keyframe_display": self.best_display_frame,
+                "events": list(self.events),
+            }
+
+            self.events.clear()
+            self.best_frame = None
+            self.best_display_frame = None
+            self.highest_threat_score = -1.0
+            self.start_timestamp = 0.0
+            return summary
+
+
 class CameraContext:
     """Isolated state and processing context for an individual camera stream.
 
@@ -45,12 +141,15 @@ class CameraContext:
         output_dir: str = "output",
         fps: float = 15.0,
         cooldown_seconds: float = 3.0,
+        reid_coordinator: Optional[Any] = None,
+        batch_size: Optional[int] = None,
     ) -> None:
         self.camera_id = camera_id
         self.config = config if config is not None else CameraLocationConfig(camera_id=camera_id)
         self.output_dir = os.path.abspath(output_dir)
         self.fps = fps
         self.cooldown_seconds = cooldown_seconds
+        self.reid_coordinator = reid_coordinator
 
         # Dedicated behavior engine and debouncer per camera
         camera_output_dir = os.path.join(self.output_dir, "cameras", camera_id)
@@ -83,6 +182,14 @@ class CameraContext:
 
         # Dedicated event throttler per camera (so cooldown on CAM_01 doesn't silence CAM_02)
         self.throttler = EventThrottler(default_cooldown=cooldown_seconds)
+
+        # Temporal event buffer aggregating 20-30 camera detection events before sending to AI
+        if batch_size is not None:
+            self.batch_size = max(20, min(30, int(batch_size)))
+        else:
+            batch_size_env = os.getenv("SOC_DETECTION_BATCH_SIZE", "25")
+            self.batch_size = max(20, min(30, int(batch_size_env) if batch_size_env.isdigit() else 25))
+        self.detection_batch = CameraDetectionBatch(batch_size=self.batch_size)
 
         # State tracking
         self.last_frame_time = time.time()
@@ -178,6 +285,19 @@ class CameraContext:
         )
         t_beh = (time.time() - t_beh_start) * 1000.0
 
+        # Cross-Camera Re-Identification & Global Identity Binding
+        if self.reid_coordinator is not None:
+            for p in tracked_poses:
+                try:
+                    self.reid_coordinator.register_or_update_track(
+                        camera_id=self.camera_id,
+                        track=p,
+                        frame_bgr=frame_bgr,
+                        timestamp=curr_time,
+                    )
+                except Exception as reid_err:
+                    logger.debug("ReID update notice: %s", reid_err)
+
         # Threat aggregation
         threat_rank = {
             ThreatLevel.LOW: 0,
@@ -198,8 +318,9 @@ class CameraContext:
                 highest_score = p_score
 
             if p_threat in (ThreatLevel.HIGH, ThreatLevel.CRITICAL):
+                g_str = f" [GLOBAL: {p.global_id}]" if getattr(p, "global_id", None) else ""
                 critical_events.append(
-                    f"ID #{p.track_id} [{p.behavior.primary_behavior.value}]: {p.behavior.reasoning}"
+                    f"ID #{p.track_id}{g_str} [{p.behavior.primary_behavior.value}]: {p.behavior.reasoning}"
                 )
 
         analysis = SOCFrameAnalysisResult(
@@ -254,6 +375,19 @@ class CameraContext:
             poses, curr_time, self.frame_count
         )
 
+        # Cross-Camera Re-Identification & Global Identity Binding
+        if self.reid_coordinator is not None:
+            for p in tracked_poses:
+                try:
+                    self.reid_coordinator.register_or_update_track(
+                        camera_id=self.camera_id,
+                        track=p,
+                        frame_bgr=frame_bgr,
+                        timestamp=curr_time,
+                    )
+                except Exception as reid_err:
+                    logger.debug("ReID update notice: %s", reid_err)
+
         threat_rank = {
             ThreatLevel.LOW: 0,
             ThreatLevel.MEDIUM: 1,
@@ -273,8 +407,9 @@ class CameraContext:
                 highest_score = p_score
 
             if p_threat in (ThreatLevel.HIGH, ThreatLevel.CRITICAL):
+                g_str = f" [GLOBAL: {p.global_id}]" if getattr(p, "global_id", None) else ""
                 critical_events.append(
-                    f"ID #{p.track_id} [{p.behavior.primary_behavior.value}]: {p.behavior.reasoning}"
+                    f"ID #{p.track_id}{g_str} [{p.behavior.primary_behavior.value}]: {p.behavior.reasoning}"
                 )
 
         analysis = SOCFrameAnalysisResult(
@@ -386,11 +521,21 @@ class CameraContext:
 class CameraContextManager:
     """Thread-safe registry managing independent CameraContext instances for all connected laptops/cameras."""
 
-    def __init__(self, output_dir: str = "output", default_fps: float = 15.0) -> None:
+    def __init__(
+        self,
+        output_dir: str = "output",
+        default_fps: float = 15.0,
+        reid_coordinator: Optional[Any] = None,
+    ) -> None:
         self.output_dir = os.path.abspath(output_dir)
         self.default_fps = default_fps
         self._contexts: Dict[str, CameraContext] = {}
         self._lock = threading.Lock()
+        if reid_coordinator is not None:
+            self.reid_coordinator = reid_coordinator
+        else:
+            from urbansoc.tracking.cross_camera_reid import CrossCameraReIDCoordinator
+            self.reid_coordinator = CrossCameraReIDCoordinator()
 
     def get_or_create(
         self,
@@ -398,6 +543,7 @@ class CameraContextManager:
         config: Optional[CameraLocationConfig] = None,
         fps: Optional[float] = None,
         cooldown_seconds: Optional[float] = None,
+        batch_size: Optional[int] = None,
     ) -> CameraContext:
         """Retrieve existing camera context or lazily create a new isolated context."""
         clean_id = camera_id.strip()
@@ -411,6 +557,8 @@ class CameraContextManager:
                     output_dir=self.output_dir,
                     fps=actual_fps,
                     cooldown_seconds=actual_cooldown,
+                    reid_coordinator=self.reid_coordinator,
+                    batch_size=batch_size,
                 )
                 self._contexts[clean_id] = ctx
                 logger.info("Allocated new CameraContext for camera '%s' (cooldown: %.2fs)", clean_id, actual_cooldown)

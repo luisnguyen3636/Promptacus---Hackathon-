@@ -13,7 +13,7 @@ import yaml
 # ==============================================================================
 HARDCODED_MODEL_URL = os.environ.get(
     "INCIDENT_MODEL_URL",
-    "https://urbanstrike.tech/api/incidents"
+    "https://urbanstrike.tech/api/incident"
 )
 
 

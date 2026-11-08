@@ -90,26 +90,27 @@ def draw_pose_skeleton_and_indicators(
     role = getattr(human.behavior, "role", "individual")
     beh_val = human.behavior.primary_behavior.value
     target_id = human.behavior.interacting_with_track_id
+    g_tag = f" [{human.global_id}]" if getattr(human, "global_id", None) else ""
 
     if beh_val == "FIGHTING":
         if role == "attacker" and target_id is not None:
-            label_text = f"ID #{human.track_id} | ATTACKING #{target_id} [{score_pct}%]"
+            label_text = f"ID #{human.track_id}{g_tag} | ATTACKING #{target_id} [{score_pct}%]"
             box_color = (40, 40, 230)
         elif role == "victim" and target_id is not None:
-            label_text = f"ID #{human.track_id} | VICTIM (DEFENDING #{target_id}) [{score_pct}%]"
+            label_text = f"ID #{human.track_id}{g_tag} | VICTIM (DEFENDING #{target_id}) [{score_pct}%]"
             box_color = (30, 160, 240)
         elif role == "mutual_combatant" and target_id is not None:
-            label_text = f"ID #{human.track_id} | BRAWL <=> #{target_id} [{score_pct}%]"
+            label_text = f"ID #{human.track_id}{g_tag} | BRAWL <=> #{target_id} [{score_pct}%]"
             box_color = (40, 40, 230)
         else:
-            label_text = f"ID #{human.track_id} | FIGHTING [{score_pct}%]"
+            label_text = f"ID #{human.track_id}{g_tag} | FIGHTING [{score_pct}%]"
     elif role == "bystander":
-        label_text = f"ID #{human.track_id} | BYSTANDER (CLEAR) [10%]"
+        label_text = f"ID #{human.track_id}{g_tag} | BYSTANDER (CLEAR) [10%]"
         box_color = (70, 180, 50)
     elif target_id is not None:
-        label_text = f"ID #{human.track_id} | {beh_val} vs #{target_id} [{score_pct}%]"
+        label_text = f"ID #{human.track_id}{g_tag} | {beh_val} vs #{target_id} [{score_pct}%]"
     else:
-        label_text = f"ID #{human.track_id} | {beh_val} [{score_pct}%]"
+        label_text = f"ID #{human.track_id}{g_tag} | {beh_val} [{score_pct}%]"
 
     font_scale = 0.42
     font_thick = 1

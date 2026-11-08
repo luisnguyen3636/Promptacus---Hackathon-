@@ -93,6 +93,8 @@ class HumanPoseTrack:
         reasoning="Normal activity"
     ))
     dwell_time_seconds: float = 0.0
+    global_id: Optional[str] = None
+    reid_confidence: float = 0.0
 
     @property
     def posture_label(self) -> str:

@@ -1,125 +1,101 @@
 # TÀI LIỆU ĐẶC TẢ KỸ THUẬT (TECHNICAL SPECIFICATION)
-## URBAN SAFETY AI-SOC: MÔ HÌNH CLIENT - SERVER ĐA LAPTOP/CAMERA VỚI MÁY CHỦ SUY LUẬN TRUNG GIAN (MULTI-LAPTOP CLIENT-SERVER AI-SOC WITH CENTRALIZED INFERENCE SERVER)
-**Mã đặc tả:** `SPEC-URBANSOC-MULTICAM-06`  
+## URBAN SAFETY AI-SOC: ĐỊNH KỲ MỖI 30 DETECT GỬI 1 POST REQUEST LÊN URBAN STRIKE
+**Mã đặc tả:** `SPEC-URBANSOC-PERIODIC-30-DETECTS-POST`  
 **Dự án:** Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety AI-SOC)  
 **Phương pháp luận:** Spec-Driven Development (SDD) & Strict Human-in-the-Loop (AGENTS.md)  
-**Tác giả:** AI Assistant (dưới quyền Lead Developer / Principal Architect)  
-**Trạng thái:** Đã Phê Duyệt & Triển Khai Hoàn Tất (Approved & Implemented)
+**Trạng thái:** [SPEC AUTO-APPROVED] (Theo quy tắc CD-01 & CD-04 của AGENTS.md)
 
 ---
 
-## 1. TỔNG QUAN YÊU CẦU & KỊCH BẢN TRIỂN KHAI THỰC TẾ
+## 1. MỤC TIÊU & BỐI CẢNH NGHIỆP VỤ
 
-### 1.1. Yêu cầu Cụ Thể Từ Lead Developer
-> *"không cần chạy trên các thiết bị cảm ứng camera, chỉ cần chạy trên chiếc laptop khác"*
+### 1.1. Yêu Cầu Từ Lead Developer
+> *"thay vi khi nao co incident thi moi gui post request thi config lai thanh sau moi 30 detect cua camera gui 1 post request"*
 
-### 1.2. Kịch Bản Triển Khai Thực Tế (Laptop-to-Laptop Deployment)
-Hệ thống được thiết kế để triển khai cực kỳ thuận tiện giữa **2 hoặc nhiều chiếc Laptop/PC kết nối cùng mạng Wi-Fi hoặc mạng LAN**:
+### 1.2. Vấn Đề Hiện Trạng (As-Is)
+- Trước đây hệ thống chỉ gửi POST request lên Urban Strike khi phát hiện sự cố nguy hiểm (`incident`: `WEAPON_THREAT`, `FALLEN`, v.v.) được AI xác nhận.
+- Khi camera hoạt động bình thường (`NORMAL`), hệ thống không gửi gì, khiến máy chủ giám sát Urban Strike không nhận được dữ liệu nhịp tim (heartbeat telemetry) và không nắm bắt được trạng thái thời gian thực của khu vực camera đang giám sát.
 
-1. **Laptop Máy Chủ AI (Central AI-SOC Server):**
-   - Đóng vai trò là **Máy chủ Suy Luận Trung Gian (Intermediate Inference Server)**.
-   - Nạp mô hình AI YOLOv11-Pose (sử dụng GPU/CPU của máy chủ).
-   - Lắng nghe kết nối mạng (mặc định: port `8000`).
-   - Quản lý đồng thời $N$ camera gửi về, cấp phát từng `CameraContext` riêng biệt (đảm bảo Track ID của Laptop 1 không bị lẫn với Laptop 2).
-   - Hiển thị màn hình giám sát tập trung (Multi-Camera Grid Web Dashboard) trên trình duyệt.
-   - Khi bất kỳ Laptop nào phát hiện nguy hiểm, Server tự động đóng gói sự kiện kèm mã băm **Forensic SHA-256 (Raw Bytes + Timestamp)** và trọn vẹn 17 keypoints để bắn Webhook cảnh báo.
-
-2. **Laptop Client Biên (Edge Laptop Camera Clients):**
-   - Chạy trên **các chiếc Laptop khác** trong cùng mạng (Laptop 1, Laptop 2, ...).
-   - **Cực kỳ nhẹ nhàng (Zero-AI footprint):** Không cần GPU, không cần PyTorch hay Ultralytics YOLO! Chỉ cần cài đặt `opencv-python` và `requests`.
-   - Mở Webcam tích hợp của laptop (hoặc webcam USB/file video) bằng 1 câu lệnh duy nhất:
-     ```bash
-     python3 client.py --server-url http://192.168.1.50:8000 --camera 0 --camera-id LAPTOP_01 --camera-name "Laptop Vinh - Cổng Đông"
-     ```
-   - Nén khung hình JPEG và gửi qua mạng Wi-Fi/LAN lên Máy Chủ Trung Gian với độ trễ thấp $\le 100\text{ms}$.
-   - Tự động kết nối lại (Auto-reconnect) nếu Wi-Fi bị chập chờn.
+### 1.3. Mục Tiêu Cần Đạt (To-Be)
+1. **Chu Kỳ 30 Detects Cố Định Cho Mỗi Camera:**
+   - Bộ đệm `CameraDetectionBatch` gom chính xác **30 detects** (mặc định: `30`, hỗ trợ `SOC_DETECTION_BATCH_SIZE=30`).
+   - Từ detect 1 đến detect 29: Server ghi nhận, phản hồi nhanh (`status: "processed"`, `batch_status: "accumulating"`, `ai_analyzed: false`), KHÔNG gửi POST request lên Urban Strike.
+2. **Kích hoạt Gửi Đúng 1 POST Request Sau Mỗi 30 Detects:**
+   - Tại detect thứ 30: Buffer kích hoạt xả (`flush`), trích xuất Keyframe tối ưu (frame có threat cao nhất hoặc frame tiêu biểu) và tổng hợp `batch_summary`.
+   - AI (NVIDIA NIM VLM / Local Tactical Engine) thực hiện phân tích tổng quan chu kỳ 30 frame.
+   - **BẤT KỂ** có sự cố hay chỉ là hoạt động bình thường (`NORMAL`), hệ thống **LUÔN LUÔN GỬI ĐÚNG 1 POST REQUEST** lên endpoint Urban Strike (`https://urbanstrike.tech/api/incident`).
+   - Gói tin chứa: `event_id`, camera metadata, `batch_summary` (30 detects, dominant action, action frequencies), `primary_action`, `threat_level`, ảnh Keyframe Base64 kèm Forensic SHA-256 hash và nhận định từ AI.
 
 ---
 
-## 2. KIẾN TRÚC LUỒNG DỮ LIỆU ĐA LAPTOP (MERMAID)
+## 2. KIẾN TRÚC LUỒNG DỮ LIỆU (DATA FLOW PIPELINE)
 
 ```mermaid
 flowchart TD
-    subgraph CLIENT_LAPTOPS ["Các Chiếc Laptop Client (Chỉ Cần Cài OpenCV, Không Cần GPU)"]
-        LAP1["Laptop 1 (Webcam 0)<br/>python3 client.py --camera-id LAPTOP_01"]
-        LAP2["Laptop 2 (Webcam 0)<br/>python3 client.py --camera-id LAPTOP_02"]
-        LAPN["Laptop N (Webcam 0)<br/>python3 client.py --camera-id LAPTOP_0N"]
-    end
+    CAM["Camera Client (Webcam / Laptop Edge)<br/>Gửi từng Frame qua HTTP POST /api/v1/ingest/frame"]
+    --> DETECT["YOLOv11-Pose Detection<br/>(Trích xuất BBox, 17 Keypoints, Kinematics)"]
 
-    subgraph WI_FI_LAN ["Mạng Nội Bộ Wi-Fi / LAN (HTTP Binary Stream)"]
-        STREAM["POST http://<IP_SERVER>:8000/api/v1/ingest/frame<br/>Headers: X-Camera-ID, X-Timestamp-Ms"]
-    end
+    DETECT --> BATCH{"Bộ đệm CameraDetectionBatch<br/>(Kích thước cố định: 30 Detects)"}
 
-    subgraph SERVER_LAPTOP ["Laptop Máy Chủ Trung Gian (Central AI Server - Port 8000)"]
-        INGEST["Multi-Camera Stream Router"]
-        
-        subgraph CONTEXTS ["Ngữ Cảnh Tách Biệt Cho Từng Laptop (Isolated CameraContext)"]
-            CTX1["Context LAPTOP_01<br/>ByteTrack + Kinematics + Rules"]
-            CTX2["Context LAPTOP_02<br/>ByteTrack + Kinematics + Rules"]
-            CTXN["Context LAPTOP_0N<br/>ByteTrack + Kinematics + Rules"]
-        end
-        
-        YOLO["Shared YOLOv11-Pose Engine<br/>(Chạy tập trung trên GPU máy chủ)"]
-    end
+    BATCH -- "Detect 1 .. 29 (Chưa đủ chu kỳ 30)" --> BUF_RESP["Phản hồi Client 200 OK ngay lập tức<br/>status: processed, batch_status: accumulating<br/>KHÔNG gửi Urban Strike"]
 
-    subgraph SOC_OUTPUT ["Đầu Ra Giám Sát & Điều Phối"]
-        DASH["Giao Diện Web Đa Camera (http://localhost:8000)"]
-        WEBHOOK["Forensic Webhook (SHA-256 + 17 Keypoints)"]
-        OPERATOR["Vận Hành Viên SOC (HITL Verification)"]
-    end
+    BATCH -- "Detect thứ 30 (Đủ chu kỳ 30 Detects)" --> FLUSH["Flush Batch Summary<br/>(Dominant Action, Max Threat, Keyframe BGR)"]
 
-    LAP1 --> STREAM
-    LAP2 --> STREAM
-    LAPN --> STREAM
-    STREAM --> INGEST
-    INGEST --> YOLO
-    YOLO --> CTX1
-    YOLO --> CTX2
-    YOLO --> CTXN
-    CTX1 --> DASH
-    CTX2 --> DASH
-    CTXN --> DASH
-    CTX1 --> WEBHOOK
-    CTX2 --> WEBHOOK
-    CTXN --> WEBHOOK
-    WEBHOOK --> OPERATOR
+    FLUSH --> AI_VLM["AI Multimodal Analysis (NVIDIA NIM VLM)<br/>Phân tích Keyframe + Dữ liệu chuỗi 30 Detects"]
+
+    AI_VLM --> PERIODIC_POST["Gửi ĐÚNG 1 POST Request lên Urban Strike<br/>Endpoint: https://urbanstrike.tech/api/incident<br/>(Bao gồm cả NORMAL và INCIDENT, có batch_summary 30 detects)"]
 ```
 
 ---
 
-## 3. GIAO DIỆN HÀM & CHỮ KÝ API
+## 3. THÔNG SỐ CẤU HÌNH & DATA CONTRACT
 
-### 3.1. Phía Laptop Client (`client.py` & `src/urbansoc/client/edge_client.py`)
-```python
-class EdgeCameraClient:
-    """Client chạy trên laptop khác để đọc webcam và truyền về server trung gian."""
-    def __init__(
-        self,
-        server_url: str,
-        camera_id: str = "LAPTOP_01",
-        camera_name: str = "Laptop Webcam",
-        camera_index: Union[int, str] = 0,
-        fps: float = 15.0,
-        resolution: Tuple[int, int] = (640, 480),
-        quality: int = 75,
-        lat: float = 10.776889,
-        lon: float = 106.700806,
-        address: str = "Laptop Client",
-    ) -> None: ...
+### 3.1. Tham số Cấu hình Mới
+- `SOC_DETECTION_BATCH_SIZE`: Số lượng detect gộp trước khi gửi POST request (mặc định: `30`).
+- `SOC_ENABLE_DETECTION_BATCHING`: Bật/tắt chế độ gộp detect (mặc định: `true`).
+- `INCIDENT_MODEL_URL` / `HARDCODED_MODEL_URL`: Endpoint nhận bản tin sự cố Urban Strike (`https://urbanstrike.tech/api/incident`).
 
-    def register(self) -> bool: ...
-    def stream_loop(self) -> None: ...
-    def stop(self) -> None: ...
+### 3.2. Cấu Trúc Gói Tin POST lên Urban Strike (1 Lần / 30 Detects)
+```json
+{
+  "event_id": "EVT_1794098823_LAPTOP_01",
+  "timestamp": "2026-11-08T05:35:00+07:00",
+  "timestamp_ms": 1794098823120,
+  "camera": {
+    "camera_id": "LAPTOP_01",
+    "name": "Laptop 01 - Cổng Giám Sát",
+    "latitude": 10.776889,
+    "longitude": 106.700806,
+    "address": "Khu vực Giám sát Trung tâm"
+  },
+  "batch_summary": {
+    "detect_count": 30,
+    "duration_ms": 2000.0,
+    "first_frame_index": 100,
+    "last_frame_index": 129,
+    "dominant_action": "NORMAL",
+    "action_frequencies": { "NORMAL": 30 },
+    "highest_threat": "LOW",
+    "highest_threat_score": 0.20,
+    "tracked_subjects_count": 1
+  },
+  "primary_action": "NORMAL",
+  "threat_level": "LOW",
+  "threat_score": 0.20,
+  "is_urgent": false,
+  "ai_verified": true,
+  "reasoning": "Định kỳ báo cáo 30 detect từ camera LAPTOP_01: hoạt động bình thường.",
+  "full_image": {
+    "format": "jpeg",
+    "width": 640,
+    "height": 480,
+    "image_base64": "<base64_jpeg_keyframe>",
+    "sha256_hash": "<forensic_sha256>"
+  },
+  "hand_crop_image_base64": "<base64_jpeg_hand_roi>",
+  "hand_crop_image_sha256": "<forensic_sha256_hand>"
+}
 ```
 
-### 3.2. Phía Laptop Server Trung Gian (`server.py` & `src/urbansoc/server/`)
-- Quản lý cách ly đa camera qua `CameraContextManager`:
-  - Mỗi laptop kết nối tới được định danh bằng `X-Camera-ID`.
-  - Nếu `X-Camera-ID` chưa có trong bộ nhớ, server tự động tạo `CameraContext` mới (bao gồm `BehaviorEngine` riêng để không bị đè Track ID).
-- Trả về mã HTTP 200 kèm kết quả nhận dạng tức thì:
-  `{"status": "processed", "camera_id": "LAPTOP_01", "humans": 1, "action": "NORMAL", "threat_level": "LOW"}`.
-- Dashboard trực quan qua `GET http://<IP_SERVER>:8000/`.
-
 ---
-
-[STATUS: APPROVED & IMPLEMENTED]
+[SPEC AUTO-APPROVED]
