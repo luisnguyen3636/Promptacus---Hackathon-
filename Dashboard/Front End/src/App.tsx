@@ -5,19 +5,18 @@ import { EvidencePlaybackModal } from './components/Modal/EvidencePlaybackModal.
 import { useSocTelemetry } from './hooks/useSocTelemetry.ts';
 import { IIncidentItem } from './types/soc.ts';
 
-// 8 Giao diện Tác chiến Chuyên biệt
+// 6 Giao diện Tác chiến Chuyên biệt
 import { DashboardView } from './components/views/DashboardView.tsx';
 import { LiveVideoWallView } from './components/views/LiveVideoWallView.tsx';
-import { NetworkTopologyView } from './components/views/NetworkTopologyView.tsx';
-import { ThreatIntelligenceView } from './components/views/ThreatIntelligenceView.tsx';
+import { WantedCriminalsView } from './components/views/WantedCriminalsView.tsx';
+import { BlindSpotTrackingView } from './components/views/BlindSpotTrackingView.tsx';
 import { IncidentFeedView } from './components/views/IncidentFeedView.tsx';
-import { AiAnalyzerView } from './components/views/AiAnalyzerView.tsx';
-import { DeviceManagerView } from './components/views/DeviceManagerView.tsx';
+import { CameraManagerView } from './components/views/CameraManagerView.tsx';
 import { SettingsView } from './components/views/SettingsView.tsx';
 
 export const App: React.FC = () => {
   const { overview, cameras, incidents, setIncidents, isBackendConnected } = useSocTelemetry();
-  const [activeTab, setActiveTab] = useState<string>('SOC Dashboard');
+  const [activeTab, setActiveTab] = useState<string>('PSOC Dashboard');
   const [activePlaybackIncident, setActivePlaybackIncident] = useState<IIncidentItem | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -50,14 +49,14 @@ export const App: React.FC = () => {
     decision: 'CONFIRM_AND_DISPATCH' | 'DOWNGRADE_MONITOR' | 'DISMISS_FALSE_POSITIVE',
     notes?: string
   ) => {
-    showToast(`[HITL VERIFIED] ${decision} bởi OP-VN-SOC-804`);
+    showToast(`[HITL VERIFIED] ${decision} bởi OP-VN-PSOC-804`);
 
     try {
       const res = await fetch(`/api/incidents/${incidentId}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          operatorId: 'OP-VN-SOC-804',
+          operatorId: 'OP-VN-PSOC-804',
           decision,
           notes,
           verifiedAt: new Date().toISOString(),
@@ -92,7 +91,7 @@ export const App: React.FC = () => {
     setActivePlaybackIncident(null);
   };
 
-  // Bộ định tuyến hiển thị 8 Tab Tác chiến
+  // Bộ định tuyến hiển thị các Tab Tác chiến chuẩn hóa
   const renderActiveView = () => {
     switch (activeTab) {
       case 'Live Video Wall':
@@ -102,16 +101,18 @@ export const App: React.FC = () => {
             onPtzCommand={handlePtzCommand}
           />
         );
-      case 'Network Topology':
+      case 'Danh sách truy nã':
         return (
-          <NetworkTopologyView
-            metrics={overview.metrics}
+          <WantedCriminalsView
+            incidents={incidents}
+            onToast={showToast}
           />
         );
-      case 'Threat Intelligence':
+      case 'Suy luận vùng mù':
         return (
-          <ThreatIntelligenceView
-            onBlockIp={(ip) => showToast(`[SECURITY] Blocked IP: ${ip}`)}
+          <BlindSpotTrackingView
+            onToast={showToast}
+            onNavigateToWanted={() => setActiveTab('Danh sách truy nã')}
           />
         );
       case 'Incident Feed':
@@ -121,26 +122,21 @@ export const App: React.FC = () => {
             onSelectPlayback={(inc) => setActivePlaybackIncident(inc)}
           />
         );
-      case 'AI Analyzer':
+      case 'Camera Manager':
         return (
-          <AiAnalyzerView
+          <CameraManagerView
             cameras={cameras}
-          />
-        );
-      case 'Device Manager':
-        return (
-          <DeviceManagerView
-            cameras={cameras}
-            onReboot={(id) => showToast(`[DEVICE] Reboot command sent: ${id}`)}
+            onPtzCommand={handlePtzCommand}
+            onToast={showToast}
           />
         );
       case 'Settings':
         return (
           <SettingsView
-            operatorId="OP-VN-SOC-804"
+            operatorId="OP-VN-PSOC-804"
           />
         );
-      case 'SOC Dashboard':
+      case 'PSOC Dashboard':
       default:
         return (
           <DashboardView
@@ -149,6 +145,8 @@ export const App: React.FC = () => {
             incidents={incidents}
             onPtzCommand={handlePtzCommand}
             onSelectPlayback={(inc) => setActivePlaybackIncident(inc)}
+            onHitlDecision={handleHitlDecision}
+            onToast={showToast}
           />
         );
     }
@@ -157,7 +155,12 @@ export const App: React.FC = () => {
   return (
     <div className="bg-[#080B10] text-[#F8FAFC] min-h-screen overflow-x-hidden">
       {/* 1. Sidebar Trái (240px cố định) */}
-      <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} />
+      <Sidebar
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        wantedCount={overview.metrics?.wantedCount ?? 3}
+        blindSpotCount={overview.metrics?.blindSpotSessionsCount ?? 2}
+      />
 
       {/* 2. Main Viewport (Cố định chiều rộng không tràn) */}
       <div className="ml-[240px] w-[calc(100%-240px)] max-w-[calc(100%-240px)] min-h-screen flex flex-col min-w-0 overflow-x-hidden">

@@ -6,24 +6,27 @@ export const MOCK_OVERVIEW: ISocOverview = {
   status: "SAFE",
   timestampUtc: new Date().toISOString(),
   metrics: {
-    latencyMs: 35,
+    latencyMs: 18,
     downloadMbps: 9744.0,
     uploadMbps: 4824.2,
     activeNodes: 43,
     camerasOnline: 4,
     camerasTotal: 4,
     packetLossPercent: 0.00,
-    openThreats: 0,
-    criticalThreats: 0,
+    openThreats: 1,
+    criticalThreats: 1,
     nvrStoragePercent: 78,
-    poeLoadWatts: 410
+    poeLoadWatts: 410,
+    wantedCount: 3,
+    blindSpotSessionsCount: 2,
+    vlmVerifiedCount: 14,
   }
 };
 
 export const MOCK_CAMERAS: ICameraDevice[] = [
   {
     id: "cam_01",
-    name: "Server Room",
+    name: "Camera Khu Vực 1 (Server Room)",
     ip: "192.168.1.101",
     fps: 30,
     bitrateKbps: 1250,
@@ -32,11 +35,19 @@ export const MOCK_CAMERAS: ICameraDevice[] = [
     snapshotUrl: "/api/v1/cameras/cam_01/snapshot",
     ptzEnabled: true,
     aiAlert: null,
-    boundingBoxes: []
+    boundingBoxes: [],
+    threatScore: 85,
+    threatLevel: "HIGH",
+    resolution: "1920x1080",
+    codec: "H.264 / MJPEG",
+    latencyMs: 18,
+    connectedBlindSpots: ["BS_ZONE_01 (Hẻm 12 Chu Văn An - 85m)"],
+    inspectionStatus: "ATTENTION",
+    lastPingAt: new Date().toISOString(),
   },
   {
     id: "cam_02",
-    name: "Main Gate",
+    name: "Camera Khu Vực 2 (Cổng Chính)",
     ip: "192.168.1.102",
     fps: 30,
     bitrateKbps: 1480,
@@ -45,11 +56,19 @@ export const MOCK_CAMERAS: ICameraDevice[] = [
     snapshotUrl: "/api/v1/cameras/cam_02/snapshot",
     ptzEnabled: true,
     aiAlert: null,
-    boundingBoxes: []
+    boundingBoxes: [],
+    threatScore: 15,
+    threatLevel: "LOW",
+    resolution: "1920x1080",
+    codec: "H.264 / MJPEG",
+    latencyMs: 22,
+    connectedBlindSpots: ["BS_ZONE_01 (Hẻm 12)", "BS_ZONE_02 (Đường nội bộ)"],
+    inspectionStatus: "HEALTHY",
+    lastPingAt: new Date().toISOString(),
   },
   {
     id: "cam_03",
-    name: "Corridor Central",
+    name: "Camera Khu Vực 3 (Hành Lang Trung Tâm)",
     ip: "192.168.1.103",
     fps: 30,
     bitrateKbps: 980,
@@ -58,11 +77,19 @@ export const MOCK_CAMERAS: ICameraDevice[] = [
     snapshotUrl: "/api/v1/cameras/cam_03/snapshot",
     ptzEnabled: true,
     aiAlert: null,
-    boundingBoxes: []
+    boundingBoxes: [],
+    threatScore: 20,
+    threatLevel: "LOW",
+    resolution: "1920x1080",
+    codec: "H.264 / MJPEG",
+    latencyMs: 15,
+    connectedBlindSpots: ["BS_ZONE_02 (Đường nội bộ Bãi xe)"],
+    inspectionStatus: "HEALTHY",
+    lastPingAt: new Date().toISOString(),
   },
   {
     id: "cam_04",
-    name: "Perimeter Fence",
+    name: "Camera Khu Vực 4 (Hàng Rào Vành Đai)",
     ip: "192.168.1.104",
     fps: 30,
     bitrateKbps: 1120,
@@ -71,11 +98,38 @@ export const MOCK_CAMERAS: ICameraDevice[] = [
     snapshotUrl: "/api/v1/cameras/cam_04/snapshot",
     ptzEnabled: true,
     aiAlert: null,
-    boundingBoxes: []
+    boundingBoxes: [],
+    threatScore: 35,
+    threatLevel: "MEDIUM",
+    resolution: "1920x1080",
+    codec: "H.264 / MJPEG",
+    latencyMs: 28,
+    connectedBlindSpots: ["BS_ZONE_03 (Vành đai Tầm Vu)"],
+    inspectionStatus: "HEALTHY",
+    lastPingAt: new Date().toISOString(),
   }
 ];
 
-export const MOCK_INCIDENTS: IIncidentItem[] = [];
+export const MOCK_INCIDENTS: IIncidentItem[] = [
+  {
+    id: "INC-2026-0842",
+    title: "CƯỚP GIẬT TÀI SẢN (ROBBERY SNATCHING)",
+    subTitle: "Camera cam_01 • Cổng Chính Chu Văn An",
+    sourceIp: "192.168.1.101",
+    category: "CRIMINAL_BEHAVIOR",
+    severity: "CRITICAL",
+    timestamp: new Date().toISOString(),
+    cameraId: "cam_01",
+    cameraName: "Camera Khu Vực 1 (Server Room)",
+    threatScore: 92,
+    primaryAction: "ROBBERY_SNATCHING",
+    criminalCategory: "ROBBERY_SNATCHING",
+    vlmAnalysis: "Phát hiện đối tượng áp sát nạn nhân, giật túi xách với gia tốc giật đột ngột, sau đó tăng tốc bỏ chạy vào hẻm cụt. Đã qua lớp thẩm định pháp y NVIDIA VLM 5 cổng.",
+    aiVerified: true,
+    aiProvider: "NVIDIA NIM · Llama-3.2-90B Vision",
+    status: "PENDING_VERIFICATION"
+  }
+];
 
 export const MOCK_TRAFFIC_SERIES = {
   labels: ["16:36", "16:37", "16:38", "16:39", "16:40", "16:41", "16:42", "16:43", "16:44", "16:45", "16:46", "16:47"],

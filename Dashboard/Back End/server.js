@@ -21,9 +21,26 @@ import {
   saveCameraFrame,
   getCameraLatestFrame,
   setCameraAlert,
+  updateCameraThreat,
+  pingCamera,
 } from './src/cameraManager.js';
 import { getRecentIncidents, getIncidentPlayback, addIncidentFromDetect, getIncidentById } from './src/incidentManager.js';
 import { processHitlVerification, getAuditLogs } from './src/hitlDispatcher.js';
+import {
+  getWantedList,
+  getWantedPersonById,
+  createWantedPerson,
+  updateWantedPerson,
+  deleteWantedPerson,
+  stampEvidenceToWanted,
+} from './src/wantedManager.js';
+import {
+  getBlindSpotSessions,
+  getBlindSpotSessionById,
+  correlateCrossCameraSuspect,
+  verifyBlindSpotLink,
+} from './src/blindSpotManager.js';
+import { socDebugLogger } from './src/debugLogger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -174,12 +191,19 @@ async function requestIntermediateAiAnalysis(cameraId, cameraName, frameBuffer, 
 const processedNvidiaEvents = new Set();
 
 function getCompletedNvidiaAnalysis(payload) {
-  const analysis = payload?.nvidia_vlm_analysis || payload?.detection?.nvidia_vlm_analysis;
-  if (
-    !analysis ||
-    analysis.source !== 'nvidia_nim_vlm' ||
-    analysis.analysis_status !== 'completed'
-  ) {
+  const analysis = payload?.nvidia_vlm_analysis ||
+    payload?.detection?.nvidia_vlm_analysis ||
+    payload?.vlm_analysis ||
+    payload?.ai_analysis;
+  if (!analysis) return null;
+
+  const validSources = ['nvidia_nim_vlm', 'openrouter_vlm', 'local_vlm_engine', 'vlm_engine'];
+  const source = String(analysis.source || '');
+  const status = String(analysis.analysis_status || analysis.status || '');
+  const isSourceValid = validSources.includes(source) || Boolean(analysis.evaluated_subjects) || source.endsWith('_vlm');
+  const isStatusValid = ['completed', 'local_only', 'processed'].includes(status) || !status;
+
+  if (!isSourceValid || !isStatusValid) {
     return null;
   }
   return analysis;
@@ -187,14 +211,20 @@ function getCompletedNvidiaAnalysis(payload) {
 
 function isNvidiaAlertEligible(analysis) {
   if (!analysis) return false;
-  const action = String(analysis.action_type || '').trim().toUpperCase();
-  const severity = String(analysis.severity || '').trim().toUpperCase();
+  const action = String(analysis.action_type || analysis.primary_action || '').trim().toUpperCase();
+  const severity = String(analysis.severity || analysis.threat_level || '').trim().toUpperCase();
   const hasSuppression = Boolean(
     analysis.false_positive_suppressed ||
     analysis.anti_false_positive_audit?.false_positive_suppressed ||
     (Array.isArray(analysis.evaluated_subjects) && analysis.evaluated_subjects.some(subject => subject?.false_positive_suppressed))
   );
-  const reasoning = String(analysis.reasoning || analysis.description || '').trim();
+  const reasoning = String(
+    analysis.reasoning ||
+    analysis.description ||
+    analysis.reasoning_summary ||
+    (Array.isArray(analysis.evaluated_subjects) && analysis.evaluated_subjects[0]?.reasoning_summary) ||
+    ''
+  ).trim();
   return !hasSuppression && Boolean(action && reasoning) &&
     !['NORMAL', 'UNKNOWN'].includes(action) && ['HIGH', 'CRITICAL'].includes(severity);
 }
@@ -203,9 +233,15 @@ function publishNvidiaVerifiedAlert(payload) {
   const analysis = getCompletedNvidiaAnalysis(payload);
   if (!isNvidiaAlertEligible(analysis)) return false;
 
-  const action = String(analysis.action_type || '').trim().toUpperCase();
-  const severity = String(analysis.severity || '').trim().toUpperCase();
-  const reasoning = String(analysis.reasoning || analysis.description || '').trim();
+  const action = String(analysis.action_type || analysis.primary_action || '').trim().toUpperCase();
+  const severity = String(analysis.severity || analysis.threat_level || '').trim().toUpperCase();
+  const reasoning = String(
+    analysis.reasoning ||
+    analysis.description ||
+    analysis.reasoning_summary ||
+    (Array.isArray(analysis.evaluated_subjects) && analysis.evaluated_subjects[0]?.reasoning_summary) ||
+    ''
+  ).trim();
 
   const cameraId = String(payload.camera_id || payload.cameraId || payload.camera?.camera_id || 'CAM_01');
   const eventId = String(
@@ -223,6 +259,7 @@ function publishNvidiaVerifiedAlert(payload) {
     ? (confidenceValue > 1 ? confidenceValue / 100 : confidenceValue)
     : undefined;
   const cameraName = payload.camera_name || payload.camera?.name || `Camera ${cameraId}`;
+  const provider = analysis.provider || (String(analysis.source || '').includes('openrouter') ? 'OpenRouter' : 'NVIDIA NIM');
   const alert = {
     hasAlert: true,
     type: action,
@@ -230,7 +267,7 @@ function publishNvidiaVerifiedAlert(payload) {
     message: reasoning,
     confidence,
     timestamp: Date.now(),
-    aiProvider: 'NVIDIA NIM',
+    aiProvider: provider,
     model: analysis.model || null,
     nvidiaVlmAnalysis: analysis
   };
@@ -250,7 +287,7 @@ function publishNvidiaVerifiedAlert(payload) {
     reasoning,
     vlmAnalysis: reasoning,
     nvidia_vlm_analysis: analysis,
-    aiProvider: 'NVIDIA NIM',
+    aiProvider: provider,
     subjects: payload.humans || analysis.actors || []
   });
   updateThreatScore(incident.threatScore);
@@ -528,6 +565,105 @@ app.post(['/api/incidents/:id/verify', '/api/v1/operator/action'], (req, res) =>
 // 3.7 Audit Log Kiểm toán Bất biến
 app.get('/api/soc/audit-logs', (req, res) => {
   res.json(getAuditLogs());
+});
+
+// 3.8 DANH SÁCH TRUY NÃ & ĐÓNG DẤU BẰNG CHỨNG (WANTED CRIMINALS & FORENSIC STAMPING)
+app.get(['/api/v1/wanted', '/api/wanted'], (req, res) => {
+  const list = getWantedList();
+  res.json({ success: true, count: list.length, data: list });
+});
+
+app.get(['/api/v1/wanted/:id', '/api/wanted/:id'], (req, res) => {
+  const person = getWantedPersonById(req.params.id);
+  if (!person) {
+    return res.status(404).json({ success: false, error: 'Wanted person not found' });
+  }
+  res.json({ success: true, data: person });
+});
+
+app.post(['/api/v1/wanted', '/api/wanted'], (req, res) => {
+  try {
+    const person = createWantedPerson(req.body);
+    broadcastWs({ type: 'WANTED_CREATED', data: person });
+    res.status(201).json({ success: true, data: person });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.put(['/api/v1/wanted/:id', '/api/wanted/:id'], (req, res) => {
+  try {
+    const updated = updateWantedPerson(req.params.id, req.body);
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Wanted person not found' });
+    }
+    broadcastWs({ type: 'WANTED_UPDATED', data: updated });
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.delete(['/api/v1/wanted/:id', '/api/wanted/:id'], (req, res) => {
+  const ok = deleteWantedPerson(req.params.id);
+  if (!ok) {
+    return res.status(404).json({ success: false, error: 'Wanted person not found' });
+  }
+  broadcastWs({ type: 'WANTED_DELETED', id: req.params.id });
+  res.json({ success: true, message: `Deleted wanted person ${req.params.id}` });
+});
+
+app.post(['/api/v1/wanted/:id/evidence', '/api/wanted/:id/evidence'], (req, res) => {
+  try {
+    const stamped = stampEvidenceToWanted(req.params.id, req.body);
+    if (!stamped) {
+      return res.status(404).json({ success: false, error: 'Wanted person not found' });
+    }
+    broadcastWs({ type: 'WANTED_EVIDENCE_STAMPED', data: stamped });
+    res.json({ success: true, ...stamped });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// 3.9 SUY LUẬN VÙNG MÙ ĐA CAMERA (MULTI-CAMERA BLIND-SPOT REASONING)
+app.get(['/api/v1/blind-spot/sessions', '/api/blind-spot/sessions'], (req, res) => {
+  const sessions = getBlindSpotSessions();
+  res.json({ success: true, count: sessions.length, data: sessions });
+});
+
+app.post(['/api/v1/blind-spot/correlate', '/api/blind-spot/correlate'], (req, res) => {
+  try {
+    const session = correlateCrossCameraSuspect(req.body);
+    broadcastWs({ type: 'BLIND_SPOT_CORRELATION', data: session });
+    res.json({ success: true, data: session });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.post(['/api/v1/blind-spot/verify', '/api/blind-spot/verify'], (req, res) => {
+  try {
+    const { sessionId, decision, operatorId } = req.body || {};
+    const session = verifyBlindSpotLink(sessionId, decision, operatorId);
+    if (!session) {
+      return res.status(404).json({ success: false, error: 'Blind spot session not found' });
+    }
+    broadcastWs({ type: 'BLIND_SPOT_VERIFIED', data: session });
+    res.json({ success: true, data: session });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// 3.10 CAMERA MANAGER: PING & CHUẨN ĐOÁN CAMERA
+app.post(['/api/devices/cameras/:id/ping', '/api/v1/cameras/:id/ping'], (req, res) => {
+  try {
+    const diag = pingCamera(req.params.id);
+    res.json({ success: true, data: diag });
+  } catch (err) {
+    res.status(404).json({ success: false, error: err.message });
+  }
 });
 
 // =============================================================================

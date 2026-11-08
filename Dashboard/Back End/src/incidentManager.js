@@ -66,15 +66,45 @@ export function addIncidentFromDetect(payload) {
     (Array.isArray(nvidiaVlmAnalysis?.evaluated_subjects) &&
       nvidiaVlmAnalysis.evaluated_subjects.some(subject => subject?.false_positive_suppressed))
   );
+  const validSources = ['nvidia_nim_vlm', 'openrouter_vlm', 'local_vlm_engine', 'vlm_engine'];
+  const vlmSource = String(nvidiaVlmAnalysis?.source || payload.source || '');
+  const vlmStatus = String(nvidiaVlmAnalysis?.analysis_status || nvidiaVlmAnalysis?.status || payload.analysis_status || '');
+  const isSourceValid = validSources.includes(vlmSource) || Boolean(nvidiaVlmAnalysis?.evaluated_subjects) || vlmSource.endsWith('_vlm');
+  const isStatusValid = ['completed', 'local_only', 'processed'].includes(vlmStatus) || !vlmStatus;
+  const vlmReasoning = String(
+    payload.vlmAnalysis ||
+    payload.reasoning ||
+    nvidiaVlmAnalysis?.reasoning_summary ||
+    nvidiaVlmAnalysis?.reasoning ||
+    nvidiaVlmAnalysis?.description ||
+    (Array.isArray(nvidiaVlmAnalysis?.evaluated_subjects) && nvidiaVlmAnalysis.evaluated_subjects[0]?.reasoning_summary) ||
+    ''
+  ).trim();
+
+  const isThreatHighEnough = ['HIGH', 'CRITICAL'].includes(nvidiaSeverity) || threatScore >= 45;
+  const isActionActionable = !['', 'NORMAL', 'UNKNOWN'].includes(nvidiaAction);
+
   const aiVerified = Boolean(
-    nvidiaVlmAnalysis?.source === 'nvidia_nim_vlm' &&
-    nvidiaVlmAnalysis?.analysis_status === 'completed' &&
-    ['HIGH', 'CRITICAL'].includes(nvidiaSeverity) &&
-    !['', 'NORMAL', 'UNKNOWN'].includes(nvidiaAction) &&
-    Boolean(nvidiaVlmAnalysis?.reasoning || nvidiaVlmAnalysis?.description) &&
+    nvidiaVlmAnalysis &&
+    isSourceValid &&
+    isStatusValid &&
+    isThreatHighEnough &&
+    isActionActionable &&
+    Boolean(vlmReasoning) &&
     !nvidiaSuppressed
   );
-  const vlmAnalysis = payload.vlmAnalysis || payload.reasoning || nvidiaVlmAnalysis?.reasoning || '';
+
+  let aiProvider = null;
+  if (aiVerified) {
+    if (nvidiaVlmAnalysis?.provider) {
+      aiProvider = String(nvidiaVlmAnalysis.provider);
+    } else if (vlmSource.includes('openrouter')) {
+      aiProvider = 'OpenRouter (Gemini-2.5-Flash)';
+    } else {
+      aiProvider = 'NVIDIA NIM';
+    }
+  }
+  const vlmAnalysis = vlmReasoning || payload.vlmAnalysis || payload.reasoning || '';
   const forensicHash = payload.forensic_hash || payload.crop_image_sha256 || payload.detection?.full_image?.sha256_hash || null;
 
   // Ảnh bằng chứng Full & Crop
@@ -106,7 +136,7 @@ export function addIncidentFromDetect(payload) {
     status: payload.status || 'PENDING_VERIFICATION',
     vlmAnalysis,
     aiVerified,
-    aiProvider: aiVerified ? 'NVIDIA NIM' : null,
+    aiProvider: aiProvider || (aiVerified ? 'NVIDIA NIM' : null),
     nvidiaVlmAnalysis,
     forensicHash,
     weaponInfo: payload.weapon_info || payload.weapon || payload.detection?.weapon || null,

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { KpiCards } from '../KpiCards.tsx';
 import { CameraMatrix } from '../CameraMatrix/CameraMatrix.tsx';
-import { ThreatScoreModule } from '../ThreatScore/ThreatScoreModule.tsx';
+import { NewestAlertModule } from '../NewestAlert/NewestAlertModule.tsx';
 import { TrafficCharts } from '../TrafficCharts/TrafficCharts.tsx';
 import { RecentThreatsTable } from '../RecentThreats/RecentThreatsTable.tsx';
 import { ISocOverview, ICameraDevice, IIncidentItem } from '../../types/soc.ts';
@@ -13,6 +13,11 @@ interface DashboardViewProps {
   incidents: IIncidentItem[];
   onPtzCommand: (cameraId: string, action: string) => void;
   onSelectPlayback: (incident: IIncidentItem) => void;
+  onHitlDecision?: (
+    incidentId: string,
+    decision: 'CONFIRM_AND_DISPATCH' | 'DOWNGRADE_MONITOR' | 'DISMISS_FALSE_POSITIVE',
+    notes?: string
+  ) => void;
   onToast?: (msg: string) => void;
 }
 
@@ -22,6 +27,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   incidents,
   onPtzCommand,
   onSelectPlayback,
+  onHitlDecision,
   onToast,
 }) => {
   const [isSirenMuted, setIsSirenMuted] = useState<boolean>(false);
@@ -29,11 +35,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const handleToggleSiren = () => {
     setIsSirenMuted(!isSirenMuted);
-    onToast?.(isSirenMuted ? '[SOC AUDIO] Còi báo động đã kích hoạt' : '[SOC AUDIO] Còi báo động đã tắt tiếng');
+    onToast?.(isSirenMuted ? '[PSOC AUDIO] Còi báo động đã kích hoạt' : '[PSOC AUDIO] Còi báo động đã tắt tiếng');
   };
 
   const handleExportReport = () => {
-    onToast?.('[REPORT GENERATED] Đã trích xuất báo cáo ca trực SOC (PDF/CSV)');
+    onToast?.('[REPORT GENERATED] Đã trích xuất báo cáo ca trực PSOC (PDF/CSV)');
   };
 
   const handleToggleLockdown = () => {
@@ -41,7 +47,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     onToast?.(
       !isLockdownActive
         ? '[EMERGENCY ALERT] KÍCH HOẠT CHẾ ĐỘ PHÒNG THỦ KHẨN CẤP (LOCKDOWN)'
-        : '[SOC NORMALIZED] Đã hủy chế độ phòng thủ khẩn cấp'
+        : '[PSOC NORMALIZED] Đã hủy chế độ phòng thủ khẩn cấp'
     );
   };
 
@@ -97,16 +103,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Hàng 1: 4 Thẻ KPI Telemetry */}
       <KpiCards metrics={overview.metrics} />
 
-      {/* Hàng 2: Camera Matrix 2x2 (68%) & Threat Score (32%) */}
+      {/* Hàng 2: Camera Matrix thu nhỏ một chút (6 cols) & Newest Alert phóng to nổi bật (6 cols) */}
       <section className="grid grid-cols-12 gap-4 min-w-0">
-        <div className="col-span-8 min-w-0">
+        <div className="col-span-12 lg:col-span-6 min-w-0">
           <CameraMatrix cameras={cameras} onPtzCommand={onPtzCommand} />
         </div>
-        <div className="col-span-4 min-w-0">
-          <ThreatScoreModule
-            score={overview.threatScore}
-            status={overview.status}
-            metrics={overview.metrics}
+        <div className="col-span-12 lg:col-span-6 min-w-0">
+          <NewestAlertModule
+            incidents={incidents}
+            cameras={cameras}
+            onVerify={onHitlDecision}
+            onSelectPlayback={onSelectPlayback}
+            onToast={onToast}
           />
         </div>
       </section>

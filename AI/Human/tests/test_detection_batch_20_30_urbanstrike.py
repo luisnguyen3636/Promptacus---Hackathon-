@@ -300,7 +300,10 @@ def test_e2e_server_batches_25_detects_and_posts_once_to_urbanstrike(tmp_path: A
         assert data_20["event_batch_count"] == 20
 
         # Allow background dispatcher thread to deliver POST request
-        time.sleep(0.6)
+        for _ in range(25):
+            if len(MockUrbanStrikeServer.received_requests) >= 1:
+                break
+            time.sleep(0.1)
 
         # EXACTLY ONE POST request should have been received by Urban Strike
         assert len(MockUrbanStrikeServer.received_requests) == 1

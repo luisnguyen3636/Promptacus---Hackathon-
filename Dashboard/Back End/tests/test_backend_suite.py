@@ -1020,3 +1020,309 @@ def test_tc47_unverified_candidates_cannot_alert_or_dispatch(backend_server):
     assert "NVIDIA NIM" in confirm.json().get("error", "")
 
 
+# ==============================================================================
+# 8. CÁC TÍNH NĂNG NÂNG CẤP KIẾN TRÚC v3.0 (WANTED, CAMERA DIAGNOSTICS, BLIND SPOT, MMACTION2, RULES)
+# ==============================================================================
+
+def test_tc48_wanted_registry_get_list(backend_server):
+    """GET /api/v1/wanted trả về danh sách đối tượng truy nã ban đầu."""
+    resp = requests.get(f"{BASE_URL}/api/v1/wanted", timeout=2.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["count"] >= 1
+    assert any("Hùng" in p["name"] or "WNT" in p["id"] for p in data["data"])
+
+
+def test_tc49_wanted_registry_create_person(backend_server):
+    """POST /api/v1/wanted tạo mới một hồ sơ đối tượng truy nã."""
+    payload = {
+        "name": "Bùi Tuấn Anh",
+        "alias": "Anh Sẹo",
+        "threatLevel": "CRITICAL",
+        "status": "RED_ALERT",
+        "charges": ["Cướp giật tài sản", "Chống người thi hành công vụ"],
+        "identificationFeatures": {
+            "height": "1m75",
+            "build": "Gầy",
+            "clothing": "Áo khoác gió đỏ",
+            "distinguishingMarks": "Vết sẹo cánh mũi trái"
+        },
+        "lastSeenCameraId": "CAM_01",
+        "lastSeenLocation": "Cổng Chu Văn An"
+    }
+    resp = requests.post(f"{BASE_URL}/api/v1/wanted", json=payload, timeout=2.0)
+    assert resp.status_code == 201
+    created = resp.json()
+    assert created["success"] is True
+    assert created["data"]["name"] == "Bùi Tuấn Anh"
+    assert "WNT" in created["data"]["id"]
+    assert created["data"]["threatLevel"] == "CRITICAL"
+
+
+def test_tc50_wanted_registry_update_person(backend_server):
+    """PUT /api/v1/wanted/:id cập nhật thông tin đối tượng truy nã."""
+    # Lấy đối tượng đầu tiên
+    get_res = requests.get(f"{BASE_URL}/api/v1/wanted", timeout=2.0)
+    first_person = get_res.json()["data"][0]
+    person_id = first_person["id"]
+
+    update_payload = {
+        "status": "APPREHENDED",
+        "threatLevel": "MEDIUM",
+        "operatorId": "OP-VN-SOC-804"
+    }
+    resp = requests.put(f"{BASE_URL}/api/v1/wanted/{person_id}", json=update_payload, timeout=2.0)
+    assert resp.status_code == 200
+    updated = resp.json()
+    assert updated["success"] is True
+    assert updated["data"]["status"] == "APPREHENDED"
+    assert updated["data"]["threatLevel"] == "MEDIUM"
+
+
+def test_tc51_wanted_registry_evidence_stamping(backend_server):
+    """POST /api/v1/wanted/:id/evidence đóng dấu bằng chứng pháp y vào hồ sơ."""
+    get_res = requests.get(f"{BASE_URL}/api/v1/wanted", timeout=2.0)
+    first_person = get_res.json()["data"][0]
+    person_id = first_person["id"]
+
+    stamp_payload = {
+        "incidentId": "INC-TEST-STAMP-01",
+        "evidenceType": "KEYFRAME_SNAPSHOT",
+        "evidenceUrl": "/api/v1/cameras/cam_01/snapshot",
+        "notes": "Ảnh chụp rõ mặt đối tượng lúc rút hung khí",
+        "stampedBy": "OP-VN-SOC-804"
+    }
+    resp = requests.post(f"{BASE_URL}/api/v1/wanted/{person_id}/evidence", json=stamp_payload, timeout=2.0)
+    assert resp.status_code == 200
+    res_data = resp.json()
+    assert res_data["success"] is True
+    assert "stamp" in res_data
+    assert "STAMP" in res_data["stamp"]["stampId"]
+    assert res_data["stamp"]["stampedBy"] == "OP-VN-SOC-804"
+    assert len(res_data["person"]["evidenceStamps"]) >= 1
+
+
+def test_tc52_wanted_registry_delete_person(backend_server):
+    """DELETE /api/v1/wanted/:id xóa một hồ sơ đối tượng truy nã."""
+    # Tạo tạm 1 đối tượng để xóa
+    temp = requests.post(
+        f"{BASE_URL}/api/v1/wanted",
+        json={"name": "Đối Tượng Tạm", "charges": ["Test"]},
+        timeout=2.0
+    ).json()["data"]
+
+    del_res = requests.delete(f"{BASE_URL}/api/v1/wanted/{temp['id']}", timeout=2.0)
+    assert del_res.status_code == 200
+    assert del_res.json()["success"] is True
+
+    # Thử lấy lại -> 404
+    get_del = requests.get(f"{BASE_URL}/api/v1/wanted/{temp['id']}", timeout=2.0)
+    assert get_del.status_code == 404
+
+
+def test_tc53_camera_manager_ping_diagnostic(backend_server):
+    """POST /api/devices/cameras/:id/ping chuẩn đoán kiểm tra kết nối camera."""
+    resp = requests.post(f"{BASE_URL}/api/devices/cameras/cam_01/ping", timeout=2.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["data"]["cameraId"] == "cam_01"
+    assert data["data"]["status"] == "ONLINE"
+    assert data["data"]["latencyMs"] > 0
+    assert data["data"]["packetLoss"] == "0.0%"
+
+
+def test_tc54_camera_manager_per_camera_threat_score(backend_server):
+    """Xác thực mỗi camera sở hữu Threat Score riêng biệt (không dùng threat score đơn lẻ tách rời)."""
+    resp = requests.get(f"{BASE_URL}/api/devices/cameras", timeout=2.0)
+    assert resp.status_code == 200
+    cameras = resp.json()
+    assert len(cameras) >= 4
+    for cam in cameras:
+        assert "threatScore" in cam
+        assert "threatLevel" in cam
+        assert 0 <= cam["threatScore"] <= 100
+        assert cam["threatLevel"] in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+
+
+def test_tc55_blind_spot_get_sessions(backend_server):
+    """GET /api/v1/blind-spot/sessions lấy danh sách các phiên suy luận vùng mù."""
+    resp = requests.get(f"{BASE_URL}/api/v1/blind-spot/sessions", timeout=2.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["count"] >= 1
+    session = data["data"][0]
+    assert "sourceCameraId" in session
+    assert "destinationCameraId" in session
+    assert "reidSimilarityScore" in session
+    assert "blindSpotZone" in session
+
+
+def test_tc56_blind_spot_correlate_cross_camera(backend_server):
+    """POST /api/v1/blind-spot/correlate kích hoạt suy luận bám vết nghi phạm qua >= 2 camera."""
+    payload = {
+        "sourceCameraId": "CAM_01",
+        "destinationCameraId": "CAM_02",
+        "blindSpotZone": "BS_ZONE_01 (Hẻm 12 Chu Văn An)",
+        "transitTimeSec": 20.0
+    }
+    resp = requests.post(f"{BASE_URL}/api/v1/blind-spot/correlate", json=payload, timeout=2.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    session = data["data"]
+    assert session["sourceCameraId"] == "CAM_01"
+    assert session["destinationCameraId"] == "CAM_02"
+    assert 0.70 <= session["reidSimilarityScore"] <= 1.0
+    assert session["actualTransitSec"] == 20.0
+
+
+def test_tc57_blind_spot_verify_link(backend_server):
+    """POST /api/v1/blind-spot/verify cho phép Vận hành viên xác nhận hoặc bác bỏ liên kết vùng mù."""
+    get_res = requests.get(f"{BASE_URL}/api/v1/blind-spot/sessions", timeout=2.0)
+    first_session = get_res.json()["data"][0]
+    session_id = first_session["sessionId"]
+
+    verify_payload = {
+        "sessionId": session_id,
+        "decision": "CONFIRM",
+        "operatorId": "OP-VN-SOC-804"
+    }
+    resp = requests.post(f"{BASE_URL}/api/v1/blind-spot/verify", json=verify_payload, timeout=2.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["data"]["operatorVerification"] == "CONFIRMED"
+    assert data["data"]["verifiedBy"] == "OP-VN-SOC-804"
+
+
+def test_tc58_mmaction2_detection_and_recognition():
+    """Kiểm thử đơn vị Module MMAction2 thay thế nhận diện người và phân loại hành động."""
+    sys_path = os.path.abspath(os.path.join(BACKEND_DIR, "..", "AI", "Human", "src"))
+    if sys_path not in sys.path:
+        sys.path.insert(0, sys_path)
+
+    import numpy as np
+    from urbansoc.mmaction2 import (
+        MMAction2HumanDetector,
+        MMAction2Recognizer,
+        CriminalActionCategory,
+    )
+
+    detector = MMAction2HumanDetector()
+    recognizer = MMAction2Recognizer()
+
+    dummy_frame = np.full((480, 640, 3), 120, dtype=np.uint8)
+    humans = detector.detect_humans(dummy_frame, camera_id="CAM_TEST")
+    assert len(humans) >= 1
+    assert "bbox_xyxy" in humans[0]
+    assert "track_id" in humans[0]
+
+    # Kiểm tra nhận diện hành động tội phạm WEAPON_BRANDISHING
+    det = recognizer.recognize_action(
+        camera_id="CAM_TEST",
+        track_id=humans[0]["track_id"],
+        current_bbox_xyxy=humans[0]["bbox_xyxy"],
+        current_bbox_norm=humans[0]["bbox_norm"],
+        test_action_override="WEAPON_BRANDISHING"
+    )
+    assert det.is_criminal is True
+    assert det.criminal_category == CriminalActionCategory.WEAPON_BRANDISHING
+    assert det.threat_score >= 85.0
+    assert det.threat_level == "CRITICAL"
+
+
+def test_tc59_common_criminal_rules_engine():
+    """Kiểm thử bộ 10 Rule Nhận Diện Hành Vi Tội Phạm Phổ Biến."""
+    sys_path = os.path.abspath(os.path.join(BACKEND_DIR, "..", "AI", "Human", "src"))
+    if sys_path not in sys.path:
+        sys.path.insert(0, sys_path)
+
+    from urbansoc.behavior.criminal_rules import common_criminal_rules_engine, CriminalActionCategory
+
+    # 1. Weapon brandishing rule
+    r1 = common_criminal_rules_engine.evaluate_weapon_brandishing(
+        wrist_distance=0.15,
+        arm_extension=0.55,
+        is_firing_plane=True,
+    )
+    assert r1.is_triggered is True
+    assert r1.action_category == CriminalActionCategory.WEAPON_BRANDISHING
+    assert r1.threat_level == "CRITICAL"
+
+    # 2. Violent assault rule
+    r2 = common_criminal_rules_engine.evaluate_violent_assault(
+        num_subjects=2,
+        inter_subject_distance=0.20,
+        limb_acceleration_peak=18.0,
+        posture_instability=True,
+    )
+    assert r2.is_triggered is True
+    assert r2.action_category == CriminalActionCategory.VIOLENT_ASSAULT
+
+    # 3. Robbery snatching rule
+    r3 = common_criminal_rules_engine.evaluate_robbery_snatching(
+        proximity_duration_sec=1.2,
+        sudden_divergence_speed=4.5,
+        victim_arm_recoil=True,
+    )
+    assert r3.is_triggered is True
+    assert r3.action_category == CriminalActionCategory.ROBBERY_SNATCHING
+
+    # 4. Fleeing high speed
+    r4 = common_criminal_rules_engine.evaluate_fleeing_high_speed(normalized_speed=2.8)
+    assert r4.is_triggered is True
+
+    # 5. Victim collapsed
+    r5 = common_criminal_rules_engine.evaluate_victim_collapsed(
+        aspect_ratio_w_over_h=1.45,
+        vertical_centroid_norm=0.70,
+        motion_energy=0.05,
+        dwell_down_seconds=3.0,
+    )
+    assert r5.is_triggered is True
+
+
+def test_tc60_unified_debug_logger():
+    """Kiểm thử hệ thống Debug Logging đồng bộ đa tầng."""
+    sys_path = os.path.abspath(os.path.join(BACKEND_DIR, "..", "AI", "Human", "src"))
+    if sys_path not in sys.path:
+        sys.path.insert(0, sys_path)
+
+    from urbansoc.telemetry.debug_logger import (
+        debug_logger,
+        log_mmaction_event,
+        log_vlm_reasoning,
+        log_blind_spot_hop,
+    )
+
+    debug_logger.info("TEST_SUITE", "Executing automated test suite log check", camera_id="CAM_01")
+    log_mmaction_event(
+        camera_id="CAM_01",
+        action_name="ROBBERY_SNATCHING",
+        confidence=0.91,
+        is_criminal=True
+    )
+    log_vlm_reasoning(
+        camera_id="CAM_01",
+        verified=True,
+        threat_level="CRITICAL",
+        reasoning_summary="VLM verified criminal snatching action with forensic SHA256"
+    )
+    log_blind_spot_hop(
+        source_cam="CAM_01",
+        dest_cam="CAM_02",
+        blind_spot_zone="BS_ZONE_01",
+        eta_sec=18.5,
+        reid_similarity=0.92
+    )
+
+    assert os.path.isfile(debug_logger.debug_log_path)
+    assert os.path.isfile(debug_logger.mmaction_log_path)
+    assert os.path.isfile(debug_logger.vlm_log_path)
+    assert os.path.isfile(debug_logger.blind_spot_log_path)
+
+
+

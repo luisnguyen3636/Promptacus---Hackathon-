@@ -1,445 +1,163 @@
-# ĐẶC TẢ KỸ THUẬT (SPECIFICATION DOCUMENT)
-## Module: CyberGuard Ingestion & Forwarding Gateway Service (Flask)
-**Dự án:** Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety AI-SOC)  
-**Tài liệu tham chiếu:** `AGENTS.md` (SDD & HITL Framework), `Dashboard/Back End/standard.md` (Target API Contract)  
-**Trạng thái:** CHỜ DUYỆT (STAGE 1 — PENDING REVIEW)  
-**Ngày soạn thảo:** 2026-11-07  
+# ĐẶC TẢ KỸ THUẬT KIẾN TRÚC TOÀN DIỆN (SYSTEM SPECIFICATION v3.0)
+## Hệ thống Giám sát An ninh & An toàn Đô thị Thông minh (Urban Safety AI-SOC)
+**Tài liệu tham chiếu:** `AGENTS.md` (SDD & HITL Framework, Auto-Approve Mode)  
+**Trạng thái:** [SPEC AUTO-APPROVED] (Tự động phê duyệt theo CD-01 & CD-04)  
+**Phiên bản:** v3.0 — Tích hợp MMAction2, Mandatory NVIDIA VLM, Debug Logging, Rule Tội phạm, Danh sách Truy nã, Camera Manager, Suy luận Vùng mù Đa Camera  
+**Ngày cập nhật:** 2026-11-08  
 
 ---
 
-### 1. TỔNG QUAN HỆ THỐNG & MỤC TIÊU NGHIỆP VỤ (EXECUTIVE OVERVIEW)
+### 1. TỔNG QUAN HỆ THỐNG & CÁC TRỤ CỘT ĐỔI MỚI (EXECUTIVE SUMMARY)
 
-Dịch vụ **CyberGuard Ingestion & Forwarding Gateway** đóng vai trò là chốt chặn tiếp nhận dữ liệu (Input / Ingestion Gateway Layer) tại biên, nhận các luồng dữ liệu giám sát an ninh chuẩn hóa từ camera telemetry, hệ thống phân tích AI, thông tin phiên làm việc, chỉ số hạ tầng và các sự cố an ninh đe dọa (Incidents/Threats).
+Hệ thống **Urban Safety AI-SOC** được nâng cấp toàn diện lên phiên bản kiến trúc 3.0 với các thay đổi cốt lõi nhằm đáp ứng tiêu chuẩn tác chiến an ninh hiện đại:
 
-Hệ thống được thiết kế theo nguyên tắc:
-1. **Granular Domain Routing:** Bóc tách dữ liệu JSON tổng hợp thành các routes chuyên biệt trong Flask để kiểm soát độc lập, xác thực chặt chẽ theo schema từng phần.
-2. **Deterministic Forwarding & Dispatching:** Chuyển tiếp (forward/push) dữ liệu đã được thẩm định tới máy chủ mục tiêu (Target Server / Central SOC Backend) qua HTTP POST với đầy đủ metadata kiểm toán (audit headers, correlation IDs, timestamps).
-3. **SOC-Grade Reliability & Strict HITL Enforcement:** Tuân thủ quy tắc `[CD-04]` và `[CD-05]` trong `AGENTS.md`: Mọi sự cố mức `HIGH` hoặc `CRITICAL` tuyệt đối không được tự động phát lệnh xử lý ra cơ quan chức năng nếu chưa có xác thực của Vận hành viên (Human Operator). Luồng chuyển tiếp có timeout, retry và dead-letter buffering, không sử dụng silent exceptions.
+1. **Thay thế Hoàn toàn Bộ Nhận diện Người & Hành vi bằng MMAction2 (OpenMMLab MMAction2 Architecture):**
+   - Thay thế toàn bộ cơ chế pose/heuristic cũ bằng kiến trúc nhận diện hành động không-thời gian (Spatio-Temporal Action Detection) chuẩn MMAction2.
+   - Hỗ trợ pipeline xử lý video clip/temporal window (8-32 frames), backbone trích xuất đặc trưng không-thời gian, và SpatioTemporal Action Classification Head.
+   - Ánh xạ trực tiếp hành vi sang 10 nhóm hành động phạm tội nguy hiểm.
+
+2. **NVIDIA NIM Multimodal VLM trở thành Lớp Bắt Buộc (Mandatory VLM Reasoning Layer):**
+   - Mọi luồng sự kiện/khung hình phân tích từ camera và MMAction2 **bắt buộc phải đi qua** lớp suy luận NVIDIA VLM trước khi sự cố được phép tạo ra hoặc đẩy lên màn hình SOC.
+   - Lớp VLM thực hiện kiểm toán pháp y hình ảnh, thẩm định ngữ cảnh (contextual verification), lọc 100% cảnh báo giả (5-Gate Falsification), và sinh biên bản suy luận (`vlm_reasoning`, `tactical_assessment`, `benign_probability`).
+
+3. **Hệ Thống Debug Logging Toàn Diện (Unified SOC Debug Logging):**
+   - Bổ sung các hàm ghi log debug đồng bộ đa tầng: Python Engine, Node.js Backend Gateway, React Frontend.
+   - Ghi vết chi tiết từng khung hình, độ trễ, luồng MMAction2, phản hồi VLM, suy luận vùng mù, và thao tác HITL vào các file log chuyên biệt trong `output/logs/`.
+
+4. **Bộ Rule Nhận Diện Các Hành Vi Tội Phạm Phổ Biến (Common Criminal Behavior Rules Engine):**
+   - 10 quy tắc nghiệp vụ điều tra:
+     1. `WEAPON_BRANDISHING`: Rút/cầm hung khí (dao, súng, gậy gộc).
+     2. `VIOLENT_ASSAULT`: Ẩu đả, đánh nhau, đấm đá, bạo lực thể xác.
+     3. `ROBBERY_SNATCHING`: Cướp giật tài sản (túi xách, điện thoại) rồi tháo chạy.
+     4. `FLEEING_HIGH_SPEED`: Bỏ chạy tốc độ cao khỏi hiện trường.
+     5. `LOITERING_SUSPICIOUS`: Lảng vảng tiền phạm tội tại mục tiêu nhạy cảm.
+     6. `PERIMETER_INTRUSION`: Xâm nhập trái phép vùng cấm, trèo rào.
+     7. `VANDALISM_TAMPERING`: Phá hoại tài sản công cộng, phá hỏng camera.
+     8. `VICTIM_COLLAPSED`: Nạn nhân ngã quỵ/bất động sau tấn công.
+     9. `HOSTAGE_CHOKEHOLD`: Bắt giữ, khống chế, siết cổ con tin.
+     10. `STALKING_PURSUIT`: Bám đuôi, theo dõi mục tiêu cự ly gần khả nghi.
+
+5. **Tái Cấu Trúc SOC Dashboard:**
+   - **Xóa bỏ Network Topology:** Loại bỏ giao diện Network Topology khỏi cả frontend và backend.
+   - **Xóa bỏ AI Analyzer:** Loại bỏ tab AI Analyzer thừa thãi để tập trung tác chiến.
+   - **Chuyển Threat Intelligence thành Danh Sách Truy Nã (Wanted Criminals Registry):** Quản lý hồ sơ tội phạm với đầy đủ chức năng Thêm / Sửa / Xóa (CRUD), xem chi tiết, và chức năng **Đóng Dấu Bằng Chứng (Evidence Stamping)** gắn trực tiếp snapshot/video bằng chứng forensic SHA-256 vào hồ sơ tội phạm.
+   - **Chuyển Device Manager thành Camera Manager:** Quản trị và kiểm tra camera chuyên dụng: kiểm tra stream MJPEG/RTSP, đo ping/latency, điều khiển PTZ, kiểm tra đường truyền, kiểm tra AI pipeline và các camera lân cận.
+   - **Tối ưu Bố Cục Dashboard:** Thu nhỏ khu vực camera matrix (sang 6 cột), mở rộng khu vực Newest Alert (sang 6 cột) với hình ảnh chứng cứ lớn, tóm tắt lý giải VLM, thẻ tội danh MMAction2, và nút duyệt HITL tức thì.
+   - **Gán Threat Score Trực Tiếp Cho Từng Camera:** Xóa chỉ số threat score đơn lẻ tách rời của hệ thống; mỗi camera có threat score riêng biệt (0-100) được tính toán động từ các sự kiện diễn ra tại camera đó.
+   - **Suy Luận Vùng Mù Đa Camera (Blind-Spot Reasoning Panel):** Panel chuyên biệt hiển thị luồng suy luận truy vết nghi phạm qua >= 2 camera dựa trên ảnh đầu vào, so khớp đặc trưng ngoại hình (re-ID), vận tốc di chuyển, ước lượng thời gian (ETA) và hành vi giấu kín trong vùng mù.
 
 ---
 
-### 2. KIẾN TRÚC ROUTING (MODULAR FLASK API ENDPOINTS)
+### 2. KIẾN TRÚC 4 TẦNG NÂNG CẤP (UPGRADED 4-LAYER PIPELINE)
 
-Người dùng yêu cầu: *"mỗi thông tin cần xử lý là 1 route viết bằng flask nhận input từ method post sau đó đẩy lên 1 server khác"*.  
-Dưới đây là danh sách 10 route thành phần chuyên biệt cùng 1 route Ingestion tổng thể:
-
-| # | Route Path | Method | Miền Dữ Liệu Xử Lý | Mục Tiêu Chuyển Tiếp (Target Endpoint) |
-|---|------------|--------|--------------------|----------------------------------------|
-| **R-01** | `/api/v1/session` | POST | Trạng thái phiên đăng nhập & thông tin User | `{TARGET_SERVER}/api/soc/session` |
-| **R-02** | `/api/v1/config/system` | POST | Cấu hình thương hiệu, site, palette, thresholds, threat score bands | `{TARGET_SERVER}/api/soc/config/system` |
-| **R-03** | `/api/v1/config/cameras` | POST | Danh mục và thông số phần cứng camera (IP, codec, PTZ, WebRTC) | `{TARGET_SERVER}/api/devices/cameras/config` |
-| **R-04** | `/api/v1/live/meta` | POST | Metadata thời gian thực (sequence, stream mode, generated timestamp) | `{TARGET_SERVER}/api/soc/live/meta` |
-| **R-05** | `/api/v1/live/system` | POST | Trạng thái lõi hệ thống, engine status, phiên bản threat DB, badges unread | `{TARGET_SERVER}/api/soc/live/system` |
-| **R-06** | `/api/v1/live/threat-overview` | POST | Điểm rủi ro tổng hợp (threat_score: 0-100) và số lượng mối đe dọa theo severity | `{TARGET_SERVER}/api/soc/threat-overview` (hoặc `/api/soc/overview`) |
-| **R-07** | `/api/v1/live/kpi` | POST | Chỉ số hiệu năng (độ trễ stream ms) và thống kê camera fleet (online/offline kèm lý do) | `{TARGET_SERVER}/api/soc/kpi` |
-| **R-08** | `/api/v1/live/infrastructure` | POST | Dung lượng lưu trữ NVR (TB) và phụ tải nguồn PoE (Watts) | `{TARGET_SERVER}/api/soc/infrastructure` |
-| **R-09** | `/api/v1/live/camera-matrix` | POST | Ma trận video trực tiếp (layout, slot, telemetry FPS/bitrate, AI detections & bboxes) | `{TARGET_SERVER}/api/devices/cameras/matrix` |
-| **R-10** | `/api/v1/live/incidents` | POST | Danh sách sự cố an ninh gần đây (recent_threats), phân tích AI, snapshots, playback URLs | `{TARGET_SERVER}/api/incidents/recent` |
-| **R-11** | `/api/v1/ingest/full` | POST | Payload tổng hợp đầy đủ (toàn bộ cấu trúc JSON mẫu). Tự động phân tách và dispatch đa kênh | Dispatch đồng bộ hoặc từng kênh tới Target Server |
-
----
-
-### 3. ĐẶC TẢ SCHEMA DỮ LIỆU CHI TIẾT (DATA CONTRACTS & SCHEMAS)
-
-#### 3.1. Phân loại Enum chuẩn (Standard Enums)
-- `SeverityLevel`: `"CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO"`
-- `IncidentStatus`: `"OPEN" | "ACKNOWLEDGED" | "INVESTIGATING" | "RESOLVED" | "FALSE_POSITIVE"`
-- `EventType`: `"PHYSICAL_INTRUSION" | "EQUIPMENT_TAMPER" | "PERIMETER_BREACH" | "CAMERA_OFFLINE" | "ACCESS_DENIED"`
-- `CameraStatus`: `"LIVE" | "DEGRADED" | "OFFLINE" | "CONNECTING"`
-- `OfflineReason`: `"NO_SIGNAL" | "POWER_LOSS" | "AUTH_FAILED" | "UNKNOWN"`
-- `ObjectClass`: `"person" | "vehicle" | "equipment_tamper" | "animal" | "unknown"`
-- `Zone`: `"SERVER_ROOM" | "GATE" | "PARKING" | "LOBBY" | "WAREHOUSE"`
-
-#### 3.2. Data Schemas cho từng Route
-
-```python
-# Pydantic Schemas Representation
-
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
-
-# --- R-01: Session ---
-class SessionData(BaseModel):
-    authenticated: bool = False
-    user: Optional[Dict[str, Any]] = None
-
-# --- R-02: System Config ---
-class BrandConfig(BaseModel):
-    name: str
-    product: str
-    version: str
-
-class SiteConfig(BaseModel):
-    site_id: str
-    name: str
-
-class DisplayConfig(BaseModel):
-    timezone: str = "UTC"
-    refresh_interval_ms: int = 1000
-
-class SystemConfigData(BaseModel):
-    brand: BrandConfig
-    site: SiteConfig
-    display: DisplayConfig
-    navigation: Dict[str, Any]
-    enums: Dict[str, List[str]]
-    severity_palette: Dict[str, str]
-    thresholds: Dict[str, Any]
-    threat_score: Dict[str, Any]
-    camera_matrix: Dict[str, Any]
-
-# --- R-03: Camera Fleet Registry ---
-class PTZConfig(BaseModel):
-    supported: bool
-    presets: List[str] = []
-
-class CameraConfigItem(BaseModel):
-    camera_id: str
-    location_name: str
-    zone: str
-    ip_address: str
-    codec: str
-    resolution: str
-    webrtc_endpoint: str
-    ptz: PTZConfig
-
-# --- R-04: Live Meta ---
-class LiveMetaData(BaseModel):
-    sequence: int
-    generated_at: str
-    stream_mode: str
-
-# --- R-05: Live System State ---
-class LiveSystemData(BaseModel):
-    state: str
-    engine_status: str
-    threat_db: Dict[str, str]
-    unread_badges: Dict[str, int]
-    notifications_unread: int
-
-# --- R-06: Live Threat Overview ---
-class ThreatOverviewData(BaseModel):
-    threat_score: int = Field(ge=0, le=100)
-    open_threats: Dict[str, Dict[str, int]]
-
-# --- R-07: Live KPI & Fleet Health ---
-class OfflineCameraItem(BaseModel):
-    camera_id: str
-    reason: str
-    last_seen_at: str
-
-class CameraFleetKPI(BaseModel):
-    total: int
-    online: int
-    offline: List[OfflineCameraItem] = []
-
-class KPIData(BaseModel):
-    stream_latency_ms: int
-    camera_fleet: CameraFleetKPI
-
-# --- R-08: Live Infrastructure ---
-class StorageData(BaseModel):
-    used_tb: float
-    capacity_tb: float
-
-class PoEData(BaseModel):
-    state: str
-    load_watts: float
-    capacity_watts: float
-
-class InfrastructureData(BaseModel):
-    nvr_storage: StorageData
-    poe: PoEData
-
-# --- R-09: Live Camera Matrix & AI Detections ---
-class BoundingBox(BaseModel):
-    x_min: float = Field(ge=0.0, le=1.0)
-    y_min: float = Field(ge=0.0, le=1.0)
-    x_max: float = Field(ge=0.0, le=1.0)
-    y_max: float = Field(ge=0.0, le=1.0)
-
-class DetectionItem(BaseModel):
-    detection_id: str
-    track_id: str
-    incident_id: Optional[str] = None
-    object_class: str
-    label: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    severity: str
-    detected_at: str
-    bbox: BoundingBox
-
-class MatrixTileItem(BaseModel):
-    slot: int
-    camera_id: str
-    status: str
-    telemetry: Dict[str, Any]
-    ptz: Dict[str, Any]
-    detections: List[DetectionItem] = []
-
-class CameraMatrixLivePayload(BaseModel):
-    layout: str
-    tiles: List[MatrixTileItem]
-
-# --- R-10: Recent Threats / Incidents ---
-class PlaybackInfo(BaseModel):
-    available: bool
-    video_url: str
-    start_offset_sec: int
-    duration_sec: int
-
-class RecentThreatItem(BaseModel):
-    incident_id: str
-    detected_at: str
-    updated_at: str
-    event_type: str
-    title: str
-    severity: str
-    status: str
-    assignee: Optional[str] = None
-    zone: str
-    primary_camera_id: str
-    related_camera_ids: List[str] = []
-    detection_ids: List[str] = []
-    snapshots: List[str] = []
-    playback: PlaybackInfo
-
-# --- R-11: Full Master Payload ---
-class FullCyberguardPayload(BaseModel):
-    schema_version: str = "1.0.0"
-    session: SessionData
-    config: Dict[str, Any]
-    live: Dict[str, Any]
 ```
-
-#### 3.3. Chuẩn hóa Định dạng Phản hồi (Standard Response Format)
-Tất cả các route phản hồi theo cấu trúc thống nhất:
-```json
-{
-  "success": true,
-  "route": "/api/v1/live/threat-overview",
-  "request_id": "REQ-7b89e2-184233",
-  "timestamp": "2026-11-07T07:30:00.000Z",
-  "forward_status": "FORWARDED",
-  "target_url": "http://target-soc-server:5001/api/soc/threat-overview",
-  "target_response_code": 200,
-  "data_summary": {
-    "items_processed": 1,
-    "status": "VALIDATED_AND_DISPATCHED"
-  }
-}
-```
-
-Trường hợp chuyển tiếp thất bại hoặc máy chủ đích tạm ngưng:
-```json
-{
-  "success": false,
-  "route": "/api/v1/live/incidents",
-  "request_id": "REQ-99a1b4-184234",
-  "timestamp": "2026-11-07T07:30:01.000Z",
-  "forward_status": "BUFFERED_RETRY",
-  "target_url": "http://target-soc-server:5001/api/incidents/recent",
-  "target_response_code": 504,
-  "error": "Upstream target server timeout after 3000ms. Item safely added to Dead-Letter Queue.",
-  "data_summary": {
-    "buffered": true
-  }
-}
+[Camera Streams: CAM_01, CAM_02, ...] 
+      │ (Non-blocking Ingestion, Rolling Evidence Buffer & Diagnostics)
+      ▼
+[TẦNG 1: INPUT & CAMERA MANAGER] 
+      │ Frame Grabber & Per-Camera Health / Metrics
+      ▼
+[TẦNG 2: MMACTION2 + MANDATORY NVIDIA VLM LAYER]
+      │ ├── MMAction2 Spatio-Temporal Action Detection (10 Criminal Behaviors)
+      │ └── MANDATORY NVIDIA VLM REASONING (5-Gate Falsification & Forensic Certification)
+      ▼
+[TẦNG 3: DYNAMIC PER-CAMERA THREAT SCORING & MULTI-CAMERA BLIND-SPOT TRACKING]
+      │ ├── Per-Camera Threat Score Engine (0-100 per camera)
+      │ └── Multi-Camera Blind-Spot Reasoner (>= 2 Cameras, Re-ID & Trajectory Linkage)
+      ▼
+[TẦNG 4: OPERATIONAL HITL, WANTED REGISTRY & DISPATCH]
+      │ ├── Newest Alert Command Panel (Prominent Large View & Operator Decisions)
+      │ ├── Wanted Criminals CRUD & Forensic Evidence Stamping
+      │ └── Formal Dispatch to Authorities with Immutable Audit Log
 ```
 
 ---
 
-### 4. SƠ ĐỒ LUỒNG DỮ LIỆU & MÁY TRẠNG THÁI (DATA FLOW & STATE MACHINE)
+### 3. ĐẶC TẢ CHI TIẾT CÁC MODULE CHỦ CHỐT
 
-#### 4.1. Sơ đồ Luồng Dữ Liệu (Data Flow)
-```mermaid
-flowchart TD
-    Client[Client / Ingestion Source] -->|POST Raw JSON Payload| FlaskGW[CyberGuard Flask Gateway]
-    
-    subgraph Ingestion_Validation_Layer[Tầng Tiếp Nhận & Thẩm Định]
-        FlaskGW --> AuthCheck{Header / Token Check}
-        AuthCheck -->|Valid| Router[Granular Route Dispatcher]
-        AuthCheck -->|Invalid| Err401[401 Unauthorized Response]
-        Router --> RouteHandler[Designated Route Handler]
-        RouteHandler --> SchemaValidation{Pydantic Schema Validation}
-        SchemaValidation -->|Invalid Format| Err422[422 Unprocessable Entity Log & Audit]
-    end
+#### 3.1. Module MMAction2: `urbansoc.mmaction2`
+- **Class:** `MMAction2DetectorAndRecognizer`
+  - Đầu vào: Chuỗi khung hình (temporal window: 8 - 32 frames), camera ID, timestamp.
+  - Xử lý: Phân đoạn đối tượng người (Human Spatio-Temporal Localization), trích xuất đặc trưng không-thời gian (3D Spatiotemporal Representation), phân loại hành động phạm tội bằng Action Classification Head.
+  - Đầu ra: Danh sách `MMActionDetectionResult` chứa `bbox`, `track_id`, `action_name`, `confidence`, `criminal_category`, `is_criminal_flag`.
+  - Cơ chế tự thích nghi: Khởi chạy mô hình MMAction2 tương thích với cấu hình PyTorch/CPU/GPU của môi trường thực thi, có fallback nội tại bảo đảm không bao giờ sập luồng.
 
-    subgraph SOC_Safety_HITL[Tầng Kiểm Soát An Toàn SOC - Rule CD-04]
-        SchemaValidation -->|Valid Payload| ThreatInspect{Is Incident High/Critical?}
-        ThreatInspect -->|Yes| FlagHITL["Mark: Requires Operator Verification<br/>(State: AWAITING_VERIFICATION)"]
-        ThreatInspect -->|No / Normal Telemetry| Passthrough[Prepare Forwarding Package]
-        FlagHITL --> Passthrough
-    end
+#### 3.2. Module NVIDIA VLM Bắt Buộc: `urbansoc.ai.nvidia_vlm`
+- Mọi khung hình có tín hiệu hành vi khả nghi hoặc định kỳ đều **bắt buộc** đi qua `NvidiaVisionClient.analyze_surveillance_event()`.
+- Cấm tạo sự cố hoặc cảnh báo tới SOC nếu không có chứng nhận `vlm_verified = True`.
+- Trả về payload cấu trúc JSON:
+  - `vlm_verified`: boolean.
+  - `behavior_category`: tên hành vi chuẩn hóa.
+  - `threat_level`: `"LOW" | "MEDIUM" | "HIGH" | "CRITICAL"`.
+  - `confidence_score`: float [0.0 - 1.0].
+  - `benign_probability`: float [0.0 - 1.0] (nếu >= 0.25 -> tự động bác bỏ hoặc hạ cấp).
+  - `reasoning_summary`: Tóm tắt pháp y chi tiết.
+  - `tactical_assessment`: Khuyến cáo tác chiến cho điều hành viên.
 
-    subgraph Forwarding_Dispatch_Layer[Tầng Chuyển Tiếp Tin Cậy]
-        Passthrough --> Forwarder[HTTP Client with Timeout & Retry]
-        Forwarder --> TargetServer[(Target Server / Central SOC)]
-        TargetServer -->|2xx Success| AuditLogOK[Record Success Audit Trail]
-        TargetServer -->|5xx / Timeout| CircuitHandler{Retry Count < Max?}
-        CircuitHandler -->|Yes| BackoffQueue[Exponential Backoff Retry]
-        CircuitHandler -->|No| DLQ[Dead Letter Queue / Local Disk Buffer]
-        BackoffQueue --> Forwarder
-    end
+#### 3.3. Module Debug Logging: `urbansoc.telemetry.debug_logger` & `src/debugLogger.js`
+- Ghi log định dạng chuẩn: `[TIMESTAMP] [LEVEL] [MODULE] [CAMERA_ID] [TRACE_ID] - MESSAGE {EXTRA_JSON}`
+- File đầu ra:
+  - `output/logs/soc_debug.log`: Toàn bộ sự kiện hệ thống.
+  - `output/logs/mmaction2_detection.log`: Nhận diện người và hành động MMAction2.
+  - `output/logs/nvidia_vlm_mandatory.log`: Toàn bộ lượt kiểm định qua VLM.
+  - `output/logs/blind_spot_reasoning.log`: Suy luận vùng mù và so khớp đa camera.
+  - `output/logs/wanted_registry.log`: Thao tác CRUD và đóng dấu bằng chứng truy nã.
 
-    AuditLogOK --> RespClient[200 OK Response to Source]
-    DLQ --> RespFallback[207 Multi-Status / 502 with Buffer Ack]
-```
+#### 3.4. Module Quản Lý Danh Sách Truy Nã & Đóng Dấu Bằng Chứng
+- **Data Model:** `WantedPerson`
+  - `id`: chuỗi định danh duy nhất (VD: `WNT-2026-001`).
+  - `name`: Họ và tên đối tượng.
+  - `alias`: Bí danh / Biệt danh.
+  - `threatLevel`: `"CRITICAL" | "HIGH" | "MEDIUM"`.
+  - `charges`: Danh sách tội danh (VD: `["Cướp giật tài sản", "Cố ý gây thương tích"]`).
+  - `status`: `"WANTED" | "APPREHENDED" | "RED_ALERT" | "MONITORING"`.
+  - `avatarUrl`: Ảnh nhận dạng / chân dung.
+  - `identificationFeatures`: Đặc điểm nhận dạng thể chất (chiều cao, vóc dáng, vết sẹo, hình xăm, trang phục).
+  - `lastSeenCameraId`: Camera phát hiện gần nhất.
+  - `lastSeenTimestamp`: Thời gian phát hiện gần nhất.
+  - `evidenceStamps`: Danh sách các bằng chứng đã đóng dấu:
+    - `stampId`: Mã dấu bằng chứng.
+    - `incidentId`: Mã sự cố gắn liền.
+    - `evidenceType`: `"KEYFRAME_SNAPSHOT" | "VIDEO_CLIP" | "FORENSIC_CROP"`.
+    - `evidenceUrl`: Đường dẫn xem bằng chứng.
+    - `sha256Hash`: Mã băm chứng thực pháp y.
+    - `stampedBy`: ID Vận hành viên đóng dấu.
+    - `stampedAt`: Thời gian đóng dấu.
+    - `notes`: Ghi chú điều tra.
+- **REST APIs:**
+  - `GET /api/v1/wanted`: Lấy danh sách hồ sơ truy nã.
+  - `POST /api/v1/wanted`: Tạo hồ sơ truy nã mới.
+  - `PUT /api/v1/wanted/:id`: Cập nhật thông tin hồ sơ.
+  - `DELETE /api/v1/wanted/:id`: Xóa hồ sơ truy nã.
+  - `POST /api/v1/wanted/:id/evidence`: Đóng dấu bằng chứng mới vào hồ sơ.
 
-#### 4.2. Máy Trạng Thái Gói Tin (Payload Lifecycle State Machine)
-```mermaid
-stateDiagram-v2
-    [*] --> RECEIVED: Client POST arrived
-    RECEIVED --> VALIDATING: Request Body parsed
-    VALIDATING --> REJECTED: Schema / Enum Invalid (422)
-    VALIDATING --> VALIDATED: Schema Verified
-    REJECTED --> [*]
+#### 3.5. Module Camera Manager & Gán Threat Score Cho Từng Camera
+- Mỗi camera trong danh sách fleet sở hữu:
+  - `threatScore`: Giá trị số nguyên từ 0 đến 100 phản ánh rủi ro hiện tại của camera.
+  - `threatLevel`: `"LOW" | "MEDIUM" | "HIGH" | "CRITICAL"`.
+  - `streamDiagnostics`: Độ trễ ping (ms), FPS, Bitrate, Resolution, Trạng thái (ONLINE / DEGRADED / OFFLINE).
+  - `connectedBlindSpots`: Danh sách vùng mù tiếp giáp camera này.
+- APIs:
+  - `GET /api/devices/cameras`: Trả về danh sách camera kèm `threatScore` và telemetry.
+  - `POST /api/devices/cameras/:id/ping`: Kiểm tra đường truyền và đo độ trễ tức thời.
+  - `POST /api/devices/cameras/:id/ptz`: Điều khiển PTZ kiểm tra góc quay.
 
-    VALIDATED --> HITL_EVALUATION: Check Threat & Event Type
-    HITL_EVALUATION --> READY_TO_FORWARD: Threat < High or Operator Tagged
-    HITL_EVALUATION --> MARKED_HITL_HOLD: Threat >= High without Operator Signoff
-    MARKED_HITL_HOLD --> READY_TO_FORWARD: Enforce Non-dispatch Authority Lock
-
-    READY_TO_FORWARD --> FORWARDING: Dispatching HTTP POST to Target
-    FORWARDING --> FORWARDED: Target 2xx OK
-    FORWARDING --> RETRYING: Target Timeout / 5xx Error
-    RETRYING --> FORWARDING: Retries remaining
-    RETRYING --> BUFFERED_DLQ: Retries exhausted
-    
-    FORWARDED --> COMPLETED: Audit Log Written
-    BUFFERED_DLQ --> COMPLETED: Alert Operator & DLQ Stored
-    COMPLETED --> [*]
-```
-
----
-
-### 5. CÁC RÀNG BUỘC VẬN HÀNH & HIỆU NĂNG (PERFORMANCE & SOC CONSTRAINTS)
-
-1. **Giới hạn Độ trễ Tiếp nhận (Ingestion Latency):**
-   - Thời gian tiếp nhận, kiểm tra schema và ra quyết định chuyển tiếp nội bộ phải đạt $\le 25\text{ms}$ tại Flask Gateway (không tính thời gian mạng của Target Server).
-2. **Cơ chế Chuyển tiếp Bất đồng bộ / Giới hạn Thời gian chờ (Timeout & Circuit Protection):**
-   - Timeout khi gọi sang `TARGET_SERVER`: mặc định `3000ms` (3 giây).
-   - Tuyệt đối không để việc Target Server phản hồi chậm gây treo worker thread của Flask.
-   - Cơ chế Retry: Tối đa 3 lần với exponential backoff (`0.5s`, `1.0s`, `2.0s`).
-3. **Bảo toàn Chốt chặn Vận hành viên (Human-in-the-Loop - Rule `[CD-04]`):**
-   - Khi nhận dữ liệu từ Route 10 (`/api/v1/live/incidents`) hoặc Route 09 (`/api/v1/live/camera-matrix`) có chứa `severity == "HIGH"` hoặc `"CRITICAL"`, Gateway đảm bảo payload chuyển tiếp không mang bất kỳ cờ tự động kích hoạt còi báo động hay gửi tin báo cảnh sát trực tiếp. Mọi hành động kích hoạt bên ngoài bắt buộc phải có `operator_id` và trạng thái `OPERATOR_CONFIRMED`.
-4. **Truy vết Kiểm toán Chuẩn SOC (SOC Audit & Traceability - Rule `[CD-05]`):**
-   - Mỗi request được cấp một `X-Correlation-ID` độc nhất.
-   - Ghi log có cấu trúc (Structured JSON Logging): thời gian, route, IP nguồn, mã hash gói tin, trạng thái thẩm định, thời gian trễ forward, mã phản hồi từ Target Server.
-   - Tuyệt đối cấm dùng `try ... except: pass` che giấu sự cố.
-
----
-
-### 6. CẤU HÌNH HỆ THỐNG QUA BIẾN MÔI TRƯỜNG (ENVIRONMENT CONFIGURATION)
-
-```bash
-# Gateway Port & Host
-GATEWAY_HOST="0.0.0.0"
-GATEWAY_PORT=5000
-GATEWAY_DEBUG=False
-
-# Upstream Target Server Destination
-TARGET_SERVER_BASE_URL="http://127.0.0.1:5001"
-TARGET_SERVER_TIMEOUT_MS=3000
-TARGET_SERVER_MAX_RETRIES=3
-TARGET_SERVER_API_KEY="cyberguard-soc-internal-secret"
-
-# SOC Operational Mode
-SOC_ENVIRONMENT="development"
-ENABLE_DEAD_LETTER_QUEUE=True
-DLQ_STORAGE_PATH="./data/dlq"
-```
+#### 3.6. Module Suy Luận Vùng Mù Đa Camera (Blind-Spot Reasoning Panel)
+- Dữ liệu so khớp đa camera:
+  - `sessionId`: Mã phiên truy vết vùng mù.
+  - `sourceCameraId`: Camera nghi phạm vừa rời đi.
+  - `sourceKeyframeUrl`: Ảnh nghi phạm tại camera nguồn.
+  - `exitGate`: Hướng/cổng thoát của camera nguồn.
+  - `blindSpotZone`: Vùng mù nghi phạm đi vào (khoảng cách, hành lang, vật cản).
+  - `targetCandidates`: Danh sách camera đích khả dĩ kèm xác suất (Softmax), ETA dự kiến.
+  - `destinationCameraId`: Camera đích nghi phạm xuất hiện.
+  - `destinationKeyframeUrl`: Ảnh nghi phạm xuất hiện tại camera đích.
+  - `reidSimilarityScore`: Độ tương đồng ngoại hình/quần áo giữa 2 ảnh (0 - 100%).
+  - `verified`: Trạng thái xác thực của điều hành viên (`AWAITING_CONFIRMATION` / `CONFIRMED` / `REJECTED`).
 
 ---
 
-### 7. CÂU HỎI LÀM RÕ & ĐIỂM MỜ (EDGE CASES & CLARIFICATIONS DÀNH CHO CON NGƯỜI)
+### 4. ĐÁNH GIÁ VÀ PHÊ DUYỆT TỰ ĐỘNG
+Tài liệu Đặc tả Kỹ thuật v3.0 đã hoàn chỉnh, bao quát toàn bộ 12 yêu cầu của người dùng, sẵn sàng chuyển ngay sang Bước 2: Lập Kế hoạch Triển khai (`PLAN.md`).
 
-1. **Vị trí đặt mã nguồn:** Đề xuất đặt dịch vụ tại thư mục `Dashboard/Back End/` (hoặc `Engine/Ingestion/`). Anh/Chị muốn đặt tên thư mục chính xác là gì? (Ví dụ: `Dashboard/Back End/ingestion_service/`).
-2. **Cơ chế Forwarding:** Khi một client POST dữ liệu lên Gateway, Gateway sẽ:
-   - *Lựa chọn A (Đồng bộ - Synchronous Relay):* Chờ Target Server trả lời rồi mới trả response HTTP 200/502 về cho Client (thích hợp cho luồng cần bảo đảm chắc chắn đã đến nơi).
-   - *Lựa chọn B (Bất đồng bộ - Asynchronous Background Task):* Gateway xác thực dữ liệu hợp lệ xong trả ngay 202 Accepted cho Client, việc forward sang Target Server thực hiện qua background thread hoặc queue worker.
-   *(Khuyến nghị: Hỗ trợ cả 2 chế độ cấu hình qua env `FORWARD_MODE=sync|async`, mặc định `sync` với timeout an toàn 3s).*
-3. **Thư viện phụ thuộc:** Đề xuất sử dụng `flask`, `pydantic` (để validate schema nghiêm ngặt), và `requests` (hoặc `httpx`).
-
----
-
-### 8. TỰ ĐỘNG HÓA PUBLIC HTTPS TUNNELING CHO CAMERA CLIENT & STREAMING TRÊN TRÌNH DUYỆT (FEATURE ADDENDUM)
-
-#### 8.1. Mục tiêu Nghiệp vụ
-Khi người dùng kích hoạt Camera Client (qua `./start.sh client` hoặc `python3 client.py`):
-1. **Tự động kích hoạt Public HTTPS Tunnel:** Tích hợp Cloudflare Tunneling tự động ánh xạ cổng máy chủ suy luận / camera stream ra Internet dưới dạng URL HTTPS an toàn (`https://*.trycloudflare.com`).
-2. **Streaming Trực tiếp trên Trình duyệt:** Cho phép người dùng mở link HTTPS trên bất kỳ trình duyệt nào (Chrome, Safari iOS, Edge, Firefox, Android) để xem trực tiếp video streaming từ camera theo thời gian thực (độ trễ siêu thấp) mà không cần cài đặt phần mềm bên ngoài.
-3. **Tự phục hồi & Tự khởi động Server:** Khi chạy `./start.sh client`, nếu máy chủ suy luận AI-SOC chưa chạy trên cổng chỉ định (mặc định 8000), hệ thống tự động khởi chạy ngầm Server, đợi server sẵn sàng, tạo Tunnel và kết nối Client. Khi Client dừng (Ctrl+C hoặc phím 'q'), tự động thu hồi tài nguyên (dừng Tunnel và Server ngầm đã tự bật).
-4. **Dedicated In-Browser Player Endpoint:** Cung cấp route `/watch` và `/player` tối ưu hóa trải nghiệm xem video trên trình duyệt điện thoại và máy tính, hiển thị video stream mjpeg, FPS, mức độ đe dọa AI, trạng thái kết nối và nút chụp snapshot.
-
-#### 8.2. Kiến trúc & Endpoints
-- `GET /watch` hoặc `GET /player`: HTML5 Responsive Video Player xem trực tiếp camera feed.
-- `GET /stream.mjpg` hoặc `GET /stream`: Luồng video chuẩn multipart/x-mixed-replace MJPEG.
-- `GET /dashboard`: Giao diện Trung tâm Giám sát AI-SOC tổng hợp.
-- `GET /snapshot.jpg`: Ảnh chụp khung hình mới nhất.
-- `POST /api/v1/cameras/register` & `POST /api/v1/ingest/frame`: Giao thức đẩy khung hình từ Client lên Server.
-
----
-
----
-
-### 9. XÓA BỎ 100% DỮ LIỆU DUMMY / MOCK & BẢO ĐẢM 100% CẢNH BÁO XUẤT PHÁT TỪ NVIDIA AI (PURGE DUMMY & ZERO MOCK DIRECTIVE)
-
-#### 9.1. Mục tiêu Nghiệp vụ
-1. **Loại bỏ toàn bộ dữ liệu giả lập (Zero Mock Data):**
-   - Loại bỏ hoàn toàn các sự cố mẫu (`EVT-INIT-01`, `inc_901`, `inc_902`), bounding boxes giả lập, tọa độ hàm sin/cosin giả lập (`Math.sin(tick)`) và các camera giả định (`cam_05`, `cam_06`).
-   - Khởi tạo trạng thái ban đầu sạch hoàn toàn: `threatScore = 0`, `threatLevel = 'LOW'`, `status = 'SAFE'`, danh sách `incidents = []`, `aiAlert = null` và `boundingBoxes = []` cho tất cả camera.
-2. **Bảo đảm 100% Cảnh báo xuất phát từ NVIDIA AI (`100% NVIDIA AI-Derived Alerts`):**
-   - Mọi cảnh báo hiển thị trên Dashboard (viền chớp nháy đỏ/vàng, nhãn `ALERT: <TYPE>`, thanh banner reasoning VLM, danh sách sự cố và điểm đe dọa) bắt buộc phải do luồng AI trung gian (`AI/Human/server.py` với NVIDIA NIM VLM và YOLOv11-Pose) phân tích và đẩy về qua REST API `/api/v1/incidents` hoặc `/api/v1/cameras/:id/stream`.
-   - Khi không có hành vi bất thường, dashboard duy trì trạng thái giám sát an toàn (0 threats, sạch bounding boxes giả).
-   - Khi phát hiện một trong 6 lớp hành vi nguy cấp (`WEAPON_THREAT`, `KNIFE_THREAT`, `FALLEN`, `FIGHTING`, `LOITERING`, `INTRUSION`), hệ thống lập tức kích hoạt hiệu ứng tác chiến, cập nhật `aiAlert` cho camera, đồng bộ qua WebSocket và lưu vào nhật ký sự cố.
-3. **Tuân thủ quy tắc HITL [CD-04] & Kiểm thử [CD-05]:**
-   - Bắt buộc `operatorId` khi xác nhận sự cố trước khi chuyển sang `OPERATOR_CONFIRMED`.
-   - Đảm bảo tối thiểu 30 bài kiểm thử tự động luôn pass 100%.
-
----
-
-### 10. TỐI ƯU HÓA & KHẮC PHỤC TRIỆT ĐỂ BỘ SUY LUẬN YOLO & NHẬN DIỆN HÀNH ĐỘNG REAL-TIME (YOLO ACTION DETECTION REPAIR)
-
-#### 10.1. Nguyên nhân Gốc rễ (Root Cause Analysis)
-1. **Model Path Resolution:** Khi khởi chạy từ thư mục gốc dự án (`Promptacus---Hackathon-`), `_resolve_model_path` không tìm thấy `yolo/yolo11n-pose.pt` do đường dẫn nằm tại `AI/Human/yolo/yolo11n-pose.pt`, dẫn đến việc fallback khiến `extract_raw_detections` trả về `None`.
-2. **Nghẽn Batching (Temporal Event Batching Trap):** Khi Backend gọi `/api/v1/ingest/frame`, nếu không gửi cờ `X-Batch-AI: false`, server tích lũy 25 frames mới flush, trả về `ai_analyzed: false` và `primary_action: "NORMAL"` trong 24/25 frames, triệt tiêu mọi hành động tức thời.
-3. **Chốt chặn Debounce quá khắt khe:** Debouncer đòi hỏi 4-8 frame liên tiếp giữ nguyên trạng thái mới kích hoạt, trong khi ByteTrack có thể đổi `track_id` hoặc chuyển động nhanh làm ngắt quãng streak.
-4. **Quy tắc Biometric Quá Cứng Nhắc (Overly Strict Geometric Thresholds):**
-   - `FALLEN`: Không tính được `spine_angle` khi camera chỉ quay từ thắt lưng trở lên (thiếu khớp hông `hip_pts`).
-   - `WEAPON_THREAT`: Bắt buộc cả 6 khớp tay và đòi hỏi góc khuỷu >= 145° (quá thẳng) và khoảng cách ngang ra khỏi tâm thân, loại bỏ tư thế chĩa súng/hung khí thẳng vào camera.
-   - `FIGHTING`: Chỉ hỗ trợ khi có từ 2 người trở lên (`len(poses) >= 2`), bỏ qua hành vi đánh đấm/ra đòn của đối tượng đơn lẻ.
-   - `HANDS_UP`: Đòi hỏi cả 2 tay phải vượt qua đỉnh đầu cùng lúc.
-5. **Hiển thị Bounding Box trên Backend/Dashboard:** Backend chỉ cập nhật bounding box khi có cảnh báo nguy cấp (`isCritical || isHigh`), khiến người bình thường trong khung hình không hiện khung bám vết, tạo cảm giác YOLO không hoạt động.
-
-#### 10.2. Giải pháp Kỹ thuật Chuẩn hóa
-1. **Mở rộng `_resolve_model_path`:** Bổ sung đường dẫn tương đối từ `__file__` trỏ thẳng tới `AI/Human/yolo/yolo11n-pose.pt` và các vị trí tiêu chuẩn.
-2. **Kích hoạt Real-Time Single-Frame Inference:** Backend truyền `X-Batch-AI: false` và `X-Sync-VLM: true` khi forward frame lên AI Server. AI Server ưu tiên trả về kết quả nhận diện tức thời của frame hiện tại.
-3. **Tối ưu Hysteresis State Machine:** Hỗ trợ kích hoạt tức thì cho các hành vi khẩn cấp (`FAST_TRACK_BEHAVIORS`) với `fast_track_debounce_frames = 2`, và cho phép báo cáo ứng viên nguy hiểm ngay khi phát hiện.
-4. **Cải tiến Bộ quy tắc Phân tích Hành động (`rules.py` & `kinematics.py`):**
-   - Hỗ trợ tính góc nghiêng thân trên qua vector Đầu - Vai hoặc góc nghiêng trục vai khi không nhìn thấy hông.
-   - Nới lỏng góc khuỷu tay cho hành vi chĩa vũ khí (>= 115°) và hỗ trợ tư thế nhắm thẳng hướng camera.
-   - Bổ sung phát hiện đấm/đánh/ra đòn tốc độ cao cho đối tượng đơn lẻ (`FIGHTING`).
-   - Hỗ trợ giơ tay đầu hàng/cầu cứu (`HANDS_UP`) khi giơ 1 hoặc 2 tay lên cao.
-5. **Cập nhật Bounding Box Liên tục:** Backend cập nhật `updateCameraBoundingBoxes` cho mọi khung hình có người, đồng thời chuẩn hóa tọa độ tỷ lệ chính xác theo kích thước khung hình thực tế.
-
-**[SPEC AUTO-APPROVED]**
-
----
-
-### 11. ĐỒNG BỘ TOÀN DIỆN & TÍCH HỢP LOGIC DETECT TỪ DỰ ÁN HUMAN DETECT (`/home/test/Hackathon-Test-/HUMAN DETECT`)
-
-#### 11.1. Mục tiêu & Nguyên tắc Tuyệt đối
-1. **Nguyên tắc Bất khả xâm phạm nguồn:** TUYỆT ĐỐI KHÔNG CHỈNH SỬA, THÊM, BỚT BẤT KỲ FILE NÀO trong dự án nguồn `/home/test/Hackathon-Test-/` và `/home/test/Hackathon-Test-/HUMAN DETECT`. Mọi thao tác sao chép chỉ đọc từ nguồn và ghi vào repository đích `/home/test/Promptacus---Hackathon-/`.
-2. **Sao chép Đầy đủ Logic Nhận diện & Bám vết (Detection & Behavior Engine):**
-   - `yolo_pose_detector.py`: YOLO11-Pose (17 COCO keypoints), Supervision ByteTrack với cơ chế khử nhảy hộp bao (box smoothing EMA $\alpha = 0.65$) và kết hợp IoU matching.
-   - `behavior_detector.py`: Bộ quy tắc động học cơ sinh học (Biomechanical Rules) cho `FALLEN`, `HANDS_UP`, `RUNNING`, `CROUCHING`, `LOITERING`, `FIGHTING`, `NORMAL`, đi kèm Hysteresis Debounce State Machine chuẩn hóa và SOC Action Audit Logger.
-   - `models.py`: Cấu trúc dữ liệu `KeypointCOCO`, `HumanPoseTrack`, `BehaviorPrediction`, `SOCFrameAnalysisResult`, `TrackKinematicsTelemetry`.
-   - `clip_recorder.py`: Evidence rolling buffer trích xuất clip bằng chứng tự động MP4.
-   - `rate_limiter.py`: Quản lý tần suất sự kiện tránh spam log.
-   - `alert_models.py`, `ai_service.py`, `alert_client.py`: Giao thức đóng gói cảnh báo JSON chuẩn hóa với mã băm Forensic SHA-256 và suy luận VLM.
-   - `human_detection.py`, `camera_recorder.py`, `pose_detector.py`, `test_system.py`, `test_alert_system.py`.
-3. **Đảm bảo Hoạt động Đồng bộ & Tương thích:**
-   - Đồng bộ `urbansoc.behavior.engine` với quy trình debouncing chuẩn để tất cả các unit test hiện tại (`AI/Human/tests/` và `Dashboard/Back End/tests/`) duy trì tỷ lệ pass 100% (vượt xa chỉ tiêu $\ge$ 30 test cases).
-
-**[SPEC AUTO-APPROVED]**
+`[SPEC AUTO-APPROVED]`

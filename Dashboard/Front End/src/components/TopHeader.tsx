@@ -10,7 +10,7 @@ interface TopHeaderProps {
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
-  activeTab = 'SOC Dashboard',
+  activeTab = 'PSOC Dashboard',
   threatScore = 12,
   threatLevel = 'LOW',
   isConnected = true,

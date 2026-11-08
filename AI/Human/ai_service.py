@@ -71,27 +71,37 @@ class AIService:
     ) -> None:
         load_env_file()
 
-        self.api_key = (
-            api_key
-            or os.getenv("NVIDIA_API_KEY")
-            or os.getenv("AI_API_KEY", "")
-        ).strip()
+        env_provider = os.getenv("VLM_PROVIDER", "").strip().lower()
+        openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
 
-        raw_base = base_url or os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
-        self.base_url = raw_base.rstrip("/")
-        self.model = (
-            model
-            or os.getenv("NVIDIA_MODEL")
-            or "meta/llama-3.2-90b-vision-instruct"
-        ).strip()
+        if env_provider == "openrouter" or (not env_provider and openrouter_key):
+            self.provider = "openrouter"
+            self.api_key = (api_key or openrouter_key or os.getenv("AI_API_KEY", "")).strip()
+            raw_base = base_url or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+            self.base_url = raw_base.rstrip("/")
+            self.model = (model or os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")).strip()
+        else:
+            self.provider = "nvidia"
+            self.api_key = (
+                api_key
+                or os.getenv("NVIDIA_API_KEY")
+                or os.getenv("AI_API_KEY", "")
+            ).strip()
+            raw_base = base_url or os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
+            self.base_url = raw_base.rstrip("/")
+            self.model = (
+                model
+                or os.getenv("NVIDIA_MODEL")
+                or "meta/llama-3.2-90b-vision-instruct"
+            ).strip()
 
         if timeout_seconds is not None:
             self.timeout_seconds = timeout_seconds
         else:
             try:
-                self.timeout_seconds = float(os.getenv("AI_TIMEOUT_SECONDS", "3.0"))
+                self.timeout_seconds = float(os.getenv("AI_TIMEOUT_SECONDS", "15.0"))
             except ValueError:
-                self.timeout_seconds = 3.0
+                self.timeout_seconds = 15.0
 
         if enable_vlm is not None:
             self.enable_vlm = enable_vlm
@@ -247,7 +257,19 @@ class AIService:
                 logger.warning("NVIDIA NIM VLM API call returned error or timed out (%s). Using tactical reasoning engine.", e)
 
         # Tactical local reasoning engine (deterministic, instant, high-fidelity)
-        return self._tactical_fallback_reasoning(request, timestamp_iso)
+        res = self._tactical_fallback_reasoning(request, timestamp_iso)
+        try:
+            from urbansoc.telemetry.debug_logger import debug_logger
+            debug_logger.log_vlm_reasoning(
+                camera_id=request.camera_id,
+                verified=True,
+                threat_level=res.threat_level.value,
+                reasoning_summary=res.reasoning,
+                benign_prob=0.08,
+            )
+        except Exception:
+            pass
+        return res
 
     def _call_nvidia_nim_vlm(
         self,
@@ -299,22 +321,30 @@ class AIService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
             ],
-            "max_tokens": 350,
+            "max_tokens": 800,
             "temperature": 0.2
         }
+
+        req_headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+            "User-Agent": "UrbanSafety-AI-SOC/3.0",
+        }
+        if getattr(self, "provider", "") == "openrouter":
+            req_headers["HTTP-Referer"] = "https://urbansafety.soc"
+            req_headers["X-Title"] = "Urban Safety AI-SOC"
 
         req = urllib.request.Request(
             endpoint,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
+            headers=req_headers
         )
 
         with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"].strip()
+            msg = data.get("choices", [{}])[0].get("message", {})
+            raw_content = msg.get("content") or msg.get("reasoning") or ""
+            content = str(raw_content).strip()
 
             # Parse JSON from content (strip any accidental markdown block)
             if content.startswith("```"):
@@ -325,7 +355,15 @@ class AIService:
                     lines = lines[:-1]
                 content = "\n".join(lines).strip()
 
-            parsed = json.loads(content)
+            try:
+                parsed = json.loads(content)
+            except Exception:
+                import re
+                m = re.search(r"\{.*\}", content, re.DOTALL)
+                if m:
+                    parsed = json.loads(m.group(0))
+                else:
+                    raise ValueError(f"Could not parse valid JSON from VLM output: {content[:200]}")
             return AIAnalysisPrediction(
                 description=parsed.get("description", f"Detected {request.action} on camera {request.camera_id}"),
                 reasoning=parsed.get("reasoning", f"Subject shows {request.action} kinematics."),

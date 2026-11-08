@@ -130,7 +130,7 @@ export const EvidencePlaybackModal: React.FC<EvidencePlaybackModalProps> = ({
         {/* Modal Footer: CHỐT CHẶN VẬN HÀNH VIÊN (MANDATORY HITL GATE) */}
         <div className="p-4 bg-[#121822] border-t border-[#1E2631] flex items-center justify-between">
           <div className="font-mono text-xs text-slate-400">
-            Operator ID: <span className="text-[#10B981] font-bold">OP-VN-SOC-804</span>
+            Operator ID: <span className="text-[#10B981] font-bold">OP-VN-PSOC-804</span>
           </div>
           <div className="flex items-center gap-3">
             {/* Quyết định 3: Hủy báo động giả */}

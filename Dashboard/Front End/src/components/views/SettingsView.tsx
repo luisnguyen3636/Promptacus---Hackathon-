@@ -6,7 +6,7 @@ interface SettingsViewProps {
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
-  operatorId = 'OP-VN-SOC-804',
+  operatorId = 'OP-VN-PSOC-804',
 }) => {
   const [criticalThreshold, setCriticalThreshold] = useState<number>(75);
   const [dispatchWebhook, setDispatchWebhook] = useState<string>(
@@ -28,7 +28,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <div className="flex items-center gap-3">
           <Settings className="w-4 h-4 text-[#10B981]" />
           <span className="font-bold text-xs uppercase tracking-wider text-white">
-            SOC PLATFORM & OPERATIONAL CONFIGURATION
+            PSOC PLATFORM & OPERATIONAL CONFIGURATION
           </span>
         </div>
         <button
@@ -43,7 +43,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <div className="bg-[#0E131A] border border-[#1E2631] p-4 space-y-3">
         <div className="flex items-center gap-2 border-b border-[#1E2631] pb-2">
           <User className="w-4 h-4 text-[#3B82F6]" />
-          <span className="font-bold text-xs text-white uppercase">ACTIVE SOC OPERATOR PROFILE</span>
+          <span className="font-bold text-xs text-white uppercase">ACTIVE PSOC OPERATOR PROFILE</span>
         </div>
         <div className="grid grid-cols-2 gap-4 font-mono text-xs">
           <div>

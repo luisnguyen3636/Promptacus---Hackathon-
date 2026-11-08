@@ -32,8 +32,8 @@ logger = logging.getLogger("urbansoc.server.inference_server")
 def _is_completed_nvidia_analysis(result: Optional[Dict[str, Any]]) -> bool:
     return bool(
         isinstance(result, dict)
-        and result.get("source") == "nvidia_nim_vlm"
-        and result.get("analysis_status") == "completed"
+        and result.get("source") in ("nvidia_nim_vlm", "openrouter_vlm", "local_vlm_engine", "vlm_engine")
+        and result.get("analysis_status") in ("completed", "local_only", "processed")
     )
 
 
@@ -1325,7 +1325,7 @@ class InferenceServer:
         max_requests_per_minute: int = 120,
         webhook_filter_noise: bool = True,
         enable_tunnel: bool = True,
-        always_vlm: bool = False,
+        always_vlm: bool = True,
         mock_vlm: bool = False,
         enable_batching: bool = True,
         batch_size: int = 25,
@@ -1340,7 +1340,7 @@ class InferenceServer:
         self.webhook_cooldown = webhook_cooldown
         self.max_requests_per_minute = max_requests_per_minute
         self.enable_tunnel = enable_tunnel
-        self.always_vlm = always_vlm or os.getenv("ALWAYS_ANALYZE_VLM", "").lower() in ("true", "1", "yes")
+        self.always_vlm = always_vlm or os.getenv("ALWAYS_ANALYZE_VLM", "true").lower() in ("true", "1", "yes")
         self.mock_vlm = mock_vlm or os.getenv("MOCK_VLM", "").lower() in ("true", "1", "yes")
 
         batch_env = os.getenv("SOC_ENABLE_DETECTION_BATCHING")

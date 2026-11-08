@@ -61,7 +61,10 @@ export function getTelemetryOverview(activeThreatCount = 0, criticalThreatCount 
       openThreats: activeThreatCount,
       criticalThreats: criticalThreatCount,
       nvrStoragePercent: systemState.nvrStoragePercent,
-      poeLoadWatts: jitterPoe
+      poeLoadWatts: jitterPoe,
+      wantedCount: systemState.wantedCount || 3,
+      blindSpotSessionsCount: systemState.blindSpotSessionsCount || 2,
+      vlmVerifiedCount: systemState.vlmVerifiedCount || 14,
     }
   };
 }

@@ -98,14 +98,29 @@ class NvidiaVisionClient:
             mock_mode or os.getenv("MOCK_VLM", "").lower() in ("true", "1", "yes")
         )
 
-        if api_key is not None:
-            self.api_key = api_key.strip()
-        else:
-            self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+        # Detect Provider: openrouter or nvidia
+        env_provider = os.getenv("VLM_PROVIDER", "").strip().lower()
+        openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
 
-        raw_base = base_url or os.getenv("NVIDIA_BASE_URL", DEFAULT_NVIDIA_BASE_URL).strip()
-        self.base_url = raw_base.rstrip("/")
-        self.model = model or os.getenv("NVIDIA_MODEL", DEFAULT_NVIDIA_MODEL).strip()
+        if env_provider == "openrouter" or (not env_provider and openrouter_key):
+            self.provider = "openrouter"
+            if api_key is not None and not api_key.startswith("nvapi-"):
+                self.api_key = api_key.strip()
+            else:
+                self.api_key = openrouter_key or os.getenv("NVIDIA_API_KEY", "").strip()
+            raw_base = base_url or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+            self.base_url = raw_base.rstrip("/")
+            self.model = model or os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash").strip()
+        else:
+            self.provider = "nvidia"
+            if api_key is not None:
+                self.api_key = api_key.strip()
+            else:
+                self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+            raw_base = base_url or os.getenv("NVIDIA_BASE_URL", DEFAULT_NVIDIA_BASE_URL).strip()
+            self.base_url = raw_base.rstrip("/")
+            self.model = model or os.getenv("NVIDIA_MODEL", DEFAULT_NVIDIA_MODEL).strip()
+
         env_timeout_str = os.getenv("NVIDIA_TIMEOUT_SECONDS") or os.getenv("NVIDIA_VLM_TIMEOUT") or "30.0"
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else float(env_timeout_str)
 
@@ -229,7 +244,7 @@ class NvidiaVisionClient:
             f"- Timestamp: {now_iso} | Frame ID: {frame_id}\n"
             f"- YOLOv11 Raw Action Received: {raw_action_text}\n\n"
             "Analyze the frame image with forensic situational awareness.\n"
-            "Output a strict JSON object with this EXACT structure:\n"
+            "Output a strict JSON object with this structure:\n"
             "{\n"
             f'  "frame_id": {frame_id},\n'
             f'  "timestamp": "{now_iso}",\n'
@@ -244,64 +259,23 @@ class NvidiaVisionClient:
             '      "track_id": "1",\n'
             f'      "yolov11_raw_actions_received": ["{raw_action_text}"],\n'
             '      "false_positive_suppressed": false,\n'
-            '      "applied_memory_rule_id": null,\n'
-            '      "suppression_explanation": null,\n'
-            '      "detected_behaviors": ["<list of 12 behaviors>"],\n'
+            '      "detected_behaviors": ["NORMAL"],\n'
             '      "pre_crime_flags": [],\n'
             '      "post_crime_flags": [],\n'
             '      "confidence_score": 0.95,\n'
-            '      "temporal_threat_score": 88.0,\n'
+            '      "temporal_threat_score": 0.0,\n'
             '      "previous_threat_level": "Low",\n'
-            '      "current_threat_level": "Critical",\n'
-            '      "threat_escalation_history": "Low -> High -> Critical",\n'
-            '      "soc_action_state": "AWAITING_OPERATOR_VERIFICATION",\n'
-            '      "recommended_vlm_sampling_sec": 1.0,\n'
-            '      "reasoning_summary": "<Vietnamese tactical situational reasoning>",\n'
-            '      "multi_camera_blind_spot_reasoning": {\n'
-            '        "is_triggered": true,\n'
-            f'        "origin_camera_name": "{cam_name}",\n'
-            '        "exit_gate_on_origin_cam": "<exit gate>",\n'
-            '        "blind_spot_zone_id": "<zone id>",\n'
-            '        "blind_spot_description": "<description>",\n'
-            '        "subject_tactical_profile": {\n'
-            '          "dominant_hand": "RIGHT",\n'
-            '          "active_holding_hand": "RIGHT_HAND",\n'
-            '          "held_object_description": "<object>",\n'
-            '          "gait_and_biomechanics": "<gait>",\n'
-            '          "psychological_state": "HIGH_PANIC",\n'
-            '          "psychological_evidence": "<evidence>",\n'
-            '          "exit_velocity_mps": 5.2,\n'
-            '          "exit_heading_compass_deg": 115.0\n'
-            '        },\n'
-            '        "predicted_next_cameras": [\n'
-            '          {\n'
-            '            "rank": 1,\n'
-            '            "target_camera_id": "CAM_02",\n'
-            '            "target_camera_name": "CAM_02 - Hẻm 12 Đinh Bộ Lĩnh",\n'
-            '            "target_camera_location": "Hẻm 12, P.12, Bình Thạnh",\n'
-            '            "route_id": "ROUTE_01",\n'
-            '            "route_description": "<route>",\n'
-            '            "blind_spot_distance_meters": 35.0,\n'
-            '            "expected_entry_gate_on_target_cam": "WEST_ALLEY_ENTRY",\n'
-            '            "probability": 0.82,\n'
-            '            "estimated_arrival_seconds": [7, 12],\n'
-            '            "expected_arrival_timestamp_window": ["<start>", "<end>"],\n'
-            '            "predicted_hidden_actions_in_blind_spot": ["EVIDENCE_DUMPING"],\n'
-            '            "score_breakdown": {},\n'
-            '            "detailed_tactical_reasoning": "<tactical breakdown>"\n'
-            '          }\n'
-            '        ],\n'
-            '        "cross_camera_reid_handover_token": {\n'
-            '          "global_subject_tag": "TAG_01",\n'
-            '          "visual_appearance_signature": "<signature>",\n'
-            '          "post_blind_spot_watch_notes": "<notes>"\n'
-            '        }\n'
-            '      }\n'
+            '      "current_threat_level": "Low",\n'
+            '      "soc_action_state": "OBSERVING",\n'
+            '      "reasoning_summary": "<Vietnamese forensic reasoning summary>"\n'
             '    }\n'
             '  ],\n'
+            f'  "action_type": "{raw_action_text}",\n'
+            '  "threat_level": "Low",\n'
+            '  "threat_score": 0.0,\n'
             '  "operator_dashboard_directives": {\n'
-            '    "highlight_camera_names_on_map": ["CAM_02 - Hẻm 12 Đinh Bộ Lĩnh"],\n'
-            '    "suggested_operator_focus": "<guidance>"\n'
+            f'    "highlight_camera_names_on_map": ["{cam_name}"],\n'
+            '    "suggested_operator_focus": "Giám sát luồng camera theo quy chuẩn"\n'
             '  }\n'
             "}"
         )
@@ -311,26 +285,36 @@ class NvidiaVisionClient:
             {"type": "image_url", "image_url": {"url": image_data_uri}},
         ]
 
+        system_content = (
+            "You are Urban Safety AI-SOC Forensic Vision Agent. "
+            "Output strictly a single valid JSON object. No conversational reasoning outside JSON."
+        ) if ("nemotron" in self.model.lower() or "free" in self.model.lower()) else MASTER_SYSTEM_PROMPT
+
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": MASTER_SYSTEM_PROMPT},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": user_content},
             ],
             "temperature": 0.15,
-            "max_tokens": 1400,
+            "max_tokens": 1200,
             "response_format": {"type": "json_object"},
         }
+
+        req_headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "UrbanSafety-AI-SOC/3.0",
+        }
+        if getattr(self, "provider", "nvidia") == "openrouter":
+            req_headers["HTTP-Referer"] = "https://urbansafety.soc"
+            req_headers["X-Title"] = "Urban Safety AI-SOC"
 
         req = urllib.request.Request(
             endpoint,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": "UrbanSafety-AI-SOC/3.0",
-            },
+            headers=req_headers,
             method="POST",
         )
 
@@ -339,15 +323,16 @@ class NvidiaVisionClient:
                 resp_bytes = resp.read()
                 raw_data = json.loads(resp_bytes.decode("utf-8"))
                 choice = raw_data.get("choices", [{}])[0]
-                content = choice.get("message", {}).get("content", "")
+                msg = choice.get("message", {})
+                content = msg.get("content") or msg.get("reasoning") or ""
                 parsed_json = self._clean_and_parse_json(content)
                 if not isinstance(parsed_json, dict) or not parsed_json:
-                    raise ValueError("NVIDIA NIM returned an empty or invalid analysis object")
+                    raise ValueError(f"{self.provider.upper()} VLM returned an empty or invalid analysis object")
                 has_analysis_fields = any(
                     key in parsed_json for key in ("evaluated_subjects", "action_type", "primary_action")
                 )
                 if not has_analysis_fields:
-                    raise ValueError("NVIDIA NIM response is missing recognized analysis fields")
+                    raise ValueError(f"{self.provider.upper()} VLM response is missing recognized analysis fields")
                 result = self._normalize_vlm_output(
                     data=parsed_json,
                     camera_id=camera_id,
@@ -357,7 +342,8 @@ class NvidiaVisionClient:
                     timestamp=now_iso,
                     frame_id=frame_id,
                 )
-                result["source"] = "nvidia_nim_vlm"
+                result["source"] = "openrouter_vlm" if getattr(self, "provider", "nvidia") == "openrouter" else "nvidia_nim_vlm"
+                result["provider"] = "OpenRouter" if getattr(self, "provider", "nvidia") == "openrouter" else "NVIDIA NIM"
                 result["analysis_status"] = "completed"
                 result["model"] = self.model
                 return result
@@ -412,8 +398,10 @@ class NvidiaVisionClient:
 
         return None
 
-    def _clean_and_parse_json(self, raw_content: str) -> Dict[str, Any]:
-        cleaned = raw_content.strip()
+    def _clean_and_parse_json(self, raw_content: Any) -> Dict[str, Any]:
+        if not raw_content:
+            return {}
+        cleaned = str(raw_content).strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
             cleaned = re.sub(r"\s*```$", "", cleaned)

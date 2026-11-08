@@ -1,12 +1,12 @@
 /**
- * CYBERGUARD AI · SOC v2.1 — DATA CONTRACTS & TYPE DEFINITIONS
- * Đồng bộ với SPEC.md và Dashboard/Back End/standard.md
+ * CYBERGUARD AI · PSOC v3.0 — DATA CONTRACTS & TYPE DEFINITIONS
+ * Đồng bộ với SPEC.md và Dashboard Backend standard
  */
 
 export type ThreatLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type SystemStatus = 'SAFE' | 'GUARDED' | 'ELEVATED' | 'SEVERE';
 export type IncidentSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type IncidentCategory = 'NETWORK' | 'PHYSICAL_CAMERA' | 'ACCESS_CONTROL';
+export type IncidentCategory = 'NETWORK' | 'PHYSICAL_CAMERA' | 'ACCESS_CONTROL' | 'CRIMINAL_BEHAVIOR';
 
 export interface ISocMetrics {
   latencyMs: number;
@@ -20,6 +20,9 @@ export interface ISocMetrics {
   criticalThreats: number;
   nvrStoragePercent: number;
   poeLoadWatts: number;
+  wantedCount?: number;
+  blindSpotSessionsCount?: number;
+  vlmVerifiedCount?: number;
 }
 
 export interface ISocOverview {
@@ -51,6 +54,7 @@ export interface IAiCameraAlert {
   timestamp?: number;
   aiProvider?: string | null;
   model?: string | null;
+  threatScore?: number;
 }
 
 export interface ICameraDevice {
@@ -65,6 +69,14 @@ export interface ICameraDevice {
   ptzEnabled: boolean;
   aiAlert?: IAiCameraAlert | null;
   boundingBoxes: IAiBoundingBox[];
+  threatScore: number;
+  threatLevel: ThreatLevel;
+  resolution?: string;
+  codec?: string;
+  latencyMs?: number;
+  connectedBlindSpots?: string[];
+  inspectionStatus?: 'HEALTHY' | 'ATTENTION' | 'OFFLINE';
+  lastPingAt?: string;
 }
 
 export interface ICameraSnapshots {
@@ -81,17 +93,21 @@ export interface IIncidentItem {
   severity: IncidentSeverity;
   timestamp: string;
   cameraId?: string | null;
+  cameraName?: string | null;
   cameraSnapshots?: ICameraSnapshots | null;
   playbackUrl?: string | null;
   vlmAnalysis?: string;
   aiVerified?: boolean;
   aiProvider?: string | null;
+  threatScore?: number;
+  primaryAction?: string;
+  criminalCategory?: string;
   nvidiaVlmAnalysis?: Record<string, unknown> | null;
   status: 'AI_VERIFICATION_PENDING' | 'PENDING_VERIFICATION' | 'OPERATOR_CONFIRMED' | 'DISMISSED' | 'DOWNGRADED_MONITORING';
 }
 
 export interface IPtzCommandPayload {
-  action: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN' | 'AUTO_FOCUS';
+  action: 'ZOOM_IN' | 'ZOOM_OUT' | 'PAN' | 'TILT' | 'AUTO_FOCUS';
   speed?: number;
 }
 
@@ -101,4 +117,77 @@ export interface IOperatorVerifyPayload {
   decision: 'CONFIRM_AND_DISPATCH' | 'DOWNGRADE_MONITOR' | 'DISMISS_FALSE_POSITIVE';
   notes?: string;
   verifiedAt: string;
+}
+
+// Bằng chứng đóng dấu pháp y vào hồ sơ truy nã
+export interface IEvidenceStamp {
+  stampId: string;
+  incidentId?: string;
+  evidenceType: 'KEYFRAME_SNAPSHOT' | 'VIDEO_CLIP' | 'FORENSIC_CROP';
+  evidenceUrl: string;
+  sha256Hash: string;
+  stampedBy: string;
+  stampedAt: string;
+  notes?: string;
+}
+
+// Đối tượng trong Danh Sách Truy Nã
+export interface IWantedPerson {
+  id: string;
+  name: string;
+  alias?: string;
+  threatLevel: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  status: 'WANTED' | 'APPREHENDED' | 'RED_ALERT' | 'MONITORING';
+  charges: string[];
+  identificationFeatures: {
+    height?: string;
+    build?: string;
+    clothing?: string;
+    distinguishingMarks?: string;
+  };
+  avatarUrl?: string;
+  lastSeenCameraId?: string;
+  lastSeenLocation?: string;
+  lastSeenTimestamp?: string;
+  evidenceStamps: IEvidenceStamp[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Phiên suy luận vùng mù đa camera
+export interface IBlindSpotCandidate {
+  targetCameraId: string;
+  targetCameraName: string;
+  distanceMeters: number;
+  estimatedTransitSec: number;
+  softmaxProbability: number;
+  arrivalWindow: string;
+}
+
+export interface IBlindSpotSession {
+  sessionId: string;
+  status: string;
+  sourceCameraId: string;
+  sourceCameraName: string;
+  sourceKeyframeUrl: string;
+  sourceExitTime: string;
+  exitGate: string;
+  blindSpotZone: string;
+  blindSpotDescription: string;
+  targetCandidates: IBlindSpotCandidate[];
+  destinationCameraId: string;
+  destinationCameraName: string;
+  destinationKeyframeUrl: string;
+  destinationEntryTime: string;
+  actualTransitSec: number;
+  reidSimilarityScore: number;
+  clothingMatch: {
+    upperBody?: string;
+    lowerBody?: string;
+    accessories?: string;
+  };
+  hiddenActionPredictions: string[];
+  operatorVerification: 'CONFIRMED' | 'AWAITING_CONFIRMATION' | 'REJECTED';
+  verifiedBy?: string | null;
+  verifiedAt?: string | null;
 }

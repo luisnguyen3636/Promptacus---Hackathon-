@@ -83,8 +83,21 @@ export const CameraSlot: React.FC<CameraSlotProps> = ({ camera, onOpenPlayback }
         </div>
       </div>
 
-      {/* 5. Nhãn Trạng Thái Trực Tiếp / Báo Động (Góc trên phải) */}
+      {/* 5. Nhãn Trạng Thái Trực Tiếp & Threat Score Riêng Của Từng Camera (Góc trên phải) */}
       <div className="absolute top-1.5 right-1.5 flex items-center gap-1 z-20">
+        {/* Threat Score riêng của Camera này */}
+        <div
+          className={`font-mono text-[9px] font-bold px-1.5 py-0.5 border shrink-0 ${
+            (camera.threatScore || 0) >= 75
+              ? 'bg-[#7F1D1D] border-[#DC2626] text-white animate-pulse'
+              : (camera.threatScore || 0) >= 50
+              ? 'bg-[#78350F] border-[#F59E0B] text-amber-200'
+              : 'bg-[rgba(8,11,16,0.85)] border-[#10B981] text-[#10B981]'
+          }`}
+        >
+          THREAT: {camera.threatScore !== undefined ? camera.threatScore : (hasAlert ? 85 : 15)}
+        </div>
+
         {hasAlert ? (
           <div className="flex items-center gap-1 bg-[#EF4444] text-white font-mono text-[9px] font-bold px-2 py-0.5 tracking-wider shadow-md animate-bounce">
             <ShieldAlert className="w-3 h-3" />

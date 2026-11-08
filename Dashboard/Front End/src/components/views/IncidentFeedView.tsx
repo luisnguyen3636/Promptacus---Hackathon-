@@ -134,7 +134,7 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
               KHÔNG CÓ SỰ CỐ ĐANG HOẠT ĐỘNG (100% SECURE)
             </div>
             <div className="text-slate-400 font-mono text-xs mt-1 max-w-lg">
-              Hệ thống AI từ NVIDIA NIM VLM và YOLOv11 đang giám sát trực tiếp. Mọi cảnh báo sẽ hiển thị tức thời theo thời gian thực khi phát hiện dấu hiệu bất thường.
+              Hệ thống AI từ Multimodal VLM (OpenRouter Gemini / NVIDIA) và MMAction2 đang giám sát trực tiếp. Mọi cảnh báo sẽ hiển thị tức thời theo thời gian thực khi phát hiện dấu hiệu bất thường.
             </div>
           </div>
         ) : (
@@ -187,12 +187,12 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
 
                 <button
                   onClick={() => onSelectPlayback(inc)}
-                  disabled={!inc.aiVerified}
-                  title={inc.aiVerified ? undefined : 'Cần kết quả NVIDIA VLM hoàn tất trước khi xác minh và điều phối.'}
+                  disabled={!inc.aiVerified && inc.status === 'AI_VERIFICATION_PENDING'}
+                  title={inc.aiVerified ? 'Xem bằng chứng và tiến hành điều phối' : 'Đang xử lý kết quả phân tích VLM...'}
                   className="bg-[#161E29] border border-[#2D3748] text-white hover:bg-[#1E2631] hover:border-[#10B981] hover:text-[#10B981] font-mono text-xs font-bold px-3 py-1.5 inline-flex items-center gap-2 cursor-pointer transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-[#2D3748] disabled:hover:text-white"
                 >
                   <Play className="w-3 h-3 fill-current" />
-                  <span>{inc.aiVerified ? 'XEM BẰNG CHỨNG & DISPATCH' : 'CHỜ NVIDIA VLM'}</span>
+                  <span>{inc.aiVerified ? 'XEM BẰNG CHỨNG & DISPATCH' : 'CHỜ XÁC THỰC VLM'}</span>
                 </button>
               </div>
 
@@ -200,7 +200,7 @@ export const IncidentFeedView: React.FC<IncidentFeedViewProps> = ({
               {inc.vlmAnalysis && (
                 <div className="bg-[#121822] p-3 border-l-2 border-[#10B981] text-xs text-slate-300 leading-relaxed font-sans">
                   <strong className="text-[#10B981] font-mono">
-                    {inc.aiVerified ? `${inc.aiProvider || 'NVIDIA NIM'} · ĐÃ XÁC THỰC: ` : 'VLM Hành vi Suy luận: '}
+                    {inc.aiVerified ? `${inc.aiProvider || 'AI VLM'} · ĐÃ XÁC THỰC: ` : 'VLM Hành vi Suy luận: '}
                   </strong>
                   {inc.vlmAnalysis}
                 </div>
